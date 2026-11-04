@@ -10,6 +10,7 @@ import {
 import { ForgeCredentialRejectedError } from "@/lib/forge/gateway";
 import type { FoldResult } from "@/lib/fold/repository-fold";
 import { RECONCILIATION_EVIDENCE_FORMAT } from "@/lib/fold/reconciliation-evidence";
+import { DATA_SUBJECT_TOMBSTONE_LOGIN, scrubPublicationForSuppressions } from "@/lib/fold/data-subject-suppression";
 import { GitHubGateway } from "@/lib/github/client";
 import { CLOSING_PULL_REQUESTS_FIELD_PATH } from "@/lib/github/drain-issue-reads";
 import type { GitHubRepository, GitHubRepositoryReference, GitHubSubject } from "@/lib/github/types";
@@ -168,10 +169,36 @@ describe("reconcileRepository", () => {
       ["an array actor login", [{ ...opening, actorLogin: [] }, assigned, actual]],
       ["a numeric actor login, the sponsor's numeric id", [{ ...opening, actorLogin: 1, actorGitHubUserId: 1001 }, assigned, actual]],
       ["a numeric actor login, another account's numeric id", [{ ...opening, actorLogin: 1, actorGitHubUserId: 2001 }, assigned, actual]],
+      ["a boolean actor login, another account's numeric id", [{ ...opening, actorLogin: false, actorGitHubUserId: 2001 }, assigned, actual]],
+      ["an object actor login, another account's numeric id", [{ ...opening, actorLogin: {}, actorGitHubUserId: 2001 }, assigned, actual]],
+      ["an array actor login, another account's numeric id", [{ ...opening, actorLogin: [], actorGitHubUserId: 2001 }, assigned, actual]],
+      ["no actor login, the sponsor's numeric id", [{ ...withoutField(opening, "actorLogin"), actorGitHubUserId: 1001 }, assigned, actual]],
+      ["no actor login, another account's numeric id", [{ ...withoutField(opening, "actorLogin"), actorGitHubUserId: 2001 }, assigned, actual]],
       ["a numeric actor login after one readable event", [assigned, { ...opening, actorLogin: 1 }, actual]],
       ["a numeric actor login after two readable events", [assigned, actual, { ...opening, actorLogin: 1 }]],
     ];
-    const settledLabel = (actorLogin: unknown, actorGitHubUserId = 1001) => ({ ...settled("sponsor"), history: [opening, assigned, { ...actual, actorLogin, actorGitHubUserId }] });
+    const suppressed = { forgeId: 3001, logins: new Set<string>() };
+    const lateEntries: Array<[string, Record<string, unknown>]> = [
+      ["an assignment", { ...assigned, id: "assigned-9-again", createdAt: "2026-09-01T11:05:00.000Z" }],
+      ["an unassignment", { ...assigned, kind: "UNASSIGNED", id: "unassigned-9", createdAt: "2026-09-01T11:05:00.000Z" }],
+      ["an unlabel", { ...actual, kind: "UNLABELED", id: "unlabeled-9", createdAt: "2026-09-01T11:05:00.000Z" }],
+    ];
+    const wrongLogins: Array<[string, unknown]> = [["a numeric actor login", 1], ["a boolean actor login", false], ["an object actor login", {}], ["an array actor login", []], ["no actor login", undefined]];
+    const wrongIds: Array<[string, number | null]> = [["on a suppressed account's numeric id", suppressed.forgeId], ["and no actor id", null]];
+    const unreadableSuppressed = lateEntries.flatMap(([label, entry]) => wrongLogins.flatMap(([how, login]) => wrongIds.map(([where, id]): [string, unknown[]] => {
+      const event = { ...entry, actorGitHubUserId: id };
+      return [`${label} entry with ${how} ${where}`, [opening, assigned, actual, login === undefined ? withoutField(event, "actorLogin") : { ...event, actorLogin: login }]];
+    })));
+    const suppressing = (dependencies: ReconciliationDependencies) => {
+      const materialize = dependencies.store.materialize;
+      dependencies.store.materialize = vi.fn(async (publication) => {
+        scrubPublicationForSuppressions(publication, [suppressed]);
+        return materialize(publication);
+      });
+    };
+    const settledEvent = (event: object) => ({ ...settled("sponsor"), history: [opening, assigned, event] });
+    const settledLabel = (actorLogin: unknown, actorGitHubUserId: number | null = 1001) => settledEvent({ ...actual, actorLogin, actorGitHubUserId });
+    const unlogged = (actorGitHubUserId: number | null) => settledEvent(withoutField({ ...actual, actorGitHubUserId }, "actorLogin"));
     const opened = (log: unknown, id: number | null) => labelled([{ ...opening, actorLogin: log, actorGitHubUserId: id }, assigned, actual]);
     const readableActors: Array<[string, unknown, unknown[][], number[]]> = [
       ["opening label event has a null actor login", opened(null, null), [["opening-9", null, null], ["assigned-9", "sponsor", null], ["actual-9", "sponsor", null]], []],
@@ -197,7 +224,18 @@ describe("reconcileRepository", () => {
       ...unreadableSponsorComments.map(([label, comments]): [string, "issue", unknown] => [`a sponsor comment with ${label}`, "issue", commented(comments)]),
       ["a settled issue whose sponsor rationale has a numeric author login on the sponsor's numeric id", "issue", settled(1)],
       ...unreadableActors.map(([label, history]): [string, "issue", unknown] => [`an opening label event with ${label}`, "issue", labelled(history)]),
+      ...unreadableSuppressed.map(([label, history]): [string, "issue", unknown] => [`a history with ${label}`, "issue", labelled(history)]),
       ["a settled label event with a numeric actor login on the sponsor's numeric id", "issue", settledLabel(1)],
+      ["a settled label event with a numeric actor login, no actor id", "issue", settledLabel(1, null)],
+      ["a settled label event with a boolean actor login, another account's numeric id", "issue", settledLabel(false, 2001)],
+      ["a settled label event with a boolean actor login, no actor id", "issue", settledLabel(false, null)],
+      ["a settled label event with an object actor login, another account's numeric id", "issue", settledLabel({}, 2001)],
+      ["a settled label event with an object actor login, no actor id", "issue", settledLabel({}, null)],
+      ["a settled label event with an array actor login, another account's numeric id", "issue", settledLabel([], 2001)],
+      ["a settled label event with an array actor login, no actor id", "issue", settledLabel([], null)],
+      ["a settled label event with no actor login, the sponsor's numeric id", "issue", unlogged(1001)],
+      ["a settled label event with no actor login, another account's numeric id", "issue", unlogged(2001)],
+      ["a settled label event with no actor login, no actor id", "issue", unlogged(null)],
       ["a null closing pull request", "issue", closing(null)],
       ["a closing pull request with an unsafe id", "issue", closing({ ...pullRequest(7), id: 2 ** 53 })],
       ["a closing pull request with an unsafe number", "issue", closing({ ...pullRequest(7), number: 2 ** 53 })],
@@ -282,29 +320,81 @@ describe("reconcileRepository", () => {
       }
       expect(plain(opening)).toEqual({ kind: "LABELED", id: "opening-9", createdAt: "2026-09-01T08:01:00.000Z", label: "M" });
       expect(rows.map(({ history }) => history.map((event) => event.id)))
-        .toEqual([...Array(7).fill(["opening-9", "assigned-9", "actual-9"]), ["assigned-9", "opening-9", "actual-9"], ["assigned-9", "actual-9", "opening-9"]]);
-      expect(rows.map(({ history }) => history.findIndex(wrong))).toEqual([0, 0, 0, 0, 0, 0, 0, 1, 2]);
+        .toEqual([...Array(12).fill(["opening-9", "assigned-9", "actual-9"]), ["assigned-9", "opening-9", "actual-9"], ["assigned-9", "actual-9", "opening-9"]]);
+      expect(rows.map(({ history }) => history.findIndex(wrong))).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2]);
       expect(rows.map(({ history }) => history.filter(wrong).map((event) => ["actorLogin" in event ? event.actorLogin : "absent", event.actorGitHubUserId])))
-        .toEqual([[["absent", null]], [[1, null]], [[false, null]], [[{}, null]], [[[], null]], [[1, 1001]], [[1, 2001]], [[1, null]], [[1, null]]]);
+        .toEqual([[["absent", null]], [[1, null]], [[false, null]], [[{}, null]], [[[], null]], [[1, 1001]], [[1, 2001]], [[false, 2001]], [[{}, 2001]], [[[], 2001]], [["absent", 1001]], [["absent", 2001]], [[1, null]], [[1, null]]]);
     });
 
-    it("stages the settled label row as one merged closing pull request and one sponsor label event with the wrong actor login", () => {
+    it("stages each unreadable late-entry row as sponsor history followed by one non-label entry with the wrong actor login", () => {
+      const prefix = "a history with ";
+      expect(unreadableRows.filter(([label]) => label.startsWith(prefix)))
+        .toStrictEqual(unreadableSuppressed.map(([label, history]) => [`${prefix}${label}`, "issue", labelled(history)]));
+      const histories = unreadableRows.filter(([label]) => label.startsWith(prefix)).map(([, , payload]) => (payload as { history: unknown[] }).history);
+      expect(histories.map((history) => history.slice(0, 3))).toEqual(histories.map(() => sponsorHistory));
+      const late = { createdAt: "2026-09-01T11:05:00.000Z" };
+      const lateEntryLiterals = [
+        { kind: "ASSIGNED", id: "assigned-9-again", assigneeLogin: "contributor", ...late },
+        { kind: "UNASSIGNED", id: "unassigned-9", assigneeLogin: "contributor", ...late },
+        { kind: "UNLABELED", id: "unlabeled-9", label: "delivered/6", ...late },
+      ];
+      const wrongActors = [
+        { actorLogin: 1, actorGitHubUserId: 3001 }, { actorLogin: 1, actorGitHubUserId: null },
+        { actorLogin: false, actorGitHubUserId: 3001 }, { actorLogin: false, actorGitHubUserId: null },
+        { actorLogin: {}, actorGitHubUserId: 3001 }, { actorLogin: {}, actorGitHubUserId: null },
+        { actorLogin: [], actorGitHubUserId: 3001 }, { actorLogin: [], actorGitHubUserId: null },
+        { actorGitHubUserId: 3001 }, { actorGitHubUserId: null },
+      ];
+      expect(histories.map((history) => history.slice(3)))
+        .toStrictEqual(lateEntryLiterals.flatMap((entry) => wrongActors.map((wrong) => [{ ...entry, ...wrong }])));
+    });
+
+    it("stages each settled label row as one merged closing pull request and one sponsor label event with the wrong actor login", () => {
       const rows = unreadableRows.filter(([label]) => label.startsWith("a settled label event with "));
-      expect(rows).toStrictEqual([["a settled label event with a numeric actor login on the sponsor's numeric id", "issue", settledLabel(1)]]);
-      expect(rows[0][2]).not.toHaveProperty("subject");
-      expect(rows[0][2]).toMatchObject({ id: 9, number: 9, state: "CLOSED", createdAt: "2026-09-01T08:00:00.000Z", closedAt: "2026-09-01T12:05:00.000Z", authorLogin: "sponsor", labels: ["M", "delivered/6"] });
-      const { history, comments, closingPullRequests } = rows[0][2] as { history: unknown[]; comments: unknown[]; closingPullRequests: unknown[] };
-      expect(history).toEqual([
-        { kind: "LABELED", id: "opening-9", actorLogin: "sponsor", actorGitHubUserId: null, createdAt: "2026-09-01T08:01:00.000Z", label: "M" },
-        { kind: "ASSIGNED", id: "assigned-9", actorLogin: "sponsor", actorGitHubUserId: null, createdAt: "2026-09-01T09:00:00.000Z", assigneeLogin: "contributor" },
-        { kind: "LABELED", id: "actual-9", actorLogin: 1, actorGitHubUserId: 1001, createdAt: "2026-09-01T11:00:00.000Z", label: "delivered/6" },
+      expect(rows).toStrictEqual([
+        ["a settled label event with a numeric actor login on the sponsor's numeric id", "issue", settledLabel(1)],
+        ["a settled label event with a numeric actor login, no actor id", "issue", settledLabel(1, null)],
+        ["a settled label event with a boolean actor login, another account's numeric id", "issue", settledLabel(false, 2001)],
+        ["a settled label event with a boolean actor login, no actor id", "issue", settledLabel(false, null)],
+        ["a settled label event with an object actor login, another account's numeric id", "issue", settledLabel({}, 2001)],
+        ["a settled label event with an object actor login, no actor id", "issue", settledLabel({}, null)],
+        ["a settled label event with an array actor login, another account's numeric id", "issue", settledLabel([], 2001)],
+        ["a settled label event with an array actor login, no actor id", "issue", settledLabel([], null)],
+        ["a settled label event with no actor login, the sponsor's numeric id", "issue", unlogged(1001)],
+        ["a settled label event with no actor login, another account's numeric id", "issue", unlogged(2001)],
+        ["a settled label event with no actor login, no actor id", "issue", unlogged(null)],
       ]);
-      expect(comments).toEqual([{ id: "comment-9", createdAt: "2026-09-01T11:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: 1001, body: "Done when it works." }]);
-      expect(closingPullRequests).toMatchObject([{ id: 201, number: 11, state: "MERGED", mergedAt: "2026-09-01T12:00:00.000Z", finalCommitAt: "2026-09-01T10:00:00.000Z", repositoryGitHubId: 5001 }]);
+      const settledAt = { createdAt: "2026-09-01T11:00:00.000Z", label: "delivered/6" };
+      const wrongEvents = [
+        { kind: "LABELED", id: "actual-9", actorLogin: 1, actorGitHubUserId: 1001, ...settledAt },
+        { kind: "LABELED", id: "actual-9", actorLogin: 1, actorGitHubUserId: null, ...settledAt },
+        { kind: "LABELED", id: "actual-9", actorLogin: false, actorGitHubUserId: 2001, ...settledAt },
+        { kind: "LABELED", id: "actual-9", actorLogin: false, actorGitHubUserId: null, ...settledAt },
+        { kind: "LABELED", id: "actual-9", actorLogin: {}, actorGitHubUserId: 2001, ...settledAt },
+        { kind: "LABELED", id: "actual-9", actorLogin: {}, actorGitHubUserId: null, ...settledAt },
+        { kind: "LABELED", id: "actual-9", actorLogin: [], actorGitHubUserId: 2001, ...settledAt },
+        { kind: "LABELED", id: "actual-9", actorLogin: [], actorGitHubUserId: null, ...settledAt },
+        { kind: "LABELED", id: "actual-9", actorGitHubUserId: 1001, ...settledAt },
+        { kind: "LABELED", id: "actual-9", actorGitHubUserId: 2001, ...settledAt },
+        { kind: "LABELED", id: "actual-9", actorGitHubUserId: null, ...settledAt },
+      ];
+      for (const [index, [, , payload]] of rows.entries()) {
+        expect(payload).not.toHaveProperty("subject");
+        expect(payload).toMatchObject({ id: 9, number: 9, state: "CLOSED", createdAt: "2026-09-01T08:00:00.000Z", closedAt: "2026-09-01T12:05:00.000Z", authorLogin: "sponsor", labels: ["M", "delivered/6"] });
+        const { history, comments, closingPullRequests } = payload as { history: unknown[]; comments: unknown[]; closingPullRequests: unknown[] };
+        expect(history).toStrictEqual([
+          { kind: "LABELED", id: "opening-9", actorLogin: "sponsor", actorGitHubUserId: null, createdAt: "2026-09-01T08:01:00.000Z", label: "M" },
+          { kind: "ASSIGNED", id: "assigned-9", actorLogin: "sponsor", actorGitHubUserId: null, createdAt: "2026-09-01T09:00:00.000Z", assigneeLogin: "contributor" },
+          wrongEvents[index],
+        ]);
+        expect(comments).toEqual([{ id: "comment-9", createdAt: "2026-09-01T11:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: 1001, body: "Done when it works." }]);
+        expect(closingPullRequests).toMatchObject([{ id: 201, number: 11, state: "MERGED", mergedAt: "2026-09-01T12:00:00.000Z", finalCommitAt: "2026-09-01T10:00:00.000Z", repositoryGitHubId: 5001 }]);
+      }
     });
 
     it.each(unreadableRows)("discards the sweep pass, without retrying, when a staged row holds %s", async (_label, kind, payload) => {
       const { f, dependencies, walk } = sweepRun();
+      suppressing(dependencies);
       await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: 8, updatedAt: instant(8), payload: stub(8) });
       const key = kind === "issue" ? 9 : 19;
       await f.pass.stage({ anchor: "subjects", kind, subjectKey: key, updatedAt: instant(key), payload });
@@ -377,6 +467,20 @@ describe("reconcileRepository", () => {
       await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: 9, updatedAt: instant(9), payload });
       await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
       expect(f.counts.has(9)).toBe(false);
+    });
+
+    it.each(lateEntries)("resumes a pass whose staged %s entry names a suppressed account by a string login and publishes it scrubbed", async (_label, entry) => {
+      const { f, dependencies } = sweepRun();
+      const published = dependencies.store.materialize as ReturnType<typeof vi.fn>;
+      suppressing(dependencies);
+      const payload = labelled([opening, assigned, actual, { ...entry, actorLogin: "gone", actorGitHubUserId: suppressed.forgeId }]);
+      await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: 9, updatedAt: instant(9), payload });
+      await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
+      expect(f.counts.has(9)).toBe(false);
+      const { issues } = published.mock.calls[0][0].synchronization as { issues: Array<{ id: number; history: Array<Record<string, unknown>> }> };
+      expect(issues.find(({ id }) => id === 9)!.history.map(({ id, actorLogin, actorGitHubUserId }) => [id, actorLogin, actorGitHubUserId])).toEqual([
+        ["opening-9", "sponsor", null], ["assigned-9", "sponsor", null], ["actual-9", "sponsor", null], [entry.id, DATA_SUBJECT_TOMBSTONE_LOGIN, null],
+      ]);
     });
 
     it("settles an unregistered repository's pass only after the failed run released coordination", async () => {
