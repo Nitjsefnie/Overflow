@@ -604,9 +604,9 @@ describe("suite run PR resolution", () => {
         fetchFn: async (...args) => {
           fetches += 1;
           setTimeout(observe, ${CANCEL_TIMEOUT_MS - 5_000});
+          setTimeout(() => {}, ${CANCEL_TIMEOUT_MS - 4_000});
           setTimeout(observe, ${CANCEL_TIMEOUT_MS - 2_000});
           setTimeout(() => {}, ${CANCEL_TIMEOUT_MS - 1_000});
-          setTimeout(() => {}, ${CANCEL_TIMEOUT_MS - 4_000});
           return fetchFn(...args);
         }, sleepFn: async () => {},
       });
@@ -626,7 +626,7 @@ describe("suite run PR resolution", () => {
       signal: null,
       stdout: [
         "timers while waiting: 6",
-        `referenced timers while waiting: ${JSON.stringify([[CANCEL_TIMEOUT_MS - 5_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 2_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 1_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 4_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 500, "[eval1]", true], [CANCEL_TIMEOUT_MS, "resolve-suite-pull-request.ts", true]])}`,
+        `referenced timers while waiting: ${JSON.stringify([[CANCEL_TIMEOUT_MS - 5_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 4_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 2_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 1_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 500, "[eval1]", true], [CANCEL_TIMEOUT_MS, "resolve-suite-pull-request.ts", true]])}`,
         "timers while waiting: 4",
         `referenced timers while waiting: ${JSON.stringify([[CANCEL_TIMEOUT_MS - 2_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 1_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 500, "[eval1]", true], [CANCEL_TIMEOUT_MS, "resolve-suite-pull-request.ts", true]])}`,
         JSON.stringify({ exitCode: 1, lines: ["::error::GitHub API read failed: HTTP 404"] }),
