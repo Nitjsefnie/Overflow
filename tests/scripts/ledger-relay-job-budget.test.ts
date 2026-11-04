@@ -95,6 +95,62 @@ function world(entryMs: number, stepMs = seconds(5)) {
 const writesOf = (requests: Recorded[]) => requests.filter(({ method }) => method === "POST");
 
 describe("the ledger relay's effective deadline", () => {
+  it.each([0, -1])(
+    "returns the entry deadline when a fresh listed start is %i s after creation",
+    async (startOffset) => {
+      const nowMs = JOB_STARTED_AT + seconds(30);
+      const deps: RelayHttpDeps = {
+        deadlineMs: nowMs + seconds(1200), nowFn: () => nowMs,
+        fetchFn: async () => response({ jobs: [
+          ownJob({ name: "other", created_at: new Date(JOB_STARTED_AT - seconds(10)).toISOString() }),
+          ownJob({
+            started_at: new Date(JOB_STARTED_AT + seconds(startOffset)).toISOString(),
+            created_at: new Date(JOB_STARTED_AT).toISOString(),
+          }),
+        ] }),
+        delayFn: async () => undefined,
+      };
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        const deadline = await readEffectiveDeadline(deps, {
+          repo: REPO, runId: RUN_ID, runAttempt: ATTEMPT, workflowToken: WORKFLOW_TOKEN,
+        });
+
+        expect(deadline).toBe(nowMs + seconds(1200));
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0]).toHaveLength(1);
+        expect(String(warn.mock.calls[0][0]).split("\n")).toHaveLength(1);
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    ["absent", undefined],
+    ["unparseable", "not a date"],
+    ["non-string", 123],
+    ["earlier than the start", new Date(JOB_STARTED_AT - seconds(1)).toISOString()],
+  ])("uses the job-start deadline when creation is %s", async (_description, createdAt) => {
+    const nowMs = JOB_STARTED_AT + seconds(30);
+    const deps: RelayHttpDeps = {
+      deadlineMs: nowMs + seconds(1200), nowFn: () => nowMs,
+      fetchFn: async () => response({ jobs: [ownJob({ created_at: createdAt })] }),
+      delayFn: async () => undefined,
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const deadline = await readEffectiveDeadline(deps, {
+        repo: REPO, runId: RUN_ID, runAttempt: ATTEMPT, workflowToken: WORKFLOW_TOKEN,
+      });
+
+      expect(deadline).toBe(JOB_STARTED_AT + seconds(870));
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("returns the supplied entry deadline unchanged when the listed job start is stale", async () => {
     const nowMs = JOB_STARTED_AT + seconds(1385);
     const deps: RelayHttpDeps = {
@@ -160,6 +216,70 @@ describe("the ledger relay's job-start budget", () => {
       expect(write.at + REQUEST_TIMEOUT_MS, `${write.url} could outlive the job`).toBeLessThan(JOB_STARTED_AT + jobTimeoutMs);
     }
     // Not even the sweep or the token mint starts: the job read is the only request.
+    expect(w.state.requests.map(({ url }) => url)).toEqual([JOB_START]);
+    expect(w.state.checks).toEqual([]);
+  });
+
+  it("sweeps when a queued placeholder is 959 s older than the entry", async () => {
+    const w = world(JOB_STARTED_AT + seconds(959), 0);
+    const queuedAt = new Date(JOB_STARTED_AT).toISOString();
+    w.state.jobStart = async () => response({ jobs: [ownJob({ started_at: queuedAt, created_at: queuedAt })] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const result = await w.run();
+
+      expect(result.sweep.relayed).toHaveLength(1);
+      expect(w.state.checks).toHaveLength(1);
+      expect(writesOf(w.state.requests).some(({ url }) => url === `${ROOT}/check-runs`)).toBe(true);
+      expect(w.state.requests.filter(({ url }) => url === JOB_START)).toHaveLength(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("exits without writing when the listed start is one second after creation and 959 s before entry", async () => {
+    const w = world(JOB_STARTED_AT + seconds(959), 0);
+    w.state.jobStart = async () => response({ jobs: [ownJob({
+      created_at: new Date(JOB_STARTED_AT - seconds(1)).toISOString(),
+    })] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await expect(w.run()).rejects.toThrow();
+
+      expect(w.state.requests.map(({ url }) => url)).toEqual([JOB_START]);
+      expect(w.state.checks).toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("sweeps when a start after creation is exactly one job timeout before entry", async () => {
+    const w = world(JOB_STARTED_AT + seconds(960), 0);
+    w.state.jobStart = async () => response({ jobs: [ownJob({
+      created_at: new Date(JOB_STARTED_AT - seconds(1)).toISOString(),
+    })] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const result = await w.run();
+
+      expect(result.sweep.relayed).toHaveLength(1);
+      expect(w.state.checks).toHaveLength(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("exits without writing for a bad start even when creation is valid", async () => {
+    const w = world(JOB_STARTED_AT + seconds(30), 0);
+    w.state.jobStart = async () => response({ jobs: [ownJob({
+      started_at: "yesterday", created_at: new Date(JOB_STARTED_AT).toISOString(),
+    })] });
+
+    await expect(w.run()).rejects.toThrow();
+
     expect(w.state.requests.map(({ url }) => url)).toEqual([JOB_START]);
     expect(w.state.checks).toEqual([]);
   });
