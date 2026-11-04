@@ -1199,10 +1199,6 @@
     2834,
     8375
   ],
-  "tests/ci/audit-acceptance.test.ts": [
-    1700,
-    8414
-  ],
   "tests/ci/concurrency.test.ts": [
     18464,
     46180
@@ -1222,10 +1218,6 @@
   "tests/ci/pr-suite-workflow.test.ts": [
     16577,
     32992
-  ],
-  "tests/ci/production-closure.ts": [
-    3455,
-    7460
   ],
   "tests/ci/required-checks.test.ts": [
     1382,
