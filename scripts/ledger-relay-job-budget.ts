@@ -3,7 +3,7 @@
 // bounds, so a deadline measured from the script's own entry cannot keep a
 // write inside the job. The run deadline is therefore also measured from the
 // job's own started_at, read before any write; an unknown start fails red,
-// while a provably stale start falls back to the entry deadline.
+// while a queued placeholder or a provably stale start falls back to the entry deadline.
 import { API_HEADERS, API_ROOT, REQUEST_TIMEOUT_MS, apiCall, type RelayHttpDeps } from "./ledger-relay-http.ts";
 
 /** The relay job's id in ledger-relay.yml; with no `name:` it is also the job's API name. */
@@ -23,16 +23,20 @@ export interface RelayJobIdentity {
   workflowToken: string;
 }
 
-/** The started_at of the one job named RELAY_JOB_NAME in a run-attempt job listing; throws otherwise. */
-export function relayJobStartedAt(body: unknown): number {
+function relayJob(body: unknown): { started_at?: unknown; created_at?: unknown } {
   const jobs = typeof body === "object" && body !== null ? (body as { jobs?: unknown }).jobs : undefined;
   if (!Array.isArray(jobs)) throw new Error("the relay's own job listing has no jobs array");
-  const matches = jobs.filter((job): job is { started_at?: unknown } =>
+  const matches = jobs.filter((job): job is { started_at?: unknown; created_at?: unknown } =>
     typeof job === "object" && job !== null && (job as { name?: unknown }).name === RELAY_JOB_NAME);
   if (matches.length !== 1) {
     throw new Error(`the relay's own job listing must name exactly one ${RELAY_JOB_NAME} job, found ${matches.length}`);
   }
-  const startedAt = matches[0].started_at;
+  return matches[0];
+}
+
+/** The started_at of the one job named RELAY_JOB_NAME in a run-attempt job listing; throws otherwise. */
+export function relayJobStartedAt(body: unknown): number {
+  const startedAt = relayJob(body).started_at;
   const ms = typeof startedAt === "string" ? Date.parse(startedAt) : Number.NaN;
   if (!Number.isFinite(ms)) {
     throw new Error(`the relay's own ${RELAY_JOB_NAME} job has no valid started_at (${JSON.stringify(startedAt)})`);
@@ -47,9 +51,9 @@ export function jobStartDeadline(startedAtMs: number): number {
 
 /**
  * The effective run deadline: the earlier of the entry deadline already in
- * `deps` and the job-start deadline, unless the listed start is impossibly
- * old for a live job. Throws, having made no write, when the listing cannot
- * be read or proven, or when no request may start any more.
+ * `deps` and the job-start deadline, unless the listed start is a queued
+ * placeholder or impossibly old for a live job. Throws, having made no write,
+ * when the listing cannot be read or proven, or when no request may start any more.
  */
 export async function readEffectiveDeadline(deps: RelayHttpDeps, job: RelayJobIdentity): Promise<number> {
   const body = await apiCall<unknown>(deps, {
@@ -58,6 +62,16 @@ export async function readEffectiveDeadline(deps: RelayHttpDeps, job: RelayJobId
     headers: { ...API_HEADERS, authorization: `Bearer ${job.workflowToken}` },
   }, `the relay's own job listing (run ${job.runId}, attempt ${job.runAttempt})`);
   const startedAtMs = relayJobStartedAt(body);
+  const createdAt = relayJob(body).created_at;
+  const createdAtMs = typeof createdAt === "string" ? Date.parse(createdAt) : Number.NaN;
+  if (Number.isFinite(createdAtMs) && startedAtMs <= createdAtMs) {
+    console.warn(
+      `[ledger-relay] the listed started_at ${new Date(startedAtMs).toISOString()} is at or before ` +
+        `created_at ${new Date(createdAtMs).toISOString()}; ` +
+        `the entry deadline ${new Date(deps.deadlineMs).toISOString()} governs this run`,
+    );
+    return deps.deadlineMs;
+  }
   const nowMs = (deps.nowFn ?? Date.now)();
   const oldestLiveStartMs = nowMs - RELAY_JOB_TIMEOUT_MINUTES * 60_000;
   if (startedAtMs <= oldestLiveStartMs) {
