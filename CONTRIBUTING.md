@@ -439,12 +439,14 @@ inside it.
 
 ### Workflow-name scopes require the ci type
 
-A commit subject may use a workflow's name — the top-level `name:` under
-`.github/workflows/` — as its scope only with type `ci`.
+This narrows the [commit-message format](#pull-requests): a commit subject may
+use a workflow's name — the top-level `name:` under `.github/workflows/` — as
+its scope only with type `ci`.
 The gate arms only on `type(scope):`-shaped subjects with a lowercase type and
-a whitespace-free scope. Subjects outside that grammar are never rejected by
-it; conventional commit subjects are not required. A workflow name containing
-spaces, such as `code scanning`, cannot appear as a scope the gate reads.
+a whitespace-free scope. It checks this scope rule alone: a subject outside
+that grammar is listed and passes it, though the format still binds it. A
+workflow name containing spaces, such as `code scanning`, cannot appear as a
+scope the gate reads.
 The top-level `name:` must be a plain scalar; the gate refuses other spellings
 rather than guessing. Adding or renaming a workflow requires updating the
 real-name pin in `tests/ci/commit-scopes.test.ts` in the same change.
@@ -683,3 +685,13 @@ branch, not a squashed summary of it.
 That is also why, if you find a second defect while fixing the first, you should
 **file it** rather than fold it in. A commit that fixes two things is a commit
 that cannot be reverted for one of them.
+
+Every commit message follows
+[Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/):
+`type(scope)!: subject`, the scope and `!` optional, the type one of `build`,
+`chore`, `ci`, `docs`, `feat`, `fix`, `perf`, `refactor`, `revert`, `style` or
+`test`. Messages an automation writes follow it too: each Dependabot lane in
+`.github/dependabot.yml` sets a type as its commit-message prefix. Review checks
+what the format cannot: that each type and `!` fit the change, so a breaking
+change carries `!`. A wrong message is a required change, fixed by rewording
+before the merge.
