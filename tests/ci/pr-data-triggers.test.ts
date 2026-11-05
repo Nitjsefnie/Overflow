@@ -85,7 +85,7 @@ function admits(file: string, workflow: Workflow): boolean {
   const keys = new Set(triggerKeys(workflow.on));
   return (keys.size === ALLOWED_TRIGGERS.size && [...keys].every((key) => ALLOWED_TRIGGERS.has(key))) ||
     (file === "ci-pr.yml" && keys.size === 1 && keys.has("workflow_run")) ||
-    // comment-share.yml checks out the PR head only on unprivileged events.
+    // Unprivileged PR-head checkout.
     (file === "comment-share.yml" && [...keys].every((key) => ["pull_request", "push", "workflow_call"].includes(key)));
 }
 
