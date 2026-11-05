@@ -1279,10 +1279,6 @@
     799,
     3356
   ],
-  "tests/config/vitest-max-workers.test.ts": [
-    732,
-    2751
-  ],
   "tests/dashboard/page-module-moderator-standing.test.ts": [
     1700,
     5434
@@ -1359,21 +1355,9 @@
     1394,
     8285
   ],
-  "tests/db/postgres-container-names.test.ts": [
-    3220,
-    7938
-  ],
-  "tests/db/postgres-container.test.ts": [
-    931,
-    5095
-  ],
   "tests/db/postgres-queue.test.ts": [
     1105,
     2513
-  ],
-  "tests/db/postgres-shared.test.ts": [
-    2391,
-    13279
   ],
   "tests/db/reconciliation-lock-release.test.ts": [
     4202,
@@ -1710,10 +1694,6 @@
   "tests/support/trusted-origin.ts": [
     2074,
     3670
-  ],
-  "tests/support/unhandled-rejection-probe.test.ts": [
-    1390,
-    3971
   ],
   "tests/support/unhandled-rejection-probe.ts": [
     1030,

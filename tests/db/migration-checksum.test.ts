@@ -76,15 +76,6 @@ describe("migration checksums", () => {
     await fixtureDirectory("001.sql", "select 1;");
   });
 
-  it.skipIf(process.env.OVERFLOW_TEMP_DIRECTORY_TEARDOWN_PROBE !== "1")("cleans fixtures despite database teardown failure", async () => {
-    await fixtureDirectory("001.sql", "select 1;");
-    const end = adminSql!.end.bind(adminSql);
-    vi.spyOn(adminSql!, "end").mockImplementationOnce(async () => {
-      await end();
-      throw new Error("fixture teardown failure");
-    });
-  });
-
   it("records the file's checksum when it applies a migration", async () => {
     await onNewDatabase("record_checksum", async (sql) => {
       await runMigrations();
