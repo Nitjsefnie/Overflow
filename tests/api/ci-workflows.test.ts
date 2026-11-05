@@ -1423,7 +1423,7 @@ exit 1
     const conventionalTypes = [
       "build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "revert", "style", "test",
     ];
-    // Package manifests are build inputs; actions and images are CI machinery.
+    // The project's convention: package ecosystems take `build`, Actions and Docker images `ci`.
     const expectedPrefixes: Record<string, string> = {
       npm: "build",
       pip: "build",

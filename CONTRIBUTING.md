@@ -443,10 +443,10 @@ This narrows the [commit-message format](#pull-requests): a commit subject may
 use a workflow's name — the top-level `name:` under `.github/workflows/` — as
 its scope only with type `ci`.
 The gate arms only on `type(scope):`-shaped subjects with a lowercase type and
-a whitespace-free scope. It checks this scope rule alone: a subject outside
-that grammar is listed and passes it, though the format still binds it. A
-workflow name containing spaces, such as `code scanning`, cannot appear as a
-scope the gate reads.
+a whitespace-free scope. It checks this scope rule alone: the gate lists a
+subject outside that grammar and passes it, though the format still binds that
+subject. A workflow name containing spaces, such as `code scanning`, cannot
+appear as a scope the gate reads.
 The top-level `name:` must be a plain scalar; the gate refuses other spellings
 rather than guessing. Adding or renaming a workflow requires updating the
 real-name pin in `tests/ci/commit-scopes.test.ts` in the same change.
