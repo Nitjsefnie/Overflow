@@ -3,9 +3,9 @@
 
 Issue 988 brings the checks used by the claim and pr-gate actions into
 Overflow's already-required verify job. CONTRIBUTING.md allows a workflow's
-name as a commit scope only with type `ci`. This is a narrow scope rule, not
-a requirement to write Conventional Commits: prose no gate reads is a
-convention, so this check enforces only the written distinction.
+name as a commit scope only with type `ci`. This check enforces only that
+scope rule: it does not check the Conventional Commits format CONTRIBUTING.md
+prescribes, which review checks.
 
 The workflow-name set is DERIVED at HEAD from the tracked files under
 .github/workflows, not kept in a list here. A remembered list is only as

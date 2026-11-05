@@ -9,7 +9,7 @@ updates:
       timezone: "Etc/UTC"
     open-pull-requests-limit: 5
     commit-message:
-      # A bare type: dependabot adds "(deps)" and ": " itself, giving "build(deps): bump ...".
+      # A bare type: dependabot adds "(deps)" or "(deps-dev)" and ": " itself, giving "build(deps): bump ...".
       prefix: "build"
       include: "scope"
     ignore:
