@@ -12,7 +12,7 @@ const rootDirectory = path.dirname(fileURLToPath(import.meta.url));
 // VITEST_MAX_WORKERS (numeric) wins; else the key stays absent — vitest's own
 // unbounded default — when CI is set; otherwise a local default of 2 bounds
 // the pool on the shared box. A non-numeric VITEST_MAX_WORKERS is treated as
-// unset. Pinned by tests/config/vitest-max-workers.test.ts.
+// unset.
 // ---------------------------------------------------------------------------
 const rawMaxWorkers = process.env.VITEST_MAX_WORKERS;
 const numericMaxWorkers =

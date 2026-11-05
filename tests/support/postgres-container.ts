@@ -70,7 +70,7 @@ const CONTAINER_POSTGRES_PORT = 5432;
 type DockerPortBinding = { HostIp: string; HostPort: string };
 
 /** Selects a published IPv4 port locally; remote runtime endpoints pass through. */
-export function selectPostgresEndpoint(runtimeHost: string, bindings: readonly DockerPortBinding[] | null | undefined, mappedPort: number): { host: string; port: number } {
+function selectPostgresEndpoint(runtimeHost: string, bindings: readonly DockerPortBinding[] | null | undefined, mappedPort: number): { host: string; port: number } {
   if (runtimeHost !== "localhost" && runtimeHost !== "127.0.0.1" && runtimeHost !== "::1") {
     return { host: runtimeHost, port: mappedPort };
   }
@@ -113,11 +113,6 @@ export function postgresConnectionUrl({ host, port, user, password, database, cl
 
 type SurvivorAuditBranch = "calibrated" | "strict";
 let survivorAuditBranchLogged = false;
-let lastSurvivorAuditBranch: SurvivorAuditBranch | undefined;
-
-export function lastSharedSurvivorAuditBranch(): SurvivorAuditBranch | undefined {
-  return lastSurvivorAuditBranch;
-}
 
 /**
  * What the shared path has provisioned in THIS worker since the last reset:
@@ -146,7 +141,7 @@ export interface ClientTcpSocket {
 }
 
 /** A null table means neither proc table could be read. */
-export function readClientTcpSockets(): readonly ClientTcpSocket[] | null {
+function readClientTcpSockets(): readonly ClientTcpSocket[] | null {
   let readable = false;
   const sockets: ClientTcpSocket[] = [];
   for (const path of ["/proc/net/tcp", "/proc/net/tcp6"]) {
@@ -170,7 +165,7 @@ export function readClientTcpSockets(): readonly ClientTcpSocket[] | null {
 }
 
 /** A live pool can hand the next file its database only while its TCP socket is still established. */
-export function clientSocketIsEstablished(clientPort: number | null, serverPort: number, sockets: readonly ClientTcpSocket[] | null): boolean {
+function clientSocketIsEstablished(clientPort: number | null, serverPort: number, sockets: readonly ClientTcpSocket[] | null): boolean {
   if (clientPort === null || sockets === null) return true;
   return sockets.some((socket) =>
     socket.localPort === clientPort
@@ -188,7 +183,7 @@ function sharedAuditCanRefine(adminPort: number | null, serverPort: number, sock
   return adminPort !== null && sockets !== null && clientSocketIsEstablished(adminPort, serverPort, sockets);
 }
 
-export function sharedAuditSurvivors(rows: readonly SharedActivityRow[], adminPort: number | null, serverPort: number, sockets: readonly ClientTcpSocket[] | null): SharedActivityRow[] {
+function sharedAuditSurvivors(rows: readonly SharedActivityRow[], adminPort: number | null, serverPort: number, sockets: readonly ClientTcpSocket[] | null): SharedActivityRow[] {
   // Rootless Docker, remote DOCKER_HOST, or DNAT may make the backend's peer
   // invisible here even when /proc is readable. Use our own live admin socket
   // to prove the table covers this topology before trusting absent role sockets.
@@ -223,7 +218,6 @@ export async function assertNoSharedProvisionSurvivors(): Promise<void> {
     const adminPort = ownRows[0]?.client_port ?? null;
     const sockets = readClientTcpSockets();
     const branch: SurvivorAuditBranch = sharedAuditCanRefine(adminPort, facts.port, sockets) ? "calibrated" : "strict";
-    lastSurvivorAuditBranch = branch;
     if (!survivorAuditBranchLogged) {
       writeSync(2, branch === "calibrated"
         ? "survivor audit: calibrated refinement active\n"
