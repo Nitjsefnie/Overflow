@@ -1149,7 +1149,10 @@ exit 1
       day: "thursday"
       time: "05:07"
       timezone: "Etc/UTC"
-    open-pull-requests-limit: 5\n`;
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build"
+      include: "scope"\n`;
     expect(source).toContain(expectedPipBlock);
     expect(source.endsWith(expectedPipBlock)).toBe(true);
   });
@@ -1405,6 +1408,36 @@ exit 1
       // Exact names, not wildcards: `react*` + `@types/react*` resolves to the
       // four today but would also collect a future react-is.
       expect([...patterns].sort(), lane).toEqual(reactFamily);
+    }
+  });
+
+  it("gives every dependabot lane a Conventional Commits prefix", async () => {
+    const config = parse(await readFile(resolve(".github/dependabot.yml"), "utf8")) as {
+      updates: Array<{
+        "package-ecosystem": string;
+        "commit-message"?: { prefix?: string; "prefix-development"?: string; include?: string };
+      }>;
+    };
+    // Dependabot appends `(deps)` for `include: scope`, then `: `, so a prefix
+    // carrying its own colon or scope would break the `type(scope): subject` shape.
+    const conventionalTypes = [
+      "build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "revert", "style", "test",
+    ];
+    // Package manifests are build inputs; actions and images are CI machinery.
+    const expectedPrefixes: Record<string, string> = {
+      npm: "build",
+      pip: "build",
+      "github-actions": "ci",
+      docker: "ci",
+      "docker-compose": "ci",
+    };
+
+    expect(config.updates.length).toBeGreaterThan(0);
+    for (const update of config.updates) {
+      const ecosystem = update["package-ecosystem"];
+      const message = update["commit-message"];
+      expect(conventionalTypes, ecosystem).toContain(message?.prefix);
+      expect(message, ecosystem).toEqual({ prefix: expectedPrefixes[ecosystem], include: "scope" });
     }
   });
 

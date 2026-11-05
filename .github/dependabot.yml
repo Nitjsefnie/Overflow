@@ -8,6 +8,10 @@ updates:
       time: "03:17"
       timezone: "Etc/UTC"
     open-pull-requests-limit: 5
+    commit-message:
+      # A bare type: dependabot adds "(deps)" and ": " itself, giving "build(deps): bump ...".
+      prefix: "build"
+      include: "scope"
     ignore:
       # postgres is pinned by a deliberate local-patch regime: patches/postgres@3.4.9.patch
       # is maintained on purpose (not filed upstream, by standing maintainer decision) and
@@ -79,6 +83,9 @@ updates:
       time: "04:23"
       timezone: "Etc/UTC"
     open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+      include: "scope"
     groups:
       github-actions:
         patterns:
@@ -107,6 +114,9 @@ updates:
       time: "05:31"
       timezone: "Etc/UTC"
     open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+      include: "scope"
     ignore:
       # Declined in #771: node 26 enters LTS only on 2026-10-28 per the
       # nodejs.org release schedule (nodejs/Release schedule.json), and a Node
@@ -132,6 +142,9 @@ updates:
       time: "05:53"
       timezone: "Etc/UTC"
     open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+      include: "scope"
     ignore:
       # The service image stays within major 17: a major bump changes runtime
       # behavior the maintainers take deliberately, and the digest moves within
@@ -153,6 +166,9 @@ updates:
       time: "05:57"
       timezone: "Etc/UTC"
     open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+      include: "scope"
     ignore:
       # The image stays within major 17: a major bump changes runtime behavior
       # the maintainers take deliberately, and the digest moves within the
@@ -231,3 +247,6 @@ updates:
       time: "05:07"
       timezone: "Etc/UTC"
     open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build"
+      include: "scope"
