@@ -25,7 +25,7 @@ beforeEach(() => {
     REGISTRATION_REFUSAL_LABELS: refusalLabels,
   }));
   auth.mockResolvedValue(null);
-  readStats.mockResolvedValue({ pullRequests: 23, contributors: 4, points: 117, readAt: new Date("2026-10-27T11:12:00Z") });
+  readStats.mockResolvedValue({ pullRequests: 23, contributors: 4, points: 117, noRoundPullRequests: 19, meanReviewRounds: 3 / 7, readAt: new Date("2026-10-27T11:12:00Z") });
   readProgress.mockResolvedValue({
     registrationStarts: 101, repositories: 58, githubRepositories: 41, gitlabRepositories: 17,
     listedIssue: 29, contributorReviewed: 19, listedSecondIssue: 11,
@@ -69,7 +69,8 @@ describe("settled work page", () => {
     const main = screen.getByRole("main");
     expect(main).toHaveClass("page-content");
     expect(main).toHaveAttribute("id", "main-content");
-    expect([...main.querySelectorAll("section.surface")[0]!.querySelectorAll("strong")].map((node) => node.textContent)).toEqual(["23", "4", "117"]);
+    expect([...main.querySelectorAll("section.surface")[0]!.querySelectorAll("strong")].map((node) => node.textContent)).toEqual(["23", "4", "117", "19", "0.43"]);
+    expect(screen.getByRole("main").querySelectorAll("section.surface")[0]!.querySelector("[role='status']")).toBeNull();
     expect(screen.getByText("23")).toBeVisible();
     expect(screen.getByText("4")).toBeVisible();
     expect(screen.getByText("117")).toBeVisible();
@@ -85,13 +86,22 @@ describe("settled work page", () => {
   });
 
   it("renders zero and one without suppressing either count", async () => {
-    readStats.mockResolvedValue({ pullRequests: 0, contributors: 0, points: 0, readAt: new Date("2026-10-27T11:12:00Z") });
+    readStats.mockResolvedValue({ pullRequests: 0, contributors: 0, points: 0, noRoundPullRequests: 0, meanReviewRounds: null, readAt: new Date("2026-10-27T11:12:00Z") });
     const empty = await renderStats();
-    expect([...screen.getByRole("main").querySelectorAll("section.surface")[0]!.querySelectorAll("strong")].map((node) => node.textContent)).toEqual(["0", "0", "0"]);
+    const emptySection = screen.getByRole("main").querySelectorAll("section.surface")[0]!;
+    expect([...emptySection.querySelectorAll("strong")].map((node) => node.textContent)).toEqual(["0", "0", "0", "0"]);
+    // With no settled pull request there is no mean: a note stands in for the figure.
+    const note = emptySection.querySelector("[role='status']");
+    expect(note).toBeVisible();
+    expect(note!.textContent!.trim().length).toBeGreaterThan(0);
+    expect(note!.querySelector("strong")).toBeNull();
+    expect(note!.textContent).not.toMatch(/\d|NaN/);
     empty.unmount();
-    readStats.mockResolvedValue({ pullRequests: 1, contributors: 1, points: 1, readAt: new Date("2026-10-27T11:12:00Z") });
+    readStats.mockResolvedValue({ pullRequests: 1, contributors: 1, points: 1, noRoundPullRequests: 1, meanReviewRounds: 0, readAt: new Date("2026-10-27T11:12:00Z") });
     await renderStats();
-    expect([...screen.getByRole("main").querySelectorAll("section.surface")[0]!.querySelectorAll("strong")].map((node) => node.textContent)).toEqual(["1", "1", "1"]);
+    const oneSection = screen.getByRole("main").querySelectorAll("section.surface")[0]!;
+    expect([...oneSection.querySelectorAll("strong")].map((node) => node.textContent)).toEqual(["1", "1", "1", "1", "0"]);
+    expect(oneSection.querySelector("[role='status']")).toBeNull();
   });
 
   it.each(["public", "signed-in"])("renders every owner-progress figure in its section for a %s visitor", async (visitor) => {
@@ -122,7 +132,7 @@ describe("settled work page", () => {
     await renderStats();
     const sections = screen.getByRole("main").querySelectorAll("section.surface");
     const settledFigures = [...sections[0]!.querySelectorAll("strong")];
-    expect(settledFigures.map((node) => node.textContent)).toEqual(["23", "4", "117"]);
+    expect(settledFigures.map((node) => node.textContent)).toEqual(["23", "4", "117", "19", "0.43"]);
     for (const figure of settledFigures) expect(figure).toBeVisible();
     const status = sections[1]!.querySelector("[role='status']");
     expect(status).toBeVisible();
