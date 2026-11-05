@@ -5,6 +5,10 @@ export type SettledWorkStats = {
   pullRequests: number;
   contributors: number;
   points: number;
+  /** Settled pull requests that merged with no changes-requested review round standing. */
+  noRoundPullRequests: number;
+  /** Mean changes-requested review rounds per settled pull request, each counted once; null while none has settled. */
+  meanReviewRounds: number | null;
   readAt: Date;
 };
 
@@ -22,10 +26,22 @@ export function createSettledWorkReader(
     if (cached !== undefined && now() - cached.readAt.getTime() < SETTLED_WORK_REFRESH_MINUTES * 60 * 1000) return cached;
     inFlight = (async () => {
       const sql = resolveSql(dependencies);
-      const [row] = await sql<{ pull_requests: string; contributors: string; points: string }[]>`
+      const [row] = await sql<{
+        pull_requests: string; contributors: string; points: string;
+        no_round_pull_requests: string; mean_review_rounds: string | null;
+      }[]>`
+        with pull_request_rounds as (
+          -- One row per pull request: one that closed several issues has a settlement row per issue.
+          select max(settlements.review_rounds) as review_rounds
+          from settlements
+          where settlements.status = 'SETTLED'
+          group by settlements.pull_request_id
+        )
         select count(distinct settlements.pull_request_id) as pull_requests,
           count(distinct settlements.creditor_id) as contributors,
-          coalesce(sum(settlements.credits), 0) as points
+          coalesce(sum(settlements.credits), 0) as points,
+          (select count(*) from pull_request_rounds where review_rounds = 0) as no_round_pull_requests,
+          (select avg(review_rounds) from pull_request_rounds) as mean_review_rounds
         from settlements
         where settlements.status = 'SETTLED'
       `;
@@ -33,6 +49,8 @@ export function createSettledWorkReader(
         pullRequests: readNumber(row.pull_requests, "Settled pull requests"),
         contributors: readNumber(row.contributors, "Settled contributors"),
         points: readNumber(row.points, "Settled points"),
+        noRoundPullRequests: readNumber(row.no_round_pull_requests, "Settled pull requests without a review round"),
+        meanReviewRounds: row.mean_review_rounds === null ? null : readNumber(row.mean_review_rounds, "Mean review rounds"),
         readAt: new Date(now()),
       };
       cached = result;

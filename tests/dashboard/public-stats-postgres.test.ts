@@ -41,7 +41,7 @@ describe("public settled work totals against PostgreSQL", () => {
   });
 
   it("returns zero totals on an empty database", async () => {
-    expect(await read()).toEqual({ pullRequests: 0, contributors: 0, points: 0, readAt });
+    expect(await read()).toEqual({ pullRequests: 0, contributors: 0, points: 0, noRoundPullRequests: 0, meanReviewRounds: null, readAt });
   });
 
   it("counts all registered repositories, their progress markers, and daily attempts", async () => {
@@ -91,7 +91,7 @@ describe("public settled work totals against PostgreSQL", () => {
     const repository = await insertRepository(sponsor);
     const work = await insertWork(repository, first);
     await insertSettlement(work.pullRequest, work.issue, sponsor, first, "SETTLED", 5);
-    expect(await read()).toEqual({ pullRequests: 1, contributors: 1, points: 5, readAt });
+    expect(await read()).toEqual({ pullRequests: 1, contributors: 1, points: 5, noRoundPullRequests: 1, meanReviewRounds: 0, readAt });
 
     const anotherIssue = await insertIssue(repository);
     await sql`insert into pull_request_issues (pull_request_id, issue_id, repository_id) values (${work.pullRequest}, ${anotherIssue}, ${repository})`;
@@ -100,11 +100,11 @@ describe("public settled work totals against PostgreSQL", () => {
     await insertSettlement(nextWork.pullRequest, nextWork.issue, sponsor, first, "SETTLED", 4);
     const otherWork = await insertWork(repository, second);
     await insertSettlement(otherWork.pullRequest, otherWork.issue, sponsor, second, "SETTLED", 8);
-    const expected = { pullRequests: 3, contributors: 2, points: 19, readAt };
+    const expected = { pullRequests: 3, contributors: 2, points: 19, noRoundPullRequests: 3, meanReviewRounds: 0, readAt };
     expect(await read()).toEqual(expected);
     const before = Date.now();
     const defaultReading = await getSettledWorkStats();
-    expect(defaultReading).toEqual({ pullRequests: 3, contributors: 2, points: 19, readAt: expect.any(Date) });
+    expect(defaultReading).toEqual({ ...expected, readAt: expect.any(Date) });
     expect(defaultReading.readAt.getTime()).toBeGreaterThanOrEqual(before);
     expect(defaultReading.readAt.getTime()).toBeLessThanOrEqual(Date.now());
 
@@ -128,7 +128,33 @@ describe("public settled work totals against PostgreSQL", () => {
         settled_points, review_rounds, credits, proof_sha256, status)
       values (${zeroCredit.pullRequest}, ${zeroCredit.issue}, ${first}, ${sponsor}, 4, 2, 2, 0,
         ${(nextId++).toString(16).padStart(64, "0")}, 'SETTLED')`;
-    expect(await read()).toEqual({ ...expected, pullRequests: 4 });
+    expect(await read()).toEqual({ ...expected, pullRequests: 4, meanReviewRounds: 0.5 });
+  });
+
+  it("counts review rounds once per settled pull request, however many issues it settled", async () => {
+    const sponsor = await insertUser("sponsor");
+    const contributor = await insertUser("contributor");
+    const repository = await insertRepository(sponsor);
+    const settle = async (issueRounds: number[], status: "SETTLED" | "UNCLAIMED" | "UNSETTLED" = "SETTLED") => {
+      const work = await insertWork(repository, status === "UNCLAIMED" ? null : contributor);
+      for (const [index, rounds] of issueRounds.entries()) {
+        const issue = index === 0 ? work.issue : await insertIssue(repository);
+        if (index > 0) await sql`insert into pull_request_issues (pull_request_id, issue_id, repository_id) values (${work.pullRequest}, ${issue}, ${repository})`;
+        await insertSettlement(work.pullRequest, issue, sponsor, status === "UNCLAIMED" ? null : contributor, status, 1, rounds);
+      }
+    };
+    // Per pull request the rounds are 0, 0, 0, 3, 1: three without a round, a mean of 4 / 5.
+    // Counted per settlement row instead, they read four without a round and a mean of 7 / 7.
+    await settle([0]);
+    await settle([0]);
+    await settle([0, 0]);
+    await settle([3, 3]);
+    await settle([1]);
+    await settle([2], "UNCLAIMED");
+    await settle([0], "UNSETTLED");
+    expect(await read()).toEqual({
+      pullRequests: 5, contributors: 1, points: 7, noRoundPullRequests: 3, meanReviewRounds: expect.closeTo(0.8, 10), readAt,
+    });
   });
 });
 
@@ -168,10 +194,11 @@ async function insertWork(repository: string, author: string | null): Promise<{ 
 }
 
 async function insertSettlement(pullRequest: string, issue: string, sponsor: string, creditor: string | null,
-  status: "SETTLED" | "UNCLAIMED" | "UNSETTLED", points: number): Promise<void> {
+  status: "SETTLED" | "UNCLAIMED" | "UNSETTLED", points: number, reviewRounds = 0): Promise<void> {
   await sql`
     insert into settlements (pull_request_id, issue_id, creditor_id, creditor_github_login, debtor_id,
       opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status)
     values (${pullRequest}, ${issue}, ${creditor}, ${creditor === null ? "unclaimed" : null}, ${sponsor},
-      4, ${status === "UNSETTLED" ? null : points}, 0, ${points}, ${(nextId++).toString(16).padStart(64, "0")}, ${status})`;
+      4, ${status === "UNSETTLED" ? null : points + reviewRounds}, ${reviewRounds}, ${status === "UNSETTLED" ? 0 : points},
+      ${(nextId++).toString(16).padStart(64, "0")}, ${status})`;
 }
