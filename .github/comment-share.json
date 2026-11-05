@@ -1619,10 +1619,6 @@
     2311,
     8923
   ],
-  "tests/security/server-action-origin-stub.test.ts": [
-    1968,
-    2608
-  ],
   "tests/security/server-action-origin.test.ts": [
     1316,
     7907
