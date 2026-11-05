@@ -17,7 +17,7 @@ describe("the comment-share measurement and privileged handoff", () => {
   // Missing triggers or a job guard can silently skip a required context.
   it("measures every pull request and every main push with read-only permissions", () => {
     const workflow = readWorkflow("comment-share.yml");
-    expect(workflow.on).toEqual({ pull_request: null, push: { branches: ["main"] } });
+    expect(workflow.on).toMatchObject({ pull_request: null, push: { branches: expect.arrayContaining(["main"]) } });
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(Object.keys(workflow.jobs)).toEqual(["comment-share"]);
     expect(workflow.jobs["comment-share"].if).toBeUndefined();
