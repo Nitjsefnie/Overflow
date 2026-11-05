@@ -438,12 +438,7 @@ async function startOnSharedServer({ database, user, password }: {
   };
 }
 
-/**
- * The provided facts, or the parked failure global setup left in their place.
- * Exported as the pure decision so the parked-error pin does not have to mock
- * "vitest" — a mock that stopped working once vitest.setup.ts imported this
- * module into every worker ahead of any per-file mock registration.
- */
+/** The provided facts, or the parked failure global setup left in their place. */
 function resolveSharedPostgresFacts(provided: SharedPostgresFacts | ParkedSharedPostgresFailure | undefined): SharedPostgresFacts {
   if (provided === undefined) {
     throw new Error("no shared postgres was provided for this run; is tests/support/global-setup.ts registered as the vitest globalSetup?");
