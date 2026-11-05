@@ -1668,8 +1668,8 @@
     6144
   ],
   "tests/support/postgres-container.ts": [
-    6483,
-    19614
+    6332,
+    19323
   ],
   "tests/support/public-destination-harness.ts": [
     2721,
@@ -1708,8 +1708,8 @@
     11356
   ],
   "vitest.config.ts": [
-    1290,
-    2100
+    1242,
+    2052
   ],
   "vitest.setup.ts": [
     1737,
