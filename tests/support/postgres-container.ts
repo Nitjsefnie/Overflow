@@ -444,7 +444,7 @@ async function startOnSharedServer({ database, user, password }: {
  * "vitest" — a mock that stopped working once vitest.setup.ts imported this
  * module into every worker ahead of any per-file mock registration.
  */
-export function resolveSharedPostgresFacts(provided: SharedPostgresFacts | ParkedSharedPostgresFailure | undefined): SharedPostgresFacts {
+function resolveSharedPostgresFacts(provided: SharedPostgresFacts | ParkedSharedPostgresFailure | undefined): SharedPostgresFacts {
   if (provided === undefined) {
     throw new Error("no shared postgres was provided for this run; is tests/support/global-setup.ts registered as the vitest globalSetup?");
   }

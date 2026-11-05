@@ -8,7 +8,7 @@ import ts from "typescript";
  * shared postgres server. A consumer can import it through another helper,
  * so the scan follows local runtime dependencies as well as test files.
  */
-export const SHARED_POSTGRES_MARKER = "startPostgresContainer";
+const SHARED_POSTGRES_MARKER = "startPostgresContainer";
 
 function warnToStderr(message: string): void {
   writeSync(2, `${message}\n`);
