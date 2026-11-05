@@ -203,12 +203,6 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
    */
   premise?: Premise;
 }>([
-  ["ratchet-push.yml", {
-    reason: "Only successful main-push measurements reach this data-only writer. Its static group serializes updates against freshly fetched main, and cancel-in-progress false preserves a running commit and push; a superseded pending measurement is replaced by the newer main measurement.",
-    group: "ratchet-push",
-    "cancel-in-progress": false,
-    queue: undefined,
-  }],
   ["ci-pr.yml", {
     reason: "Suite completions can arrive out of head order. Each triggering head SHA gets its own non-cancelling group, so a stale completion cannot destroy the current head's required verify. workflow_run is the only trigger; no runner polls for the suite.",
     group: "ci-pr-${{ github.event.workflow_run.head_sha }}",
@@ -489,7 +483,6 @@ const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
   "pr-gates.yml": ["actionlint", "ratchet-guard", "secret-scan", "dependency-audit"],
   "pr-suite.yml": ["postgres-image", "suite"],
   "ratchet-guard.yml": ["ratchet-guard"],
-  "ratchet-push.yml": ["push"],
   "scorecard.yml": ["analysis"],
   "secret-scan.yml": ["secret-scan"],
 };
