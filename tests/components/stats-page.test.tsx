@@ -85,6 +85,17 @@ describe("settled work page", () => {
     expect(screen.getByRole("main").querySelector("time[datetime='PT7M']")).toHaveTextContent("7 minutes");
   });
 
+  it.each([
+    [1.004, "1", "round"], [0.996, "1", "round"], [1, "1", "round"], [1.5, "1.5", "rounds"], [2, "2", "rounds"],
+  ])("names the unit of a %s mean by the figure it displays", async (meanReviewRounds, figure, unit) => {
+    readStats.mockResolvedValue({ pullRequests: 23, contributors: 4, points: 117, noRoundPullRequests: 19, meanReviewRounds, readAt: new Date("2026-10-27T11:12:00Z") });
+    await renderStats();
+    const shown = [...screen.getByRole("main").querySelectorAll("section.surface")[0]!.querySelectorAll("strong")].at(-1)!;
+    expect(shown.textContent).toBe(figure);
+    const words = shown.parentElement!.textContent!.split(/[\s,]+/);
+    expect([words.includes("round"), words.includes("rounds")]).toEqual([unit === "round", unit === "rounds"]);
+  });
+
   it("renders zero and one without suppressing either count", async () => {
     readStats.mockResolvedValue({ pullRequests: 0, contributors: 0, points: 0, noRoundPullRequests: 0, meanReviewRounds: null, readAt: new Date("2026-10-27T11:12:00Z") });
     const empty = await renderStats();
