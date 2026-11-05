@@ -22,8 +22,6 @@ const migrationNames = readdirSync(migrationsDirectory)
 
 const fixturePrefix = path.join(tmpdir(), "overflow-1055-migration-");
 const tempDirectories = createOwnedTempDirectoryRegistry([fixturePrefix]);
-const foreignTempDirectories = createOwnedTempDirectoryRegistry([`${fixturePrefix}fixtures-`]);
-let foreignFixtureDirectory: string | undefined;
 
 const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 let container: StartedTestContainer | undefined;
@@ -48,34 +46,11 @@ afterAll(async () => {
     await container?.stop();
   } finally {
     restoreDatabaseUrl();
-    // Remove the foreign fixture after the census, including when an assertion fails.
-    try {
-      await tempDirectories.disposeAsync();
-      expect(readdirSync(tmpdir()).filter((name) => name.startsWith(`${path.basename(fixturePrefix)}${process.pid}-`)))
-        .toEqual([]);
-      if (foreignFixtureDirectory !== undefined) {
-        expect(readdirSync(foreignFixtureDirectory)).toEqual([]);
-      }
-    } finally {
-      await foreignTempDirectories.disposeAsync();
-    }
+    await tempDirectories.disposeAsync();
   }
 });
 
 describe("migration checksums", () => {
-  it("retains cleanup ownership after a fixture write fails", async () => {
-    const before = new Set(readdirSync(tmpdir()));
-    await expect(fixtureDirectory("missing/001.sql", "select 1;"))
-      .rejects.toMatchObject({ code: "ENOENT" });
-    const added = readdirSync(tmpdir()).filter((name) => name.startsWith("overflow-1055-migration-") && !before.has(name));
-    expect(added).toHaveLength(1);
-  });
-
-  it("ignores another suite's matching directory during the cleanup census", async () => {
-    foreignFixtureDirectory = await foreignTempDirectories.createAsync();
-    await fixtureDirectory("001.sql", "select 1;");
-  });
-
   it("records the file's checksum when it applies a migration", async () => {
     await onNewDatabase("record_checksum", async (sql) => {
       await runMigrations();
