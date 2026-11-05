@@ -1418,7 +1418,7 @@ exit 1
         "commit-message"?: { prefix?: string; "prefix-development"?: string; include?: string };
       }>;
     };
-    // Dependabot appends `(deps)` for `include: scope`, then `: `, so a prefix
+    // Dependabot appends `(deps)` or `(deps-dev)` for `include: scope`, then `: `, so a prefix
     // carrying its own colon or scope would break the `type(scope): subject` shape.
     const conventionalTypes = [
       "build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "revert", "style", "test",
