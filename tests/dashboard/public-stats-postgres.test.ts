@@ -135,7 +135,7 @@ describe("public settled work totals against PostgreSQL", () => {
     const sponsor = await insertUser("sponsor");
     const contributor = await insertUser("contributor");
     const repository = await insertRepository(sponsor);
-    const settle = async (issueRounds: number[], status: "SETTLED" | "UNCLAIMED" | "UNSETTLED" = "SETTLED") => {
+    const settle = async (issueRounds: number[], status: "SETTLED" | "UNCLAIMED" | "UNSETTLED" | "DONATED" = "SETTLED") => {
       const work = await insertWork(repository, status === "UNCLAIMED" ? null : contributor);
       for (const [index, rounds] of issueRounds.entries()) {
         const issue = index === 0 ? work.issue : await insertIssue(repository);
@@ -145,6 +145,8 @@ describe("public settled work totals against PostgreSQL", () => {
     };
     // Per pull request the rounds are 0, 0, 0, 3, 1: three without a round, a mean of 4 / 5.
     // Counted per settlement row instead, they read four without a round and a mean of 7 / 7.
+    // Admitting the UNCLAIMED or DONATED pull request (two rounds each) raises the mean to 1;
+    // admitting the UNSETTLED one adds a fourth pull request without a round.
     await settle([0]);
     await settle([0]);
     await settle([0, 0]);
@@ -152,6 +154,7 @@ describe("public settled work totals against PostgreSQL", () => {
     await settle([1]);
     await settle([2], "UNCLAIMED");
     await settle([0], "UNSETTLED");
+    await settle([2], "DONATED");
     expect(await read()).toEqual({
       pullRequests: 5, contributors: 1, points: 7, noRoundPullRequests: 3, meanReviewRounds: expect.closeTo(0.8, 10), readAt,
     });
@@ -194,11 +197,11 @@ async function insertWork(repository: string, author: string | null): Promise<{ 
 }
 
 async function insertSettlement(pullRequest: string, issue: string, sponsor: string, creditor: string | null,
-  status: "SETTLED" | "UNCLAIMED" | "UNSETTLED", points: number, reviewRounds = 0): Promise<void> {
+  status: "SETTLED" | "UNCLAIMED" | "UNSETTLED" | "DONATED", points: number, reviewRounds = 0): Promise<void> {
   await sql`
     insert into settlements (pull_request_id, issue_id, creditor_id, creditor_github_login, debtor_id,
-      opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status)
+      opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status, donation_comment_id)
     values (${pullRequest}, ${issue}, ${creditor}, ${creditor === null ? "unclaimed" : null}, ${sponsor},
       4, ${status === "UNSETTLED" ? null : points + reviewRounds}, ${reviewRounds}, ${status === "UNSETTLED" ? 0 : points},
-      ${(nextId++).toString(16).padStart(64, "0")}, ${status})`;
+      ${(nextId++).toString(16).padStart(64, "0")}, ${status}, ${status === "DONATED" ? "donation" : null})`;
 }
