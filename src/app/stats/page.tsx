@@ -1,5 +1,6 @@
 import { AppShell, PublicAppShell } from "@/components/app-shell";
 import { formatInstant } from "@/lib/format-instant";
+import { formatUnsigned } from "@/lib/format-signed";
 import { plural } from "@/lib/plural";
 import { REGISTRATION_REFUSAL_LABELS, type OwnerProgressStats, type SettledWorkStats } from "@/lib/public-stats";
 import type { RegistrationRefusalKind } from "@/lib/stats/registration-attempts";
@@ -23,6 +24,14 @@ function StatsSections({ stats, progress, refreshMinutes }: { stats: SettledWork
         <p>Distinct accounts with at least one settled pull request.</p>
         <p><strong>{stats.points}</strong> {plural(stats.points, "point")}</p>
         <p>The points those settlements moved to contributors.</p>
+        <p><strong>{stats.noRoundPullRequests}</strong> {plural(stats.noRoundPullRequests, "settled pull request")} merged with no changes-requested review round</p>
+        <p>Settled pull requests with no changes-requested review standing when they merged.</p>
+        {stats.meanReviewRounds === null ? (
+          <p role="status">No settled pull requests yet, so there is no mean.</p>
+        ) : (
+          <p><strong>{formatUnsigned(stats.meanReviewRounds)}</strong> changes-requested review {plural(stats.meanReviewRounds, "round")} per settled pull request, on average</p>
+        )}
+        <p>Each settled pull request counts once, however many issues it closed.</p>
       </section>
       <section className="surface" aria-label="Owner progress">
         <h2>Owner progress</h2>
