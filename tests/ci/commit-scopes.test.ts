@@ -181,7 +181,7 @@ describe("scripts/commit_scopes.py", () => {
       "claim", "code scanning", "comment share", "coverage comment",
       "dependency audit",
       "ledger relay", "pr gate", "pr gates", "pr suite",
-      "ratchet guard", "ratchet push", "scorecard",
+      "ratchet guard", "scorecard",
       "secret scan",
     ]);
   });
