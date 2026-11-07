@@ -74,7 +74,16 @@ function configureWorkMail(): void {
 describe("account-data notice page", () => {
   it("states when a contributor is asked for the webhook scope", async () => {
     await renderAccountDataPage();
-    expect(document.body.textContent).toMatch(/A contributor who signed in without a permission is asked for that one scope\s+when they later choose to register through the webhook route\./);
+
+    const stored = sectionLabelledBy("account-data-stored-heading").textContent ?? "";
+
+    expect(stored, "the contributor who signed in without a permission is the one asked").toMatch(
+      /signed in without a permission/i,
+    );
+    expect(stored, "the scope asked for is admin:repo_hook").toMatch(/admin:repo_hook/);
+    expect(stored, "it is asked when they register through the webhook route").toMatch(
+      /later choose to register through the webhook route/i,
+    );
   });
 
   afterEach(() => {
