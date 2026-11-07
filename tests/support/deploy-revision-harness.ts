@@ -1,8 +1,8 @@
 // The deploy-revision fixture shared by tests/deploy/deploy-revision.test.ts
 // and tests/deploy/deploy-revision-ledger.test.ts: the script path, the
 // command shims and their log, the gate-state writers, and the deploy runner.
-// Extracted so each measured test module stays under the tests family ceiling
-// (scripts/check-module-size.ts).
+// Extracted so each measured test module stays under the tests/ size ceiling
+// (.github/workflows/size-baseline.yml).
 import { spawnSync } from "node:child_process";
 import { chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
