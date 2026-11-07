@@ -44,7 +44,7 @@ updates:
           - "@types/react-dom"
 
   # Workflow actions are SHA-pinned; dependabot proposes their bumps as SHA
-  # updates (the intended behavior for the two Nitjsefnie-Actions workflows,
+  # updates (the intended behavior for the Nitjsefnie-Actions workflows,
   # which stay SHA-pinned by maintainer decision). Every action therefore
   # travels together in one grouped pull request per week, majors included —
   # the old minor-and-patch group left a codeql-action v4 to v5 bump as one pull

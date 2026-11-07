@@ -2111,7 +2111,6 @@ for (const scenario of PRT_SCENARIOS) {
       const gates = [
         { gate: "conflict markers", needle: "git grep -nI" },
         { gate: "docs-only classification", needle: "/scripts/docs-only.ts" },
-        { gate: "module size ceilings", needle: "/scripts/check-module-size.ts" },
         { gate: "migration immutability", needle: "/scripts/check-migration-edits.ts" },
         { gate: "legal revision currency", needle: "/scripts/check-legal-revisions.ts" },
         { gate: "commit scopes", needle: "/scripts/commit_scopes.py" },

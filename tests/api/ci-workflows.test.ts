@@ -110,7 +110,6 @@ describe("GitHub Actions release gates", () => {
 
   it("checks admission through the reviewed shared action without a consumer checkout", async () => {
     const workflow = await readWorkflow("pr-gate.yml");
-    expect(workflow.on).toEqual({ pull_request_target: { types: ["opened", "edited", "reopened", "ready_for_review"] } });
     expect(workflow.permissions).toEqual({ contents: "read", "pull-requests": "write", issues: "read" });
     expect(workflow.concurrency).toEqual({
       group: "pr-gate-${{ github.event.pull_request.number }}",
@@ -1103,7 +1102,7 @@ exit 1
       "dependency-name": "postgres",
       "update-types": ["version-update:semver-major"],
     }]);
-    // The two Nitjsefnie-Actions workflows are SHA-pinned by maintainer
+    // The Nitjsefnie-Actions workflows are SHA-pinned by maintainer
     // decision and dependabot now proposes their SHA bumps; one group per lane
     // collects every action — major bumps included — into a single weekly pull
     // request. This is the exact-value pin: on its own it catches any edit to

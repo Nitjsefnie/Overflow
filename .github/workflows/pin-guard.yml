@@ -1,0 +1,21 @@
+name: pin test screen
+on: # zizmor: ignore[dangerous-triggers]
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: write
+concurrency:
+  # Never cancel a running screen: it may be mid-delivery of its review. A
+  # newer head's run still replaces a pending one and edits the status last.
+  group: pin-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+jobs:
+  pin-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: Nitjsefnie-Actions/pin-guard@494a900c1ca4167aa9f8839cfb963794b4b7da0d # v1.1.0
+        with:
+          fail-on-candidates: 'false'
+          github-token: ${{ github.token }}

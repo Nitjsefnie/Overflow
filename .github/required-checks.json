@@ -21,5 +21,8 @@
   ],
   "comment-share": [
     ".github/workflows/comment-share.yml"
+  ],
+  "size-baseline": [
+    ".github/workflows/size-baseline.yml"
   ]
 }

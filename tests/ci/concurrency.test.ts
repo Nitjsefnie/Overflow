@@ -72,6 +72,11 @@ const BOUNDED: Record<string, { group: string; "cancel-in-progress": false; queu
     "cancel-in-progress": false,
     queue: "max",
   },
+  "size-baseline.yml": {
+    group: "size-baseline-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
+    "cancel-in-progress": false,
+    queue: "max",
+  },
 };
 
 /** Required PR gates cancel only an older run of the same pull request. */
@@ -249,8 +254,18 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
     "pr-gate.yml",
     {
       reason:
-        "A cancelled run may already have closed the pull request; the queued run is what reads that and repairs it. Cancelling it leaves the pull request closed with no repair.",
+        "Each run rewrites the gate's one marker comment for the head it read. A run cancelled mid-write can leave that comment stale, so a running gate finishes and the queued run re-reads the pull request and writes the final verdict.",
       group: "pr-gate-${{ github.event.pull_request.number }}",
+      "cancel-in-progress": false,
+      queue: undefined,
+    },
+  ],
+  [
+    "pin-guard.yml",
+    {
+      reason:
+        "A running screen may be mid-delivery of its review and sticky status comment; cancelling it can leave a partial review that no later run removes. A newer head's run replaces only a pending one and edits the status comment last.",
+      group: "pin-guard-${{ github.event.pull_request.number }}",
       "cancel-in-progress": false,
       queue: undefined,
     },
@@ -479,12 +494,14 @@ const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
   "dependency-audit.yml": ["dependency-audit"],
   "event-policy.yml": ["event-policy", "event-policy-pull-request"],
   "ledger-relay.yml": ["relay-required-checks"],
+  "pin-guard.yml": ["pin-guard"],
   "pr-gate.yml": ["gate"],
   "pr-gates.yml": ["actionlint", "ratchet-guard", "secret-scan", "dependency-audit"],
   "pr-suite.yml": ["postgres-image", "suite"],
   "ratchet-guard.yml": ["ratchet-guard"],
   "scorecard.yml": ["analysis"],
   "secret-scan.yml": ["secret-scan"],
+  "size-baseline.yml": ["size-baseline"],
 };
 
 const workflows = new Map<string, Workflow>();

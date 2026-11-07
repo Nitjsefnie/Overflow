@@ -86,7 +86,7 @@ function admits(file: string, workflow: Workflow): boolean {
   return (keys.size === ALLOWED_TRIGGERS.size && [...keys].every((key) => ALLOWED_TRIGGERS.has(key))) ||
     (file === "ci-pr.yml" && keys.size === 1 && keys.has("workflow_run")) ||
     // Unprivileged PR-head checkout.
-    (file === "comment-share.yml" && [...keys].every((key) => ["pull_request", "push", "workflow_call"].includes(key)));
+    (["comment-share.yml", "size-baseline.yml"].includes(file) && [...keys].every((key) => ["pull_request", "push", "workflow_call"].includes(key)));
 }
 
 const DEFERRED: Record<string, string> = {};
