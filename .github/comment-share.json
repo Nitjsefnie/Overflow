@@ -12,8 +12,8 @@
     3703
   ],
   ".github/workflows/ci-pr.yml": [
-    16043,
-    35692
+    15740,
+    35744
   ],
   ".github/workflows/ci.yml": [
     11344,
@@ -26,10 +26,6 @@
   ".github/workflows/code-scanning.yml": [
     620,
     1450
-  ],
-  ".github/workflows/comment-share.yml": [
-    726,
-    2232
   ],
   ".github/workflows/coverage-comment.yml": [
     5786,
@@ -44,8 +40,8 @@
     5248
   ],
   ".github/workflows/pr-gate.yml": [
-    441,
-    1097
+    427,
+    1095
   ],
   ".github/workflows/pr-gates.yml": [
     12029,
@@ -58,10 +54,6 @@
   ".github/workflows/ratchet-guard.yml": [
     3577,
     5988
-  ],
-  ".github/workflows/ratchet-push.yml": [
-    1870,
-    6867
   ],
   ".github/workflows/scorecard.yml": [
     716,
@@ -336,8 +328,8 @@
     2653
   ],
   "scripts/check-ratchets.ts": [
-    4916,
-    16951
+    2861,
+    11163
   ],
   "scripts/ci-base-freshness.sh": [
     1074,
@@ -408,8 +400,8 @@
     3610
   ],
   "scripts/ledger-relay-publication.ts": [
-    2119,
-    9384
+    2117,
+    9382
   ],
   "scripts/ledger-relay-sweep.ts": [
     3889,
@@ -804,8 +796,8 @@
     52974
   ],
   "src/lib/fold/repository-lock-retry.ts": [
-    459,
-    998
+    453,
+    992
   ],
   "src/lib/fold/repository-ownership.ts": [
     874,
@@ -1580,16 +1572,16 @@
     1718
   ],
   "tests/scripts/ledger-relay-fork.test.ts": [
-    2227,
-    12162
+    2215,
+    12321
   ],
   "tests/scripts/ledger-relay-mint-permissions.test.ts": [
     2537,
     15571
   ],
   "tests/scripts/ledger-relay-secret-scan.test.ts": [
-    1348,
-    8751
+    1343,
+    8908
   ],
   "tests/scripts/ledger-relay-sweep.test.ts": [
     6525,
@@ -1628,8 +1620,8 @@
     1253
   ],
   "tests/support/advisory-lock-probe.ts": [
-    667,
-    1268
+    657,
+    1258
   ],
   "tests/support/console-guard.ts": [
     69,
