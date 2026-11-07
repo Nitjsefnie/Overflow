@@ -1976,7 +1976,7 @@ describe("the untrusted-execution detector the boundary assertions rely on", () 
     expect(untrustedExecutions("x=$(npx tsc)")).not.toEqual([]);
     expect(untrustedExecutions("node scripts/check-migration-edits.ts HEAD^1 HEAD")).not.toEqual([]);
     expect(untrustedExecutions('cd "$OVERFLOW_PR_TREE" && node ./scripts/docs-only.ts HEAD^1')).not.toEqual([]);
-    expect(untrustedExecutions('node "$OVERFLOW_PR_TREE/scripts/check-module-size.ts"')).not.toEqual([]);
+    expect(untrustedExecutions('node "$OVERFLOW_PR_TREE/scripts/check-coverage-floor.ts"')).not.toEqual([]);
     expect(untrustedExecutions('node "$OVERFLOW_PR_TREE/tool.mjs"')).not.toEqual([]);
     expect(untrustedExecutions("bash scripts/ci-base-freshness.sh")).not.toEqual([]);
     expect(untrustedExecutions("./scripts/run.sh")).not.toEqual([]);

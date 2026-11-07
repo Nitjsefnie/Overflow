@@ -451,7 +451,7 @@ rather than guessing. Adding or renaming a workflow requires updating the
 real-name pin in `tests/ci/commit-scopes.test.ts` in the same change.
 `scripts/commit_scopes.py` enforces the rule in the verify job.
 
-### Module size is ratcheted
+### File size is ratcheted
 
 The `size baseline` workflow (`.github/workflows/size-baseline.yml`) runs the
 shared `Nitjsefnie-Actions/size-ratchet` action and produces the required
