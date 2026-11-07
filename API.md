@@ -28,7 +28,8 @@ the security reason and the change.
 **Version history:**
 
 - 2.0.0: `POST /api/account/export` no longer carries `account.avatarUrl`
-  (removed after its 1.1.0 deprecation; issue 1177).
+  (removed after its 1.1.0 deprecation; issue 1177), and its `formatVersion`
+  moves from `1` to `2`.
 - 1.11.0: A settlement's `status` gains the value `DONATED` on
   `GET /api/settlements`, `GET /api/settlements/<id>` and the dashboard's
   recent settlements: work the contributor gave away with `/donate`, priced

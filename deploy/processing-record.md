@@ -20,7 +20,7 @@ Run the service for signed-in members: authenticate and maintain accounts, accep
 - Linked GitLab identities: instance base URL, numeric GitLab user id, login, encrypted personal access token, link and successful-verification times, and the time of a rejected background reconciliation read when one is recorded.
 - Signed-in state: encrypted 30-day cookie containing the GitHub login, account reference, role, last sign-in time, and webhook-administration permission state. No server-side session rows are kept.
 - API-token metadata and the member's repositories, claims, and dashboard records.
-- Avatar inventory: no avatar URL is collected, stored, or carried anywhere. The account export carries no avatar key.
+- Avatar inventory: Overflow no longer collects avatar URLs, and the session carries none. The account export carries no avatar key.
 
 ### Data subjects
 
