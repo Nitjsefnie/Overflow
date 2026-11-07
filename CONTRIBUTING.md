@@ -455,10 +455,10 @@ real-name pin in `tests/ci/commit-scopes.test.ts` in the same change.
 
 The `size baseline` workflow (`.github/workflows/size-baseline.yml`) runs the
 shared `Nitjsefnie-Actions/size-ratchet` action and produces the required
-`size-baseline` context. Its `with:` block sets the line ceilings: 800 for
-source files (`.ts`, `.tsx`, `.mjs`, `.py`, `.sh` and the other source
-extensions) and stylesheets, 400 for SQL, and 2500 for everything under
-`tests/`; `.github/`, `docker-compose.yml` and the pnpm manifests are
+`size-baseline` context. Its `with:` block sets the line ceilings of source,
+stylesheet and SQL files by folder: 800 under `src/` and `scripts/`, 2500
+under `tests/`, 400 under `db/migrations/`, and the action's default of 500
+elsewhere; `.github/`, `docker-compose.yml` and the pnpm manifests are
 excluded. Files already over their ceiling are recorded at their line count in
 `.github/size-baseline.json`.
 
