@@ -64,6 +64,9 @@ the security reason and the change.
   selector for GitHub App registration; `DELETE /api/repositories` adds the
   optional `appAccessRemains` guidance for App-registered repositories.
 
+**Current deprecations:** none. An announced deprecation will be listed in
+this section, with its removal version and date.
+
 The advertised version is independent of package.json's `version` field: it
 moves only as this section's policy moves it, never with npm release
 bookkeeping.
