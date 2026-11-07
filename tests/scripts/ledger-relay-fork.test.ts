@@ -15,7 +15,7 @@ import { renderRelayResult, runRelay } from "../../scripts/ledger-relay.ts";
  * deleted fork, and any read failure throws (fail closed).
  *
  * A separate file from tests/scripts/ledger-relay.test.ts because that file
- * sits at the tests family's module-size ceiling; the fixtures here mirror
+ * sits near the tests/ size ceiling; the fixtures here mirror
  * its refusal describe block's stubs.
  */
 

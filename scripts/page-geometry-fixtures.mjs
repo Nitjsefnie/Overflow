@@ -1,9 +1,9 @@
 /**
  * The page-geometry gate's database fixtures, split out of
- * scripts/check-page-geometry.mjs because that file sits on its module-size
+ * scripts/check-page-geometry.mjs because that file sits on its size
  * baseline: its recorded line count may not grow, so fixture code the gate
  * gains is fixture code the gate relocates into this sibling module — the
- * repository's documented remedy for a file over its family ceiling.
+ * repository's documented remedy for a file over its folder ceiling.
  *
  * Two fixtures live here:
  *

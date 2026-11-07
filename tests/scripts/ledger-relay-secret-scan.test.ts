@@ -20,7 +20,7 @@ import {
  * .github/required-checks.json as a LIST pin naming both producer files
  * (issue 1090's split shape: a `pull_request_target` leg and a push leg), and
  * tests/scripts/ledger-relay.test.ts holds the relay's generic contract with
- * deliberately test-local maps — it is also at the module-size ceiling, so new
+ * deliberately test-local maps — it is also near the size ceiling, so new
  * secret-scan relay coverage lands here instead.
  *
  * Unlike the older suite, the map-dependent assertions below read the COMMITTED

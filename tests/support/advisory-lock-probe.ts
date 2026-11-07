@@ -2,7 +2,7 @@ import type { Sql } from "postgres";
 
 /**
  * The reconciliation advisory-lock probe, relocated from schema.test.ts so
- * that file stays under its recorded module-size ceiling (the check offers
+ * that file stays under its recorded size (the size check offers
  * exactly two remedies: shrink, or relocate into a new module). Both
  * operations scope to the current database on purpose: pg_locks is
  * cluster-wide, and on the shared server — one postgres per run (issue 626)

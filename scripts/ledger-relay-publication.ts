@@ -171,7 +171,7 @@ async function selectNewer(
   return triggerResult;
 }
 
-/** Cohesive mirror publication keeps ledger-relay.ts below its module ceiling. */
+/** Cohesive mirror publication keeps ledger-relay.ts below its size ceiling. */
 export async function publishProducerContexts(
   deps: MirrorDeps,
   run: SweepCandidate,
