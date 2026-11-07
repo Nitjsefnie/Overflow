@@ -123,8 +123,7 @@ export function AccountDataNotice() {
           contribute requests no permission at all. Signing in to register through the webhook route requests exactly
           one — the <code>admin:repo_hook</code> scope, which creating and removing Overflow&apos;s webhook on a repository
           you administer needs. A contributor who signed in without a permission is asked for that one scope
-          when they later choose to register through the webhook route.
-          App registration uses the contributor sign-in, which requests no permission.
+          when they later choose to register through the webhook route. App registration uses the contributor sign-in, which requests no permission.
           Sign-in reads no email address: it requests no email scope and reads no email endpoint.
         </p>
         <ul>
