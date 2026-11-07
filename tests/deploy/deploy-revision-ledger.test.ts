@@ -2,7 +2,7 @@
 // OVERFLOW_DEPLOY_LEDGER_APP_ID attribution behaviors. Split from
 // tests/deploy/deploy-revision.test.ts — shared fixture in
 // tests/support/deploy-revision-harness.ts — so each measured module stays
-// under the tests family ceiling (scripts/check-module-size.ts).
+// under the tests/ size ceiling (.github/workflows/size-baseline.yml).
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import {

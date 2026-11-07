@@ -16,7 +16,7 @@ name: pr suite
 # exactly this file at exactly the resolved head SHA, and
 # the base copy of scripts/check-coverage-floor.ts judges the coverage
 # summary this run uploads. The integrity gates (migration immutability,
-# legal revisions, commit scopes, module size, the coverage floor, base
+# legal revisions, commit scopes, the coverage floor, base
 # freshness) are verify's, never this workflow's. The ledger relay never
 # posts a required context from a run of this workflow.
 #

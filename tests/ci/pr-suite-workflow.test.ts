@@ -374,6 +374,7 @@ describe("the pull request suite workflow", () => {
       "dependency-audit",
       "ratchet-guard",
       "secret-scan",
+      "size-baseline",
       "verify",
     ]);
     for (const [id, job] of Object.entries(workflow.jobs)) {
@@ -506,7 +507,6 @@ describe("the pull request suite workflow", () => {
   it("judges nothing: no gate script whose verdict verify owns runs here", () => {
     for (const gate of [
       "check-coverage-floor.ts",
-      "check-module-size.ts",
       "check-ratchets.ts",
       "check-migration-edits.ts",
       "check-legal-revisions.ts",

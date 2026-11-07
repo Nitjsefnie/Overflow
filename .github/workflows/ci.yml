@@ -292,12 +292,6 @@ jobs:
       - name: Lint
         run: pnpm lint
 
-      # The base checkout's script, run over the checked-out commit — which on
-      # both of this file's events is main's own tip or the dispatched commit.
-      # The ceilings and baseline document the script reads is that commit's.
-      - name: Module size ceilings
-        run: node "${GITHUB_WORKSPACE}/scripts/check-module-size.ts"
-
       # No ratchet-document step here: ratchet-guard.yml runs main's copy of
       # scripts/check-ratchets.ts on every pull request (and every push to
       # main) as its own required context, reading the head only as git

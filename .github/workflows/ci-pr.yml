@@ -222,20 +222,6 @@ jobs:
           changed=$(node "${GITHUB_WORKSPACE}/scripts/docs-only.ts" HEAD^1)
           echo "docs_only=${changed}" >> "$GITHUB_OUTPUT"
 
-      # The base checkout's script, run with the judged tree as its working
-      # directory — which here is always the materialised merge tree. The
-      # ceilings and baseline document the script reads is therefore the pull
-      # request's, which ratchet-guard.yml, running main's copy of
-      # check-ratchets.ts on every pull request, holds tighten-only against the
-      # merge base.
-      - name: Module size ceilings
-        if: ${{ steps.pr.outputs.superseded != 'true' }}
-        env:
-          OVERFLOW_PR_TREE: ${{ steps.pr-tree.outputs.path }}
-        run: |
-          cd "${OVERFLOW_PR_TREE:?the pull request tree was not materialised}"
-          node "${GITHUB_WORKSPACE}/scripts/check-module-size.ts"
-
       # No ratchet-document step here: ratchet-guard.yml runs main's copy of
       # scripts/check-ratchets.ts on every pull request (and every push to
       # main) as its own required context, reading the head only as git

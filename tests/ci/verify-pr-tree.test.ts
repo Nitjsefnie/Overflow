@@ -48,19 +48,9 @@ function stepRunning(needle: string): Step {
 const GATE_SCRIPTS = [
   "scripts/docs-only.ts",
   "scripts/check-migration-edits.ts",
-  "scripts/check-module-size.ts",
   "scripts/check-coverage-floor.ts",
   "scripts/commit_scopes.py",
 ];
-
-const MODULE_SIZE_DOC = `${JSON.stringify(
-  {
-    ceilings: { src: 800, tests: 2500, tooling: 800, stylesheets: 800, migrations: 400 },
-    module_size_baseline: {},
-  },
-  null,
-  2,
-)}\n`;
 
 const NEUTERED = "process.exit(0);\n";
 
@@ -114,7 +104,6 @@ async function fixture(
       "README.md": "# scratch\n",
       "src/a.ts": "export const a = 0;\n",
       "db/migrations/001_initial.sql": "create table t (id int);\n",
-      "scripts/module-size.json": MODULE_SIZE_DOC,
       "scripts/coverage.json": await readFile(resolve("scripts/coverage.json"), "utf8"),
       ".github/workflows/lint.yml": "name: lint\non: push\njobs: {}\n",
     },
@@ -626,18 +615,6 @@ describe("a pull request that replaces the gate script guarding what it changed"
     expect(result.output).toBe("docs_only=true\n");
   });
 
-  it("is still refused by the module size ceilings, read over the pull request's tree", async () => {
-    const fx = await fixture({
-      "src/big.ts": "export const x = 0;\n".repeat(801),
-      "scripts/check-module-size.ts": NEUTERED,
-    });
-    const { outputs } = await materialise(fx);
-
-    const result = await runStep(stepRunning("/scripts/check-module-size.ts"), fx, {}, outputs);
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("src/big.ts");
-  });
-
   /** The step that creates the download destination, found by its id in the download's path. */
   function prepareStep(): Step {
     const download = steps.filter((step) =>
@@ -741,7 +718,6 @@ describe("a pull request that replaces the gate script guarding what it changed"
     for (const needle of [
       "git grep -nI",
       "/scripts/check-migration-edits.ts",
-      "/scripts/check-module-size.ts",
       "/scripts/commit_scopes.py",
     ]) {
       const result = await runStep(stepRunning(needle), fx, {}, outputs);

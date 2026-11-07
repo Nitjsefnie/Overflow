@@ -26,6 +26,7 @@
 !.github/dependabot.yml
 !.github/required-checks.json
 !.github/comment-share.json
+!.github/size-baseline.json
 !.github/requirements-zizmor.txt
 !.github/requirements-pyyaml.txt
 !.github/gitleaks-baseline.json

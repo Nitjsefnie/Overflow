@@ -203,13 +203,13 @@ CI is defined by a workflow pair: `.github/workflows/ci.yml` and
 manual dispatch, and a separate `calibrate` job handles eligible `main` pushes
 and the manual refusal self-test. On a push or dispatch `verify` starts
 PostgreSQL 17, installs the pinned toolchain, applies migrations, and runs
-tests, lint, module-size, typecheck, build and page-geometry checks, with
+tests, lint, typecheck, build and page-geometry checks, with
 coverage. `ci-pr.yml` is the pull-request leg: its only trigger is
 `workflow_run` completion of `pr suite`, so no runner polls for the suite.
 Its `verify` checks out `main`, API-validates the exact triggering run, and
 resolves the open PR by head repository, branch and SHA (forks included),
 failing on a missing, ambiguous or moved head. It runs main's copies of the
-integrity gates — conflict markers, docs-only detection, module size,
+integrity gates — conflict markers, docs-only detection,
 migration immutability, legal revisions, commit scopes, the coverage floor and
 base freshness — over the pull request's merge tree as data, and requires the
 exact triggering `pr suite` run for the resolved head to have succeeded,
@@ -232,7 +232,6 @@ floor. Run this local baseline in the same order:
 pnpm db:migrate
 pnpm test --run
 pnpm lint
-node scripts/check-module-size.ts
 pnpm typecheck
 pnpm build
 node scripts/check-prerendered-routes.ts
@@ -454,35 +453,20 @@ real-name pin in `tests/ci/commit-scopes.test.ts` in the same change.
 
 ### Module size is ratcheted
 
-`node scripts/check-module-size.ts` enforces per-family line ceilings against
-the committed baseline in `scripts/module-size.json`. The measured families,
-each capped by the ceilings key of the same name, are:
+The `size baseline` workflow (`.github/workflows/size-baseline.yml`) runs the
+shared `Nitjsefnie-Actions/size-ratchet` action and produces the required
+`size-baseline` context. Its `with:` block sets the line ceilings: 800 for
+source files (`.ts`, `.tsx`, `.mjs`, `.py`, `.sh` and the other source
+extensions) and stylesheets, 400 for SQL, and 2500 for everything under
+`tests/`; `.github/`, `docker-compose.yml` and the pnpm manifests are
+excluded. Files already over their ceiling are recorded at their line count in
+`.github/size-baseline.json`.
 
-- `src` — TypeScript under `src/`, 800 lines;
-- `tests` — TypeScript under `tests/`, 2500 lines;
-- `tooling` — `scripts/*.ts`, `scripts/*.mjs`, `scripts/*.sh`, `scripts/*.py` and the
-  repository-root `*.ts` and `*.mjs` config modules, 800 lines;
-- `stylesheets` — CSS under `src/`, 800 lines;
-- `migrations` — `db/migrations/*.sql`, 400 lines.
-
-Every other tracked file is a recorded exclusion, listed with its reason in
-the script itself. A tracked file that is in no family and no exclusion fails
-the check as `unclassified`: add it to a family or record it as an exclusion
-there. A ceilings key that names no family also fails, and a family with no
-ceilings key is a configuration error.
-
-The check fails when a baseline file grows past its recorded count, when an
-unlisted file crosses its family's ceiling, when a baseline file is deleted,
-when a baseline file shrinks below the ceiling and its entry has not been
-dropped, or when a baseline file shrinks below its recorded count while
-staying at or over its ceiling and the lower count has not been recorded.
-Run `node scripts/check-module-size.ts --tighten` to record shrinkage, in the
-same change that made it: it lowers counts and drops graduated, deleted or
-unmeasured entries, and it never writes an increase. There are exactly two
-remedies for an over-ceiling file: shrink it, or relocate code into a new
-module. Recorded counts are never raised by hand. An entry is added only when
-a family starts being measured, at the file's current count, and the ratchet
-guard (`scripts/check-ratchets.ts`) verifies it against the merge base.
+A pull request fails when a recorded file grows past its record or an
+unrecorded file crosses its ceiling. Records are never raised and never added
+by hand: shrink the file, or relocate code into a new module. A shrink needs
+no record edit; the workflow's run on `main` lowers the records and commits
+them itself.
 
 ### Coverage is floored
 
@@ -519,9 +503,10 @@ section names and order and removing its instruction comments. Claim the issue
 before submitting, confirm its assignment, and put closing references under
 Related Issues and Pull Requests.
 
-If the gate comments or closes your PR, correct the reported items and edit
-that same PR body. Every corrective edit reruns the caller. Once checks pass,
-the shared action can reopen a PR it closed itself.
+If the gate comments on your PR, its check fails until you correct the
+reported items: edit that same PR body, or push reworded commits. Every edit
+and push reruns the gate, and once every item passes it rewrites its comment
+and its check passes. The gate never closes or reopens a PR.
 
 ## Issues
 
@@ -691,7 +676,8 @@ Every commit message follows
 `type(scope)!: subject`, the scope and `!` optional, the type one of `build`,
 `chore`, `ci`, `docs`, `feat`, `fix`, `perf`, `refactor`, `revert`, `style` or
 `test`. Messages an automation writes follow it too: each Dependabot lane in
-`.github/dependabot.yml` sets a type as its commit-message prefix. Review checks
-what the format cannot: that each type and `!` fit the change, so a breaking
+`.github/dependabot.yml` sets a type as its commit-message prefix. The `pr gate`
+workflow checks every commit subject against the format; review checks what
+the format cannot: that each type and `!` fit the change, so a breaking
 change carries `!`. A wrong message is a required change, fixed by rewording
 before the merge.

@@ -1,0 +1,49 @@
+name: size baseline
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_call:
+permissions:
+  contents: read
+concurrency:
+  # Repo-wide group bounds PR runs, as comment share's does; queue: max holds a
+  # peer PR's pending run that the default single slot would cancel.
+  group: size-baseline-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
+  cancel-in-progress: false
+  queue: max
+jobs:
+  size-baseline:
+    environment: ${{ github.event_name == 'push' && github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch && format('{0}-push', github.event.repository.default_branch) || '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch)
+        uses: Nitjsefnie-Actions/size-ratchet@7ec322f737c7d063d207e85d93f1784ce629a472 # v3.1.1
+        with:
+          ceilings: |
+            source: 800
+            stylesheet: 800
+            sql: 400
+          overrides: |
+            tests/: 2500
+          exclude: |
+            .github/
+            docker-compose.yml
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+          unclassified: 'ignore'
+          records: '.github/size-baseline.json'
+          member: ''
+          mode: 'auto'
+          base-ref: ${{ github.event.pull_request.base.sha }}
+          stale: 'warn'
+          require-tight: 'false'
+          push-key: ${{ secrets.MASTER_PUSH_DEPLOY_KEY }}
+          tree-budgets: ''

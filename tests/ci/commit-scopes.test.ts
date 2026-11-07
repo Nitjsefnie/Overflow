@@ -180,9 +180,9 @@ describe("scripts/commit_scopes.py", () => {
       "ci", "ci pull request",
       "claim", "code scanning", "comment share", "coverage comment",
       "dependency audit",
-      "ledger relay", "pr gate", "pr gates", "pr suite",
+      "ledger relay", "pin test screen", "pr gate", "pr gates", "pr suite",
       "ratchet guard", "scorecard",
-      "secret scan",
+      "secret scan", "size baseline",
     ]);
   });
 });
