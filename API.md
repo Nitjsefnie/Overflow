@@ -1069,11 +1069,17 @@ contributor or landing author cannot decide while another live moderator
 exists, including the recorded commit author. The sole-moderator path records `decidedBySoleModerator: true`.
 
 A positive grant appends a sponsor-targeted credit adjustment with an award
-leg to the contributor. A landing settlement credited to a third account is
-reversed by an additional leg in that adjustment; a self-work landing or a
-landing without a settlement has no reversal leg. A zero award still reverses any qualifying landing settlement through a
-reversal-only adjustment. Only a zero award with no qualifying reversal creates
-no adjustment; zero-amount lines are never written. Existing settlement and calibration creditors are preserved.
+leg to the contributor; a zero award still grants but creates no adjustment,
+and zero-amount lines are never written. The grant also reverses this issue's
+settlement by the landed pull request: the ledger and credit limits mirror that
+settlement's credit legs, negated and dated at the decision, for as long as the
+settlement pays its author (`SETTLED` with credits, its creditor not its
+debtor), whether it paid at the grant or starts paying later, as when an
+`UNCLAIMED` author links their account or a donated landing's `/donate` comment
+is deleted. A commit landing, a landing without a settlement, or one that pays
+nobody gets no reversal. The reversal is derived, never stored: the account
+export's dispute lines carry the award, and a reversal line only from a grant an
+earlier release decided, which the ledger no longer counts. Existing settlement and calibration creditors are preserved.
 
 All errors use `{ "error": { "code": <code>, "message": <message> } }`.
 Service refusals preserve the service's explanation. Status/code pairs are

@@ -11,6 +11,7 @@ import { ClosedPrDisputeService } from "@/lib/moderation/closed-pr-dispute-servi
 import { PostgresClosedPrDisputeStore } from "@/lib/moderation/closed-pr-dispute-store";
 import { closedPrDisputeErrorResponse } from "@/lib/moderation/closed-pr-dispute-route";
 import { PostgresSponsorCredentialStore } from "@/lib/fold/sponsor-credential-store";
+import { claimGitHubIdentity } from "@/lib/fold/identity-claims";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { startPostgresContainer } from "../support/postgres-container";
 
@@ -102,8 +103,7 @@ describe("closed PR dispute filing", () => {
     const fixture = await buildFixture();
     await expect(store().fileDispute({ ...filing(fixture), pullRequestId: randomUUID() }))
       .resolves.toEqual({ kind: "pull_request_not_found" });
-    await expect(store().fileDispute({ ...filing(fixture), accountId: randomUUID() }))
-      .resolves.toEqual({ kind: "not_found" });
+    await expect(store().fileDispute({ ...filing(fixture), accountId: randomUUID() })).resolves.toEqual({ kind: "not_found" });
   });
 
   it("requires landing evidence, ignoring unmerged same-issue rows and merges on other issues", async () => {
@@ -529,8 +529,7 @@ describe("closed PR dispute filing", () => {
       .rejects.toMatchObject({ name: "ClosedPrDisputeError", code: "FORBIDDEN" });
     await expect(service().fileDispute({ id: fixture.contributorId }, { ...filing(fixture), pullRequestId: randomUUID() }))
       .rejects.toMatchObject({ code: "CONFLICT" });
-    await expect(service().fileDispute({ id: randomUUID() }, filing(fixture)))
-      .rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(service().fileDispute({ id: randomUUID() }, filing(fixture))).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(service().fileDispute({ id: fixture.contributorId }, filing(fixture)))
       .rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
@@ -615,14 +614,8 @@ describe("closed PR dispute decisions", () => {
     expect(events).toEqual([{ id: adjustments[0].moderation_event_id, target_user_id: fixture.contributorId,
       actor_id: fixture.moderatorId, prior_state: "BANNED", new_state: "BANNED", reason: "Contribution confirmed.",
       audit_id: null, dispute_request_id: fixture.requestId }]);
-    const lines = await sql`
-      select settlement_id, creditor_id, amount from dispute_credit_adjustment_lines
-      where adjustment_id = ${adjustments[0].id} order by amount
-    `;
-    expect(lines).toEqual([
-      { settlement_id: settlementId, creditor_id: fixture.landingCreditorId, amount: -7 },
-      { settlement_id: null, creditor_id: fixture.contributorId, amount: 4 },
-    ]);
+    // The reversal is derived from the grant, never stored.
+    expect(await adjustmentLines(fixture.requestId)).toEqual([{ settlement_id: null, creditor_id: fixture.contributorId, amount: 4 }]);
     const legs = await sql`
       select settlement_id, account_id, counterparty_id, amount from ledger_entries
       where created_at = (select created_at from dispute_credit_adjustments where id = ${adjustments[0].id})
@@ -634,21 +627,31 @@ describe("closed PR dispute decisions", () => {
       { settlement_id: null, account_id: fixture.contributorId, counterparty_id: fixture.sponsorId, amount: 4 },
       { settlement_id: settlementId, account_id: fixture.sponsorId, counterparty_id: fixture.landingCreditorId, amount: 7 },
     ]);
-    const balances = await sql`select account_id, balance from balances
-      where account_id = any(${[fixture.sponsorId, fixture.contributorId, fixture.landingCreditorId]}::uuid[])`;
-    expect(new Map(balances.map((row) => [row.account_id, row.balance])))
-      .toEqual(new Map([[fixture.sponsorId, -4], [fixture.contributorId, 4], [fixture.landingCreditorId, 0]]));
+    expect(await balancesOf(fixture.landingCreditorId, fixture.contributorId, fixture.sponsorId)).toEqual([0, 4, -4]);
     expect(await sql`select * from settlements where id = ${settlementId}`).toEqual(before);
+  });
+
+  it.each(["SETTLED", "UNCLAIMED", "DONATED"])("reverses a landing %s at grant whenever it pays its author", async (status) => {
+    const fixture = await decisionFixture();
+    const settlementId = await insertLandingSettlement(fixture, fixture.landingCreditorId);
+    await sql`update pull_requests set merged_at = now() - interval '1 day' where id = ${fixture.landingId}`;
+    if (status === "UNCLAIMED") await unclaimSettlement(settlementId, fixture.landingCreditorId);
+    if (status === "DONATED") await sql`update settlements set status = 'DONATED', donation_comment_id = 'gift' where id = ${settlementId}`;
+    await expect(store().decideDispute(decision(fixture))).resolves.toMatchObject({ kind: "ok", value: { awardedPoints: 6 } });
+    const accounts = [fixture.landingCreditorId, fixture.contributorId, fixture.sponsorId];
+    expect(await balancesOf(...accounts), "after the grant").toEqual([0, 6, -6]);
+    if (status === "UNCLAIMED") await claimSettlement(fixture.landingCreditorId);
+    if (status === "DONATED") await sql`update settlements set status = 'SETTLED', donation_comment_id = null where id = ${settlementId}`;
+    expect(await sql`select status, creditor_id from settlements where id = ${settlementId}`)
+      .toEqual([{ status: "SETTLED", creditor_id: fixture.landingCreditorId }]);
+    expect(await balancesOf(...accounts), "once the landing pays").toEqual([0, 6, -6]);
   });
 
   it("reverses a landing settlement whose creditor is the contributor too", async () => {
     const fixture = await decisionFixture();
-    const settlementId = await insertLandingSettlement(fixture, fixture.contributorId);
+    await insertLandingSettlement(fixture, fixture.contributorId);
     await expect(store().decideDispute(decision(fixture))).resolves.toMatchObject({ kind: "ok" });
-    expect(await adjustmentLines(fixture.requestId)).toEqual([
-      { settlement_id: settlementId, creditor_id: fixture.contributorId, amount: -7 },
-      { settlement_id: null, creditor_id: fixture.contributorId, amount: 6 },
-    ]);
+    expect(await balancesOf(fixture.contributorId, fixture.sponsorId)).toEqual([6, -6]);
   });
 
   it("reverses only the disputed issue when the landing settled several issues", async () => {
@@ -658,15 +661,9 @@ describe("closed PR dispute decisions", () => {
     const otherSettlement = await insertLandingSettlement({ ...fixture, issueId: otherIssue }, fixture.landingCreditorId);
     const before = await sql`select * from settlements where id = any(${[disputedSettlement, otherSettlement]}::uuid[]) order by id`;
     await expect(store().decideDispute(decision(fixture))).resolves.toMatchObject({ kind: "ok" });
-    expect(await adjustmentLines(fixture.requestId)).toEqual([
-      { settlement_id: disputedSettlement, creditor_id: fixture.landingCreditorId, amount: -7 },
-      { settlement_id: null, creditor_id: fixture.contributorId, amount: 6 },
-    ]);
     expect(await sql`select * from settlements where id = any(${[disputedSettlement, otherSettlement]}::uuid[]) order by id`)
       .toEqual(before);
-    const [otherBalance] = await sql`select sum(amount)::integer as balance from ledger_entries
-      where settlement_id = ${otherSettlement} and account_id = ${fixture.landingCreditorId}`;
-    expect(otherBalance.balance).toBe(7);
+    expect(await settlementNets(fixture.landingCreditorId, disputedSettlement, otherSettlement)).toEqual([0, 7]);
   });
 
   it("selects the disputed issue on an explicit landing and leaves unmatched issue/PR records alone", async () => {
@@ -681,34 +678,32 @@ describe("closed PR dispute decisions", () => {
       const disputedSettlement = await insertLandingSettlement({ ...fixture, landingId: disputedLanding.id }, fixture.landingCreditorId);
       const before = await sql`select * from settlements where id = any(${[primarySettlement, disputedSettlement]}::uuid[]) order by id`;
       await expect(store().decideDispute(decision(fixture))).resolves.toMatchObject({ kind: "ok" });
-      expect(await adjustmentLines(fixture.requestId)).toEqual([
-        ...(matchesDisputedIssue ? [{ settlement_id: disputedSettlement, creditor_id: fixture.landingCreditorId, amount: -7 }] : []),
-        { settlement_id: null, creditor_id: fixture.contributorId, amount: 6 },
-      ]);
       expect(await sql`select * from settlements where id = any(${[primarySettlement, disputedSettlement]}::uuid[]) order by id`)
         .toEqual(before);
+      expect(await settlementNets(fixture.landingCreditorId, primarySettlement, disputedSettlement)).toEqual([7, matchesDisputedIssue ? 0 : 7]);
     }
   });
 
-  it.each(["self-work", "no-record", "commit", "zero-credit", "donated"])("grants without a reversal for %s landing", async (kind) => {
+  // Self-work here credits the sponsor and debits the landing author: a pure mirror of its legs reverses it too.
+  it.each(["self-work", "no-record", "commit", "zero-credit", "donated"])("stores only the award for a %s landing", async (kind) => {
     const fixture = await decisionFixture(kind === "commit");
     if (kind === "self-work") await insertLandingSettlement(fixture, fixture.sponsorId, fixture.landingCreditorId);
     if (kind === "zero-credit") await insertLandingSettlement(fixture, fixture.landingCreditorId, fixture.sponsorId, 0);
     if (kind === "donated") await insertDonatedLandingSettlement(fixture);
-    await expect(store().decideDispute(decision(fixture)))
-      .resolves.toMatchObject({ kind: "ok", value: { awardedPoints: 6 } });
+    await expect(store().decideDispute(decision(fixture))).resolves.toMatchObject({ kind: "ok", value: { awardedPoints: 6 } });
     expect(await adjustmentLines(fixture.requestId))
       .toEqual([{ settlement_id: null, creditor_id: fixture.contributorId, amount: 6 }]);
+    expect(await balancesOf(fixture.landingCreditorId, fixture.contributorId, fixture.sponsorId)).toEqual([0, 6, -6]);
   });
 
-  it.each([2, 3])("records a reversal-only zero-net grant with %i rounds", async (rounds) => {
+  it.each([2, 3])("reverses the landing of a zero-award grant with %i rounds without an adjustment", async (rounds) => {
     const fixture = await decisionFixture();
-    const settlementId = await insertLandingSettlement(fixture, fixture.landingCreditorId);
+    await insertLandingSettlement(fixture, fixture.landingCreditorId);
     await setReviews(fixture, Array.from({ length: rounds }, (_, index) => review(index + 1)));
     await expect(store().decideDispute({ ...decision(fixture), figure: 2 }))
       .resolves.toMatchObject({ kind: "ok", value: { decision: "GRANTED", moderatorFigure: 2, awardedPoints: 0 } });
-    expect(await sql`select id from dispute_credit_adjustments where dispute_id = ${fixture.requestId}`).toHaveLength(1);
-    expect(await adjustmentLines(fixture.requestId)).toEqual([{ settlement_id: settlementId, creditor_id: fixture.landingCreditorId, amount: -7 }]);
+    expect(await sql`select id from dispute_credit_adjustments where dispute_id = ${fixture.requestId}`).toEqual([]);
+    expect(await balancesOf(fixture.landingCreditorId, fixture.contributorId, fixture.sponsorId)).toEqual([0, 0, 0]);
     expect(await decisionEvents(fixture.requestId)).toHaveLength(1);
   });
 
@@ -861,9 +856,10 @@ describe("closed PR dispute decisions", () => {
     },
   );
 
-  it("denies without review evidence or a figure and ignores a supplied figure", async () => {
+  it("denies without review evidence or a figure, ignores a supplied figure and leaves the landing paid", async () => {
     for (const figure of [undefined, 9]) {
       const fixture = await decisionFixture();
+      await insertLandingSettlement(fixture, fixture.landingCreditorId);
       await sql`delete from repository_reconciliation_evidence_facts where repository_id = ${fixture.repositoryId}`;
       await expect(service().decideDispute(fixture.requestId, { id: fixture.moderatorId }, {
         decision: "DENIED", decidedReason: "  Insufficient claim.  ", figure,
@@ -871,6 +867,7 @@ describe("closed PR dispute decisions", () => {
         awardedPoints: null, decidedReason: "Insufficient claim." });
       expect(await decisionEvents(fixture.requestId)).toHaveLength(1);
       expect(await sql`select id from dispute_credit_adjustments where dispute_id = ${fixture.requestId}`).toEqual([]);
+      expect(await balancesOf(fixture.landingCreditorId, fixture.contributorId, fixture.sponsorId)).toEqual([7, 0, -7]);
     }
   });
 
@@ -884,12 +881,11 @@ describe("closed PR dispute decisions", () => {
       .rejects.toMatchObject({ code: "CONFLICT" });
   });
 
-  it.each(["event", "award", "reversal"])("rolls back every grant write when the %s insert fails", async (failure) => {
+  it.each(["event", "award"])("rolls back every grant write when the %s insert fails", async (failure) => {
     const fixture = await decisionFixture();
     await insertLandingSettlement(fixture, fixture.landingCreditorId);
     const table = failure === "event" ? "moderation_events" : "dispute_credit_adjustment_lines";
-    const predicate = failure === "event" ? `new.dispute_request_id = '${fixture.requestId}'::uuid`
-      : failure === "award" ? "new.amount > 0" : "new.amount < 0";
+    const predicate = failure === "event" ? `new.dispute_request_id = '${fixture.requestId}'::uuid` : "new.amount > 0";
     await sql.unsafe(`create function reject_dispute_decision() returns trigger language plpgsql as $$
       begin if ${predicate} then raise exception 'decision write rejected'; end if; return new; end; $$`);
     await sql.unsafe(`create trigger reject_dispute_decision before insert on ${table}
@@ -980,11 +976,7 @@ describe("grant financial uniqueness", () => {
       .rejects.toMatchObject({ code: "ALREADY_GRANTED", message: "this issue has already been credited through a granted dispute" });
     await expect(store().decideDispute({ ...decision(fixture), requestId: repeated.id })).resolves.toEqual({ kind: "already_granted" });
     await expectUndecided(repeated.id);
-    const balances = await sql`select account_id, balance from balances
-      where account_id = any(${[fixture.sponsorId, fixture.contributorId, fixture.landingCreditorId]}::uuid[])`;
-    expect(balances.find((row) => row.account_id === fixture.contributorId)?.balance).toBe(6);
-    expect(balances.find((row) => row.account_id === fixture.sponsorId)?.balance).toBe(-6);
-    if (hasSettlement) expect(balances.find((row) => row.account_id === fixture.landingCreditorId)?.balance).toBe(0);
+    expect(await balancesOf(fixture.landingCreditorId, fixture.contributorId, fixture.sponsorId)).toEqual([0, 6, -6]);
     expect(await sql`select id from dispute_credit_adjustments where dispute_id = ${fixture.requestId}`).toHaveLength(1);
   });
 
@@ -1007,11 +999,8 @@ describe("grant financial uniqueness", () => {
     expect(await sql`select adjustments.dispute_id from dispute_credit_adjustments adjustments
       join closed_pr_dispute_requests requests on requests.id = adjustments.dispute_id
       where requests.issue_id = ${fixture.issueId}`).toEqual([{ dispute_id: fixture.requestId }]);
-    const lines = await adjustmentLines(fixture.requestId);
-    expect(lines.filter((line) => line.amount > 0)).toEqual([
-      { settlement_id: null, creditor_id: fixture.contributorId, amount: 6 },
-    ]);
-    expect(lines.filter((line) => line.amount < 0)).toHaveLength(hasSettlement ? 1 : 0);
+    expect(await adjustmentLines(fixture.requestId)).toEqual([{ settlement_id: null, creditor_id: fixture.contributorId, amount: 6 }]);
+    expect(await balancesOf(fixture.landingCreditorId, fixture.contributorId, fixture.sponsorId)).toEqual([0, 6, -6]);
   });
 
   it("allows re-filing and granting after denial", async () => {
@@ -1091,20 +1080,28 @@ describe("grant financial uniqueness", () => {
     }
   });
 
-
-it.each([false, true])("replays dispute debt through the view and eligible board (reversal=%s)", async (reversal) => {
+// Claimed after the grant, a landing replays as one SETTLED at it, a DONATED one as no landing; a stored reversal line is inert.
+it.each(["none", "SETTLED", "UNCLAIMED", "DONATED"])("replays dispute debt through the view and eligible board (landing=%s)", async (landing) => {
   const fixture = await decisionFixture();
-  const borrowerId = reversal ? fixture.landingCreditorId : fixture.sponsorId;
-  if (reversal) {
-    await insertLandingSettlement(fixture, borrowerId);
+  const borrowerId = landing === "none" ? fixture.sponsorId : fixture.landingCreditorId;
+  if (landing !== "none") {
+    const settlementId = await insertLandingSettlement(fixture, borrowerId);
+    await sql`update pull_requests set merged_at = now() - interval '1 day' where id = ${fixture.landingId}`;
+    if (landing === "UNCLAIMED") await unclaimSettlement(settlementId, borrowerId);
+    if (landing === "DONATED") await sql`update settlements set status = 'DONATED', donation_comment_id = 'gift' where id = ${settlementId}`;
     // Prior ordinary debt leaves -3; the landing reversal takes this account to -10.
     for (const credits of [7, 3]) {
       const debt = await decisionFixture();
+      await sql`update pull_requests set merged_at = clock_timestamp() where id = ${debt.landingId}`;
       await insertLandingSettlement(debt, debt.landingCreditorId, borrowerId, credits);
     }
     await sql`update users set role = 'MODERATOR' where id = ${fixture.moderatorId}`;
   }
   await service().decideDispute(fixture.requestId, { id: fixture.moderatorId }, { ...decision(fixture), figure: 10 });
+  if (landing === "UNCLAIMED") await claimSettlement(borrowerId);
+  if (landing !== "none") await sql`insert into dispute_credit_adjustment_lines (adjustment_id, settlement_id, creditor_id, amount)
+    select adjustments.id, settlements.id, ${borrowerId}, -7 from dispute_credit_adjustments adjustments, settlements
+    where adjustments.dispute_id = ${fixture.requestId} and settlements.pull_request_id = ${fixture.landingId}`;
   for (let index = 0; index < 2; index += 1) {
     const laterWork = await decisionFixture();
     await sql`update pull_requests set author_id = ${borrowerId}, merged_at = clock_timestamp() where id = ${laterWork.landingId}`;
@@ -1181,7 +1178,6 @@ async function buildFixture() {
   const fixture = { sponsorId, contributorId, repositoryId: repository.id, ownerName, issueId: await insertIssue(repository.id) };
   return { ...fixture, pullRequestId: (await insertPullRequest(fixture, "CLOSED")).id };
 }
-
 async function decisionFixture(commit = false) {
   await sql`update users set role = 'MEMBER' where role = 'MODERATOR'`;
   const fixture = await buildFixture();
@@ -1200,27 +1196,20 @@ async function decisionFixture(commit = false) {
   await setReviews(fixture, []);
   return { ...fixture, moderatorId, landingCreditorId, landingId: landing?.id ?? null, requestId: request.id };
 }
-
 function decision(fixture: { requestId: string; moderatorId: string }) {
   return { requestId: fixture.requestId, moderatorAccountId: fixture.moderatorId,
     decision: "GRANTED" as const, figure: 6, decidedReason: "Contribution confirmed." };
 }
-
 function review(id: number, state: GitHubPullRequestReview["state"] = "CHANGES_REQUESTED"): GitHubPullRequestReview {
   return { id, state, submittedAt: "2025-01-01T00:00:00.000Z", dismissal: null };
 }
-
-async function setReviews(fixture: { repositoryId: string; pullRequestId: string }, reviews: GitHubPullRequestReview[]) {
-  await setReviewPayload(fixture, { reviews });
-}
-
+async function setReviews(fixture: { repositoryId: string; pullRequestId: string }, reviews: GitHubPullRequestReview[]) { await setReviewPayload(fixture, { reviews }); }
 async function setReviewPayload(fixture: { repositoryId: string; pullRequestId: string }, payload: unknown) {
   await sql`insert into repository_reconciliation_evidence_facts (repository_id, kind, subject_key, payload)
     select ${fixture.repositoryId}, 'pull_request', github_pull_request_id::text, ${sql.json(payload as never)}
     from pull_requests where id = ${fixture.pullRequestId}
     on conflict (repository_id, kind, subject_key) do update set payload = excluded.payload`;
 }
-
 async function insertLandingSettlement(
   fixture: Awaited<ReturnType<typeof decisionFixture>>, creditorId: string, debtorId = fixture.sponsorId, credits = 7,
 ) {
@@ -1233,31 +1222,43 @@ async function insertLandingSettlement(
       ${credits}, ${randomUUID().replaceAll("-", "").repeat(2)}, 'SETTLED') returning id`;
   return row.id;
 }
-
 // A donated landing moved no credits, so a grant has nothing of it to reverse.
 async function insertDonatedLandingSettlement(fixture: Awaited<ReturnType<typeof decisionFixture>>) {
   const settlementId = await insertLandingSettlement(fixture, fixture.landingCreditorId);
   await sql`update settlements set status = 'DONATED', donation_comment_id = 'donation' where id = ${settlementId}`;
 }
-
+async function unclaimSettlement(settlementId: string, creditorId: string) {
+  await sql`update settlements set status = 'UNCLAIMED', creditor_id = null, creditor_github_login = 'landing-author',
+    creditor_github_user_id = (select github_user_id from users where id = ${creditorId}) where id = ${settlementId}`;
+}
+async function claimSettlement(userId: string) {
+  const [user] = await sql<{ github_user_id: string }[]>`select github_user_id from users where id = ${userId}`;
+  await claimGitHubIdentity(sql, userId, Number(user.github_user_id));
+}
+async function balancesOf(...accounts: string[]) {
+  const rows = await sql`select account_id, balance from balances where account_id = any(${accounts}::uuid[])`;
+  return accounts.map((account) => Number(rows.find((row) => row.account_id === account)?.balance ?? 0));
+}
+async function settlementNets(accountId: string, ...settlementIds: string[]) {
+  const rows = await sql`select settlement_id, sum(amount)::integer as net from ledger_entries
+    where account_id = ${accountId} and settlement_id = any(${settlementIds}::uuid[]) group by settlement_id`;
+  return settlementIds.map((id) => rows.find((row) => row.settlement_id === id)?.net ?? 0);
+}
 async function decisionEvents(requestId: string) {
   return sql`select id from moderation_events where dispute_request_id = ${requestId}
     and actor_id <> (select contributor_id from closed_pr_dispute_requests where id = ${requestId})`;
 }
-
 async function adjustmentLines(requestId: string) {
   return sql`select lines.settlement_id, lines.creditor_id, lines.amount from dispute_credit_adjustment_lines lines
     join dispute_credit_adjustments adjustments on adjustments.id = lines.adjustment_id
     where adjustments.dispute_id = ${requestId} order by lines.amount`;
 }
-
 async function expectUndecided(requestId: string) {
   expect(await sql`select state, decision, moderator_figure, awarded_points, decided_by from closed_pr_dispute_requests
     where id = ${requestId}`).toEqual([{ state: "OPEN", decision: null, moderator_figure: null, awarded_points: null, decided_by: null }]);
   expect(await sql`select id from moderation_events where dispute_request_id = ${requestId}`).toHaveLength(1);
   expect(await sql`select id from dispute_credit_adjustments where dispute_id = ${requestId}`).toEqual([]);
 }
-
 async function waitingOnBackend(holderPid: number): Promise<number> {
   const [activity] = await sql<{ waiting: number }[]>`
     select count(*)::integer as waiting from pg_stat_activity
@@ -1283,11 +1284,8 @@ describe("recorded PR filing refusal messages", () => {
     if (cause === 'OPEN' || cause === 'MERGED') await sql`update pull_requests set state = ${cause} where id = ${f.pullRequestId}`;
     if (cause === 'author') await sql`update pull_requests set author_id = ${f.sponsorId} where id = ${f.pullRequestId}`;
     if (cause === 'missing') input = { ...input, pullRequestId: randomUUID() };
-    if (cause === 'unrecorded landing') input.landedPullRequestUrl = `https://github.com/${f.ownerName}/pull/99`;
-    if (cause === 'both landing URLs') {
-      input.landedPullRequestUrl = `https://github.com/${f.ownerName}/pull/99`;
-      input.landedCommitUrl = `https://github.com/${f.ownerName}/commit/${'a'.repeat(40)}`;
-    }
+    if (cause === 'unrecorded landing' || cause === 'both landing URLs') input.landedPullRequestUrl = `https://github.com/${f.ownerName}/pull/99`;
+    if (cause === 'both landing URLs') input.landedCommitUrl = `https://github.com/${f.ownerName}/commit/${'a'.repeat(40)}`;
     if (cause === 'automatic landing' || cause === 'already open') {
       const landing = await insertPullRequest(f, 'MERGED');
       if (cause === 'automatic landing') input.landedPullRequestUrl = landing.url;
