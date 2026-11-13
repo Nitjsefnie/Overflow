@@ -120,6 +120,7 @@ export const bundledMigrationNames: readonly string[] = [
   "089_repository_progress_markers.sql",
   "090_dispute_reversal_follows_settlement.sql",
   "091_adjustment_lines_outlive_settlements.sql",
+  "092_sweep_pass_failed_runs.sql",
 ];
 
 /**

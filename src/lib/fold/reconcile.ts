@@ -1,4 +1,4 @@
-import { discardInactivePassAfterFailure, discardSweepPass, StagedPassDataUnreadable, withSweepPass, type ReconciliationSweepControl, type SweepPass } from "@/lib/fold/sweep-pass";
+import { discardInactivePassAfterFailure, discardSweepPass, holdSweepPass, StagedPassDataUnreadable, withSweepPass, type ReconciliationSweepControl, type SweepPass } from "@/lib/fold/sweep-pass";
 import type { ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
 import { readEnv } from "@/lib/env";
 import { readDiffOnlyBacklogThreshold } from "@/lib/fold/repository-size";
@@ -568,6 +568,7 @@ async function reconcileRepositoryAfterRepositoryRead(
     });
     return collected.value;
   } catch (error) {
+    await holdSweepPass(pass, error);
     if (error instanceof SweepBudgetSpent) {
       await dependencies.store.holdRun(runId, "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET", failedCost);
       return { repositoryId, runId: null, skipped: true, sweepHeldUntil: error.resetAt,

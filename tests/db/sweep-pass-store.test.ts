@@ -5,17 +5,21 @@ import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresSweepPassStore } from "@/lib/fold/sweep-pass-store";
-import { checkpointSweepRequest, withSweepPass, type SweepPass } from "@/lib/fold/sweep-pass";
+import { checkpointSweepRequest, SWEEP_PASS_MAX_AGE_MS, withSweepPass, type SweepPass } from "@/lib/fold/sweep-pass";
+import { walkReconciliation } from "@/lib/fold/reconciliation-walk";
+import { GitHubApiError } from "@/lib/github/errors";
+import { GraphqlBudgetHeld } from "@/lib/github/graphql-request-budget";
+import { reconciliationDependencies } from "../support/reconciliation-fixtures";
+import { fixture, subject as walkSubject } from "../fold/reconciliation-walk-fixture";
 import { withSweepRequestBudget, SweepBudgetSpent } from "@/lib/fold/sweep-request-budget";
 import { PostgresSponsorSweepRoundStore } from "@/lib/fold/sponsor-sweep-round-store";
 import { GitHubGraphqlClient, collectCursorPages } from "@/lib/github/graphql";
 import { GitHubGateway } from "@/lib/github/client";
 import { materializeRepositoryFixture } from "../support/materialized-repository";
-import { runNextReconciliationJob } from "@/lib/fold/reconciliation-worker";
+import { RECONCILIATION_RETRY_DELAYS_MS, runNextReconciliationJob } from "@/lib/fold/reconciliation-worker";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
-import { verifiedRepositoryPayload } from "../support/verified-repository";
+import { verifiedRepositoryAt, verifiedRepositoryPayload } from "../support/verified-repository";
 import { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
-import { verifiedRepositoryAt } from "../support/verified-repository";
 import { startPostgresContainer } from "../support/postgres-container";
 
 let sql: Sql;
@@ -214,11 +218,8 @@ describe("paused full-pass pages", () => {
       throw new Error("Unexpected forge request");
     } });
     let clock = at;
-    const sweep = {
-      spend: (sponsorId: string, repositoryId: string) => new PostgresSponsorSweepRoundStore(sql).spend(sponsorId, repositoryId, clock, 9),
-      openPass: new PostgresSweepPassStore(sql).open.bind(new PostgresSweepPassStore(sql)),
-      discardPass: (id: string) => new PostgresSweepPassStore(sql).discardByRepository(id),
-    };
+    const sweep = { spend: (sponsorId: string, repositoryId: string) => new PostgresSponsorSweepRoundStore(sql).spend(sponsorId, repositoryId, clock, 9),
+      openPass: new PostgresSweepPassStore(sql).open.bind(new PostgresSweepPassStore(sql)), discardPass: (id: string) => new PostgresSweepPassStore(sql).discardByRepository(id) };
     const first = await reconcileRepository({ store: f.store, github, sweep, now: () => clock, onBudgetChange: () => {} }, f.repositoryId, { reason: "SWEEP" });
     expect(first).toMatchObject({ skipped: true, sweepHeldUntil: new Date("2030-01-01T06:00:00Z") });
     expect(await f.store.getReconciliationEvidence(f.repositoryId)).toBeNull();
@@ -432,7 +433,6 @@ describe("unregistration racing a failed fold", () => {
     log.mockRestore();
     expect(await stagedCounts(f.repositoryId, f.state.pass!.id)).toEqual({ passes: 0, pages: 0 });
   });
-
 });
 
 describe("durable sweep walk subjects", () => {
@@ -536,12 +536,8 @@ describe("durable sweep walk subjects", () => {
         listIssues: async () => [], getIssue: async () => null, getPullRequestClosingIssues: async () => [],
         getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",
       };
-      const sweep = {
-        spend: async () => null,
-        openPass: async (input: Parameters<PostgresSweepPassStore["open"]>[0]) => (pass = await passes.open(input)),
-        discardPass: (id: string) => passes.discardByRepository(id),
-        discardIfInactive: (id: string) => passes.discardIfInactive(id),
-      };
+      const sweep = { spend: async () => null, openPass: async (input: Parameters<PostgresSweepPassStore["open"]>[0]) => (pass = await passes.open(input)),
+        discardPass: (id: string) => passes.discardByRepository(id), discardIfInactive: (id: string) => passes.discardIfInactive(id) };
       for (let run = 0; run < 3; run++) {
         await reconcileRepository({ store: f.store, github, sweep, now: () => at, onBudgetChange: () => {} }, f.repositoryId, { reason: "SWEEP" });
       }
@@ -751,6 +747,55 @@ describe("durable sweep walk subjects", () => {
   });
 });
 
+describe("a kept pass's failed-run and age bounds", () => {
+  const failed = new Error("synthetic upstream failure"), aged = (ms: number) => new Date(at.getTime() + ms), attempts = RECONCILIATION_RETRY_DELAYS_MS.length + 1;
+  async function keptPass() {
+    const { repositoryId } = await materializeRepositoryFixture(sql);
+    const f = fixture([...[1, 2, 3, 9].map((id) => walkSubject(id)), walkSubject(19, "pull_request")]), gather = f.gateway.gatherIssue;
+    const dependencies = reconciliationDependencies({ github: { walkReconciliation: async (_reference, input) => walkReconciliation({ ...input, listing: f.listing, gateway: f.gateway }) } });
+    const passes = new PostgresSweepPassStore(sql);
+    let clock = at, failure: Error | null = null;
+    Object.assign(dependencies, { now: () => clock, sweep: { spend: async () => null, openPass: passes.open.bind(passes), discardPass: passes.discardByRepository.bind(passes) } });
+    f.gateway.gatherIssue = async (target) => { if (failure !== null && target.id === 3) throw failure; return gather(target); };
+    const passId = async () => (await sql<{ pass_id: string }[]>`select pass_id from reconciliation_sweep_passes where repository_id = ${repositoryId}`)[0]?.pass_id;
+    const run = async (outcome: Error | null, now = clock) => {
+      [clock, failure] = [now, outcome];
+      const log = vi.spyOn(console, "error").mockImplementation(() => {});
+      return reconcileRepository(dependencies, repositoryId, { reason: "SWEEP" }).then(({ skipped }) => skipped ? "held" : "done", () => "failed").finally(() => log.mockRestore());
+    };
+    return { f, dependencies, run, passId };
+  }
+  const rowsOf = async (passId: string) => (await sql<{ pages: number; staged: number[] }[]>`select (select count(*)::int from reconciliation_sweep_pages where pass_id = ${passId}) as pages,
+    (select coalesce(array_agg(subject_key::int order by subject_key), '{}') from reconciliation_sweep_walk_subjects where pass_id = ${passId}) as staged`)[0];
+
+  it.each<[string, Date[], Date]>([
+    ["failed-run", Array(attempts).fill(at), at],
+    ["age", [at, aged(SWEEP_PASS_MAX_AGE_MS - 1)], aged(SWEEP_PASS_MAX_AGE_MS)],
+  ])("replaces a pass at its %s bound with a fresh pass that reads its subjects from the forge again", async (_label, inside, bound) => {
+    const { f, run, passId } = await keptPass();
+    const outcomes = [];
+    for (const now of inside) outcomes.push(await run(failed, now));
+    const kept = (await passId())!;
+    await sql`insert into reconciliation_sweep_pages values (${kept}, 'absence-listing:0', ${sql.json([{ anchor: "subjects", kind: "issue", id: 1, number: 1, updatedAt: at.toISOString() }])})`;
+    expect([outcomes, f.counts.get(1), await rowsOf(kept)]).toEqual([inside.map(() => "failed"), 1, { pages: 1, staged: [1, 2] }]);
+    f.listed.length = 0;
+    expect([await run(failed, bound), await passId() === kept, f.counts.get(1), f.listed[0], await rowsOf(kept), (await rowsOf((await passId())!))!.staged])
+      .toEqual(["failed", false, 2, { cursor: null }, { pages: 0, staged: [] }, [1, 2]]);
+  });
+
+  it.each<[string, Error, string]>([
+    ["the sweep request budget", new SweepBudgetSpent(aged(6 * 3600_000)), "held"],
+    ["the GraphQL budget", new GraphqlBudgetHeld(aged(6 * 3600_000)), "held"],
+    ["the forge's rate limit", new GitHubApiError(403, true, 60), "failed"],
+  ])("resumes a pass after failures inside the bound and a hold for %s, which restarts the count", async (_label, hold, held) => {
+    const { f, run, passId, dependencies } = await keptPass();
+    const inside = Array<Error>(attempts - 1).fill(failed), outcomes = [];
+    for (const outcome of [...inside, hold, ...inside, null]) outcomes.push(await run(outcome));
+    expect([outcomes, f.counts.get(1), vi.mocked(dependencies.store.materialize).mock.calls.length, await passId()])
+      .toEqual([[...inside.map(() => "failed"), held, ...inside.map(() => "failed"), "done"], 1, 1, undefined]);
+  });
+});
+
 function signal() {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => { resolve = done; });
@@ -793,11 +838,8 @@ async function pausedFixture() {
   };
   const dependencies = { store: f.store, github, now: () => at, onBudgetChange: () => {}, sweep: {
     spend: async () => null,
-    openPass: async (input: Parameters<PostgresSweepPassStore["open"]>[0]) => {
-      state.opens++; state.pass = await passes.open(input); return state.pass;
-    },
-    discardPass: (id: string) => passes.discardByRepository(id),
-    discardIfInactive: (id: string) => passes.discardIfInactive(id),
+    openPass: async (input: Parameters<PostgresSweepPassStore["open"]>[0]) => { state.opens++; state.pass = await passes.open(input); return state.pass; },
+    discardPass: (id: string) => passes.discardByRepository(id), discardIfInactive: (id: string) => passes.discardIfInactive(id),
   } };
   expect((await reconcileRepository(dependencies, f.repositoryId, { reason: "SWEEP" })).skipped).toBe(true);
   return { ...f, github, state, dependencies,
