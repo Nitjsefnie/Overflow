@@ -58,6 +58,7 @@ export const FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE =
 // one declaration of where the registered identity lives rather than two.
 export type ReconciliationRepository = RepositoryFoldSnapshot["repository"] & {
   disputePullRequests: GitHubSubject[];
+  sponsorSuppressed?: boolean;
 };
 
 export type RepositoryUnavailableReason = "NOT_FOUND" | "NOT_PUBLIC" | "IDENTITY_MISMATCH";
@@ -331,7 +332,7 @@ async function reconcileRepositoryAfterRepositoryRead(
         // materialized rows on a quiet partial pass. Fold full passes until a
         // pass re-observes everything within the limit and clears the flag.
         const unsafeCache = cached === null || cached.formatVersion !== RECONCILIATION_EVIDENCE_FORMAT
-          || cached.omittedOversizedFacts > 0;
+          || cached.omittedOversizedFacts > 0 || repository.sponsorSuppressed === true;
         if (!allowsFull && unsafeCache) {
           await dependencies.store.completeRun(runId);
           return { repositoryId, runId: null, skipped: true, sweepPending: true,

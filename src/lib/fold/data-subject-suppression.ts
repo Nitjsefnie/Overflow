@@ -1,6 +1,6 @@
 import { DELETED_ACCOUNT_LOGIN } from "@/lib/accounts/deletion";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
-import type { TransactionClient } from "@/lib/db/types";
+import type { SqlClient, TransactionClient } from "@/lib/db/types";
 import type { FoldResult } from "@/lib/fold/repository-fold";
 import type { GitHubIssue, GitHubIssueComment, GitHubIssueHistoryEvent, GitHubPullRequest } from "@/lib/github/types";
 import type { ReconciliationSynchronization } from "@/lib/fold/reconciliation-evidence";
@@ -325,10 +325,8 @@ export async function scrubSuppressedForgeData<Publication extends {
   if (repository === undefined) {
     return publication;
   }
-  const rows = await sql<{ forge_id: number | string; logins: string[] }[]>`
-    select forge_id, logins from data_subject_suppressions where provider = ${repository.provider}
-      and instance_url = ${normalizeInstanceUrl(repository.instance_url ?? 'https://github.com')}
-  `;
+  const scope = suppressionScope(repository.provider, repository.instance_url);
+  const rows = await listSuppressions(sql, scope);
   if (rows.length === 0) {
     return publication;
   }
@@ -340,12 +338,31 @@ export async function scrubSuppressedForgeData<Publication extends {
     await sql`
       update data_subject_suppressions set
         logins = array(select distinct unnest(logins || ${sql.array([...person.logins])}::text[]))
-      where provider = ${repository.provider}
-        and instance_url = ${normalizeInstanceUrl(repository.instance_url ?? "https://github.com")}
+      where provider = ${scope.provider}
+        and instance_url = ${scope.instanceUrl}
         and forge_id = ${person.forgeId}
         and not logins @> ${sql.array([...person.logins])}::text[]
     `;
   }
   scrubPublicationForSuppressions(publication, persons);
   return publication;
+}
+
+/** The scope a suppression applies in: provider and normalized origin. */
+export function suppressionScope(provider: string, instanceUrl: string | null): { provider: string; instanceUrl: string } {
+  return { provider, instanceUrl: normalizeInstanceUrl(instanceUrl ?? "https://github.com") };
+}
+
+/** A scope's suppressions, narrowed to the given forge ids when named. */
+export async function listSuppressions(
+  sql: SqlClient | TransactionClient,
+  scope: { provider: string; instanceUrl: string },
+  forgeIds?: readonly number[],
+): Promise<{ forge_id: number | string; logins: string[] }[]> {
+  if (forgeIds?.length === 0) return [];
+  return sql<{ forge_id: number | string; logins: string[] }[]>`
+    select forge_id, logins from data_subject_suppressions
+    where provider = ${scope.provider} and instance_url = ${scope.instanceUrl}
+      and (${forgeIds === undefined} or forge_id = any(${sql.array((forgeIds ?? []).map(String))}::bigint[]))
+  `;
 }
