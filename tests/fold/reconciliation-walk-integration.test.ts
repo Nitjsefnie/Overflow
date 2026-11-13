@@ -164,17 +164,17 @@ describe("a budget-bound reconciliation walk", () => {
 
   it("spends no request on an issue staged with a gathered payload no older than its listing, ahead of the anchor too", async () => {
     const f = await fixture();
-    // Issue 11 lists before PR 12, issues 13-15 after it; gathering the PR stages all four through its repair path.
-    const facts = new Map([11, 13, 14, 15].map((id) => [id, issue(id)]));
-    const pages = [[subject(11), subject(12, "pull_request")], [subject(13), subject(14), subject(15)]];
-    const reads: number[] = []; let hold = true, missing = 14;
+    // Issue 11 lists before PR 12, issues 13, 14 and 16 after it; gathering the PR stages all four through its repair path.
+    const facts = new Map([11, 13, 14, 16].map((id) => [id, issue(id)]));
+    const pages = [[subject(11), subject(12, "pull_request")], [subject(13), subject(14), subject(16)]];
+    const reads: number[] = []; let hold = true, missing = 16;
     f.gateway.walkReconciliation = (_reference, input) => walkReconciliation({ ...input,
       listing: { kind: "cursor", listPage: async ({ cursor }) => {
         if (cursor !== null && hold) { hold = false; f.state.limit = 0; } await checkSweepRequestBudget();
         return { subjects: structuredClone(pages[Number(cursor ?? 0)]!), nextCursor: cursor === null ? "1" : null };
       } },
       gateway: { getPullRequest: async () => null, getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",
-        getPullRequestClosingIssues: async () => [11, 13, 14, 15].map((id) => ({ id, number: id, repositoryGitHubId: f.repository.githubRepositoryId })),
+        getPullRequestClosingIssues: async () => [11, 13, 14, 16].map((id) => ({ id, number: id, repositoryGitHubId: f.repository.githubRepositoryId })),
         gatherIssue: async ({ id }) => { await checkSweepRequestBudget(); reads.push(id); // a discarded gather stages a placeholder
           if (id === missing) { missing = 0; throw new GitHubApiError(404); } return structuredClone(facts.get(id)!); } } });
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -183,14 +183,14 @@ describe("a budget-bound reconciliation walk", () => {
       .toEqual([{ anchor: { updated_at: instant(12).toISOString(), key: 12 } }]);
     expect(await sql`select subject_key, updated_at from reconciliation_sweep_walk_subjects join reconciliation_sweep_passes using (pass_id)
       where repository_id = ${f.repositoryId} and kind = 'issue' order by subject_key`).toEqual(
-      [[11, instant(11)], [13, instant(13)], [14, at], [15, instant(15)]].map(([key, updatedAt]) => ({ subject_key: String(key), updated_at: updatedAt })));
-    pages[1]![2] = subject(15, "issue", 16); // updated after its repair gather staged it
-    facts.get(15)!.updatedAt = instant(16).toISOString(); f.state.limit = Infinity;
+      [[11, instant(11)], [13, instant(13)], [14, instant(14)], [16, at]].map(([key, updatedAt]) => ({ subject_key: String(key), updated_at: updatedAt })));
+    pages[1]![1] = subject(14, "issue", 15); // updated after its repair gather staged it
+    facts.get(14)!.updatedAt = instant(15).toISOString(); f.state.limit = Infinity;
     expect((await f.run("SWEEP")).skipped).toBe(false);
-    // 11 is re-gathered for its PR; 13 is skipped; the placeholder 14 and the older-staged 15 are gathered again.
-    expect(reads).toEqual([11, 11, 13, 14, 15, 14, 15]);
+    // 11 is re-gathered for its PR; 13 is skipped; the listing (not the absence pass) gathers the older-staged 14 and placeholder 16.
+    expect(reads).toEqual([11, 11, 13, 14, 16, 14, 16]);
     expect((await f.store.getReconciliationEvidence(f.repositoryId))?.issues.map(({ id, updatedAt }) => [id, updatedAt])).toEqual(
-      [11, 13, 14, 15].map((id) => [id, facts.get(id)!.updatedAt]));
+      [11, 13, 14, 16].map((id) => [id, facts.get(id)!.updatedAt]));
   });
 
   it("runs the walk through the lazy sponsor gateway", async () => {
