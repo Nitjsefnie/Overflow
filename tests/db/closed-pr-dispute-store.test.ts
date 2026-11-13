@@ -1088,6 +1088,13 @@ it.each(["none", "SETTLED", "UNCLAIMED", "DONATED"])("replays dispute debt throu
     const settlementId = await insertLandingSettlement(fixture, borrowerId);
     await sql`update pull_requests set merged_at = now() - interval '1 day' where id = ${fixture.landingId}`;
     await insertLandingSettlement({ ...fixture, issueId: await insertIssue(fixture.repositoryId) }, await insertUser(), borrowerId);
+    // Paid work between the landing settling and the grant, then an equal debt: at zero balance it repays nothing
+    // only while the reversal is dated at the decision; dated at the settlement it repays 7, limit 12.
+    if (landing === "SETTLED") for (const pays of [true, false]) {
+      const work = await decisionFixture();
+      await sql`update pull_requests set merged_at = clock_timestamp() where id = ${work.landingId}`;
+      await insertLandingSettlement(work, pays ? borrowerId : work.landingCreditorId, pays ? work.sponsorId : borrowerId);
+    }
     if (landing === "UNCLAIMED") await unclaimSettlement(settlementId, borrowerId);
     if (landing === "DONATED") await sql`update settlements set status = 'DONATED', donation_comment_id = 'gift' where id = ${settlementId}`;
     const denied = await decisionFixture();
@@ -1139,19 +1146,14 @@ async function expectNoRequests(fixture: { contributorId: string }) {
 }
 async function insertUser() {
   const id = externalId++;
-  const [row] = await sql<{ id: string }[]>`
-    insert into users (github_user_id, github_login) values (${id}, ${`disputer-${id}`}) returning id
-  `;
+  const [row] = await sql<{ id: string }[]>`insert into users (github_user_id, github_login) values (${id}, ${`disputer-${id}`}) returning id`;
   return row.id;
 }
 async function insertIssue(repositoryId: string) {
   const id = externalId++;
-  const [row] = await sql<{ id: string }[]>`
-    insert into issues (github_issue_id, repository_id, issue_number, title, body, url, state,
+  const [row] = await sql<{ id: string }[]>`insert into issues (github_issue_id, repository_id, issue_number, title, body, url, state,
       opening_label, opening_comparison_points, opening_reserve_points)
-    values (${id}, ${repositoryId}, ${id}, 'Disputed work', '', 'https://example.test/issue', 'CLOSED', 'M', 5, 5)
-    returning id
-  `;
+    values (${id}, ${repositoryId}, ${id}, 'Disputed work', '', 'https://example.test/issue', 'CLOSED', 'M', 5, 5) returning id`;
   return row.id;
 }
 async function insertPullRequest(fixture: { repositoryId: string; issueId: string; contributorId: string; ownerName: string }, state: PullRequestState) {
