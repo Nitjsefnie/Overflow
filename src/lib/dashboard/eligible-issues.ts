@@ -122,7 +122,7 @@ type EligibleIssueRow = {
  * nested-loop joins for the mis-estimate. An unnamed statement is re-planned
  * with the actual parameter values on every execution, so the collapse never
  * happens. Request values still bind as parameters; only the shared starting
- * limit is interpolated; migration 073's account_credit_limits view repeats
+ * limit is interpolated; migration 090's account_credit_limits view repeats
  * it, so a change needs a new migration. Future edits must keep the CTE-block
  * formatting: the migration-056 plan pins' `cteBlock()` parser matches
  * `^\s*CTE <name>$` headers and reads the deeper-indented lines under each, so
@@ -227,7 +227,8 @@ const BOARD_QUERY = `
         ) as legs(account_id, amount)
         where legs.account_id in (select sponsor_id from candidate_sponsors)
         union all
-        -- Signed dispute lines affect debt, but never count as completed work.
+        -- Dispute awards and landing reversals affect debt, but never count
+        -- as completed work. Stored reversal lines are inert (migration 090).
         select legs.account_id, legs.amount, adjustments.created_at, 2,
           adjustments.id::text || ':' || lines.id::text || ':' || legs.leg,
           repositories.provider, coalesce(repositories.instance_url, ''),
@@ -243,7 +244,29 @@ const BOARD_QUERY = `
           (lines.creditor_id, lines.amount, 'creditor'),
           (adjustments.target_account_id, -lines.amount, 'target')
         ) as legs(account_id, amount, leg)
-        where legs.account_id in (select sponsor_id from candidate_sponsors)
+        where lines.settlement_id is null
+          and legs.account_id in (select sponsor_id from candidate_sponsors)
+        union all
+        select legs.account_id, legs.amount, disputes.decided_at, 2,
+          disputes.id::text || ':reversal:' || legs.leg,
+          repositories.provider, coalesce(repositories.instance_url, ''),
+          coalesce(repositories.forge_project_id, repositories.github_repository_id),
+          pull_requests.pull_request_number, issues.issue_number
+        from closed_pr_dispute_requests as disputes
+        join settlements on settlements.pull_request_id = disputes.landed_pull_request_id
+          and settlements.issue_id = disputes.issue_id
+        join pull_requests on pull_requests.id = disputes.pull_request_id
+        join issues on issues.id = disputes.issue_id
+        join registered_repositories as repositories on repositories.id = pull_requests.repository_id
+        cross join lateral (values
+          (settlements.creditor_id, -settlements.credits, 'creditor'),
+          (settlements.debtor_id, settlements.credits, 'debtor')
+        ) as legs(account_id, amount, leg)
+        where disputes.decision = 'GRANTED'
+          and settlements.status = 'SETTLED'
+          and settlements.credits > 0
+          and settlements.creditor_id <> settlements.debtor_id
+          and legs.account_id in (select sponsor_id from candidate_sponsors)
       ),
       running_balances as (
         select *, coalesce(sum(amount) over (

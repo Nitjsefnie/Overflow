@@ -223,9 +223,10 @@ describe("closed PR dispute schema", () => {
     await expect(insertEvent(fixture, randomUUID())).rejects.toMatchObject({ code: "23503" });
   });
 
-  it("keeps award and reversal lines on one adjustment, balances both legs, and rejects zero lines", async () => {
+  // A stored reversal line is inert history: the views derive the landing's reversal from the grant alone.
+  it("keeps award and reversal lines on one adjustment, balances both legs once, and rejects zero lines", async () => {
     const fixture = await buildFixture();
-    const request = await insertRequest(fixture, grantFields(fixture));
+    const request = await insertRequest(fixture, { ...grantFields(fixture), landed_pull_request_id: fixture.landingId, landed_commit_url: null });
     const eventId = await insertEvent(fixture, request.id as string);
     const adjustment = {
       moderation_event_id: eventId, dispute_id: request.id as string,
