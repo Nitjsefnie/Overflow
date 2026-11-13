@@ -13,9 +13,9 @@ export function readSweepPassPageCeiling(environment: Partial<Record<string, str
   const value = /^\d+$/.test(raw) ? Number(raw) : NaN;
   return Number.isSafeInteger(value) && value > 0 ? value : DEFAULT_SWEEP_PASS_PAGE_CEILING;
 }
-/** A kept pass rides out one job's whole retry ladder (RECONCILIATION_RETRY_DELAYS_MS plus the first attempt); the run after re-reads its subjects. */
+/** One job's whole retry ladder: RECONCILIATION_RETRY_DELAYS_MS plus the first attempt. */
 export const SWEEP_PASS_FAILED_RUN_BOUND = 5;
-/** Holds keep a pass across windows (the largest repository takes about four days at a tenth of the budget). */
+/** Held passes span windows; the largest repository needs about four days. */
 export const SWEEP_PASS_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
 export class StagedPassDataUnreadable extends Error {
@@ -34,7 +34,6 @@ export type SweepPass = {
   stage(input: { anchor: string; kind: "issue" | "pull_request"; subjectKey: number; updatedAt: Date; payload: unknown }): Promise<void>;
   readStaged(): Promise<Array<{ kind: "issue" | "pull_request"; subjectKey: number; updatedAt: Date; payload: unknown }>>;
   deleteStaged(keys: ReadonlyArray<{ kind: "issue" | "pull_request"; subjectKey: number }>): Promise<void>;
-  /** The run stopped for a budget, not a failure: the pass's failed-run count starts again. */
   hold(): Promise<void>;
   complete(): Promise<void>;
 };
@@ -65,7 +64,7 @@ export async function discardInactivePassAfterFailure<T>(
 export async function discardSweepPass(pass: SweepPass | undefined): Promise<void> {
   try { await pass?.complete(); } catch { console.error("Could not discard reconciliation sweep checkpoints."); }
 }
-/** A run stopped by a request budget, or by the forge rate limit the worker defers on, is a hold, not a failed run. */
+/** A budget or forge rate-limit stop is a hold, not a failed run. */
 export async function holdSweepPass(pass: SweepPass | undefined, error: unknown): Promise<void> {
   if (!(error instanceof SweepBudgetSpent || error instanceof GraphqlBudgetHeld || findGitHubRateLimitError(error) !== null)) return;
   try { await pass?.hold(); } catch { console.error("Could not record a hold on reconciliation sweep checkpoints."); }
