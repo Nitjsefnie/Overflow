@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
@@ -19,9 +19,6 @@ import { verifiedRepositoryPayload } from "../support/verified-repository";
 
 let sql: Sql;
 let container: StartedTestContainer;
-const original = process.env.OVERFLOW_DATABASE_URL;
-const originalThreshold = process.env.RECONCILIATION_DIFF_ONLY_BACKLOG;
-const originalPrefixedThreshold = process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG;
 const windowMs = 6 * 60 * 60_000;
 // After DB now(): a held job's deferral (the round's reset) is never due
 // inside the drain that held it, so each window drains to IDLE.
@@ -31,25 +28,18 @@ let externalId = 11_000_000;
 beforeAll(async () => {
   const started = await startPostgresContainer({ database: "share", user: "share", password: randomUUID() });
   container = started.container;
-  process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
+  vi.stubEnv("OVERFLOW_DATABASE_URL", started.databaseUrl);
   // The fold's diff-only read resolves the prefixed name first.
-  delete process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG;
-  process.env.RECONCILIATION_DIFF_ONLY_BACKLOG = "10";
+  vi.stubEnv("OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG", undefined);
+  vi.stubEnv("RECONCILIATION_DIFF_ONLY_BACKLOG", "10");
   sql = getSql();
   await runMigrations();
 });
 beforeEach(async () => {
-  await sql`delete from repository_reconciliation_jobs`;
-  await sql`delete from reconciliation_sweep_rounds`;
-  await sql`delete from registered_repositories`;
-  await sql`delete from users`;
+  // Cascades to every run, change and pass a fold left behind.
+  await sql`truncate repository_reconciliation_jobs, reconciliation_sweep_rounds, registered_repositories, users cascade`;
 });
-afterAll(async () => {
-  await closeSql(); await container?.stop();
-  if (original === undefined) delete process.env.OVERFLOW_DATABASE_URL; else process.env.OVERFLOW_DATABASE_URL = original;
-  if (originalThreshold === undefined) delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.RECONCILIATION_DIFF_ONLY_BACKLOG = originalThreshold;
-  if (originalPrefixedThreshold === undefined) delete process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG = originalPrefixedThreshold;
-});
+afterAll(async () => { await closeSql(); await container?.stop(); vi.unstubAllEnvs(); });
 
 async function insertSponsor(): Promise<string> {
   const githubUserId = (externalId += 1);
@@ -66,23 +56,28 @@ async function insertRepository(sponsorId: string): Promise<{ id: string; github
   return { id: row!.id, githubRepositoryId: key, ownerName: `owner/repo-${key}` };
 }
 
-/** A forge answering one repository's verify, issue listing and per-issue reads. */
-function forge(repository: { githubRepositoryId: number; ownerName: string }, issueCount: number, token: string): GitHubGateway {
+/** A forge answering one repository's verify, its issue listing `perPage` a page from `since`, and per-issue reads; `gone` issues are deleted. */
+function forge(repository: { githubRepositoryId: number; ownerName: string }, issueCount: number, token: string, perPage = 100, gone = new Set<number>()): GitHubGateway {
   const updated = new Date("2029-12-01T00:00:00Z").toISOString();
-  const subjects = Array.from({ length: issueCount }, (_, index) =>
-    ({ id: repository.githubRepositoryId * 1000 + index, number: index + 1, updated_at: updated }));
+  const subjects = Array.from({ length: issueCount }, (_, index) => ({ id: repository.githubRepositoryId * 1000 + index,
+    number: index + 1, updated_at: new Date(Date.parse(updated) + index * 1000).toISOString() }));
   const page = (nodes: unknown[]) => ({ nodes, pageInfo: { hasNextPage: false, endCursor: null } });
   return new GitHubGateway({ accessToken: token, fetch: async (input, init) => {
     const url = new URL(String(input));
     if (url.pathname.startsWith("/repositories/")) return Response.json(verifiedRepositoryPayload(repository.githubRepositoryId, repository.ownerName));
-    if (url.pathname.endsWith("/issues")) return Response.json(subjects);
+    if (url.pathname.endsWith("/issues")) {
+      const [since, at] = [url.searchParams.get("since") ?? "", Number(url.searchParams.get("page") ?? 1)];
+      const listed = subjects.filter(({ number, updated_at }) => !gone.has(number) && updated_at >= since);
+      const next = new URL(url); next.searchParams.set("page", String(at + 1));
+      return Response.json(listed.slice((at - 1) * perPage, at * perPage), { headers: at * perPage < listed.length ? { link: `<${next}>; rel="next"` } : {} });
+    }
     if (/\/issues\/\d+\/(events|comments)$/.test(url.pathname)) return Response.json([]);
     const { query, variables } = JSON.parse(String(init?.body));
     if (query.includes("query RepositoryIssue(")) {
       const subject = subjects.find(({ number }) => number === variables.issueNumber)!;
-      return Response.json({ data: { repository: { issue: {
+      return Response.json({ data: { repository: { issue: gone.has(subject.number) ? null : {
         databaseId: subject.id, number: subject.number, title: "Walked", body: "", url: "https://example.test/issue",
-        state: "OPEN", stateReason: null, createdAt: updated, updatedAt: updated, closedAt: null,
+        state: "OPEN", stateReason: null, createdAt: updated, updatedAt: subject.updated_at, closedAt: null,
         author: null, labels: page([]), assignees: { nodes: [] }, timelineItems: page([]), closedByPullRequestsReferences: page([]),
       } } } });
     }
@@ -319,5 +314,31 @@ describe("per-repository share of a sponsor's sweep request budget", () => {
     // The large passes need more than a window: they were still held, not done.
     expect(completions.filter((c) => c.repositoryId !== small.id)).toEqual([]);
     expect(spends.filter((s) => s.window === n && s.admitted).length).toBeGreaterThan(share);
+  });
+
+  it("completes a pass whose listing exceeds the repository's share, and decides absence across the holds", async () => {
+    // Four siblings whose due jobs never run keep their floors, so the repository never borrows past floor(50 / 5) = 10.
+    const sponsorId = await insertSponsor();
+    const [r, ...siblings] = await Promise.all(Array.from({ length: 5 }, () => insertRepository(sponsorId)));
+    for (const sibling of siblings) await due(sibling.id);
+    const [token, gone, admitted, outcomes] = [randomBytes(24).toString("hex"), new Set<number>(), new Map<number, number>(), [] as string[]];
+    const [store, rounds, passes, github] = [new PostgresFoldStore(sql), new PostgresSponsorSweepRoundStore(sql, windowMs), new PostgresSweepPassStore(sql), forge(r!, 60, token, 5, gone)];
+    store.getGitHubAccessToken = async () => token;
+    let window = 0;
+    const now = () => new Date(at.getTime() + window * windowMs);
+    const sweep: ReconciliationSweepControl = { discardPass: (id) => passes.discardByRepository(id),
+      spend: async (sponsor, charged) => { const hold = await rounds.spend(sponsor, charged, now(), 50); if (hold === null) admitted.set(window, (admitted.get(window) ?? 0) + 1); return hold; },
+      openPass: (input) => passes.open(input) };
+    // 60 issues at 5 a page: 12 listing pages, more than a held run can list after its verify and walk page.
+    for (; window < 40 && !outcomes.includes("done"); window++) {
+      // Once a held run has kept absence-listing progress, the last issue, not yet listed again, is deleted.
+      if (gone.size === 0 && (await sql`select from reconciliation_sweep_pages where request_key like 'absence-listing:%'`).length > 0) gone.add(60);
+      outcomes.push((await reconcileRepository({ store, github, sweep, now, onBudgetChange: () => {} }, r!.id, { reason: "SWEEP" })).skipped ? "held" : "done");
+    }
+    expect(outcomes.join(" ")).toMatch(/^(held )+done$/);
+    expect(outcomes.slice(0, -1).map((_, k) => admitted.get(k))).toEqual(outcomes.slice(0, -1).map(() => 10));
+    expect(await sql`select from reconciliation_sweep_repository_spend where repository_id in ${sql(siblings.map(({ id }) => id))}`).toEqual([]);
+    // The folded evidence drops only the deleted issue: those listed before a hold stay present.
+    expect([gone.size, (await store.getReconciliationEvidence(r!.id))?.issues.map(({ number }) => number)]).toEqual([1, Array.from({ length: 59 }, (_, i) => i + 1)]);
   });
 });

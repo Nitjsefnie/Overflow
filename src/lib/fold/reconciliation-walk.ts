@@ -1,5 +1,5 @@
 import { withFreshSweepReads, type SweepPass } from "@/lib/fold/sweep-pass";
-import { readStagedRows, stagedIdentity } from "@/lib/fold/staged-pass-data";
+import { readListedSubjects, readStagedRows, recordListedSubjects, stagedIdentity, type ListedSubject } from "@/lib/fold/staged-pass-data";
 import type { WalkSubject } from "@/lib/forge/subject-listing";
 import { sanitizeForgeStrings } from "@/lib/forge/sanitize-forge-strings";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
@@ -114,18 +114,25 @@ async function walk({ pass, listing, gateway, repository, onDiscard }: Reconcili
     await gather(subject, anchor);
   });
 
-  // Absence may restart: ceil(size/100) data pages plus boundary/tie pages and drift
-  // gathers; the expensive PR refreshes retain their progress across holds below.
-  // A held run restarts this listing from its first page, so a budget-bound pass
-  // completes only while one run's verify, resumed walk listing and this whole listing
-  // fit in what it can spend in one window (its share plus what it borrows); above
-  // that it walks every window and never completes. Even the walk needs a share
-  // above a run's verify and first listing page, which are spent before anything stages.
-  const listed = new Map<string, WalkSubject>();
-  await visitWalkListing(listing, {}, async (subject) => {
-    const key = rowKey(subject.kind, subject.id), previous = listed.get(key);
+  // Absence lists the whole repository again: ceil(size/100) data pages plus boundary/tie
+  // pages and drift gathers; the expensive PR refreshes retain their progress across holds
+  // below. A held run keeps what this listing saw, so the next run resumes it from its last
+  // listed point; a subject deleted behind that point is dropped by the next pass. Even the
+  // walk needs a share above a run's verify and first listing page, which are spent before
+  // anything stages; once walked, every run spends them again before this listing resumes.
+  const earlier = await readListedSubjects(pass);
+  const listed = new Map<string, WalkSubject>(), progress: Record<string, { updatedAt: Date; key: number }> = {};
+  const fresh: ListedSubject[] = [];
+  const list = (subject: WalkSubject, anchor: string, recorded = false) => {
+    const key = rowKey(subject.kind, subject.id), previous = listed.get(key), point = progress[anchor];
     if (previous === undefined || previous.updatedAt <= subject.updatedAt) listed.set(key, subject);
-  });
+    if (point === undefined || compareSubject(subject, point) > 0) progress[anchor] = { updatedAt: subject.updatedAt, key: subject.id };
+    if (!recorded) fresh.push({ ...subject, anchor });
+  };
+  for (const { anchor, ...subject } of earlier.subjects) list(subject, anchor, true);
+  // Recorded after a completed listing too: the gathers and refreshes below can still be held.
+  try { await visitWalkListing(listing, { ...progress }, async (subject, anchor) => list(subject, anchor)); }
+  finally { await recordListedSubjects(pass, earlier.records, fresh); }
   const refreshTargets = new Set([...referenced(issues().filter((issue) => listed.has(rowKey("issue", issue.id)))),
     ...repository.disputePullRequests].map(({ id }) => id));
   // References/disputes may name an unlisted PR; retain its completed refresh outcome for resume.

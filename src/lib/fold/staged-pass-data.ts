@@ -1,5 +1,6 @@
 import { StagedPassDataUnreadable, type SweepPass } from "@/lib/fold/sweep-pass";
 import type { GitHubSubject } from "@/lib/github/types";
+import type { WalkSubject } from "@/lib/forge/subject-listing";
 
 export type StagedRow = Awaited<ReturnType<SweepPass["readStaged"]>>[number];
 
@@ -52,4 +53,25 @@ export function isDirtySubjects(value: unknown): boolean {
   return Array.isArray(value) && value.every((subject) => isFields(subject)
     && (subject.kind === "ISSUE" || subject.kind === "PULL_REQUEST")
     && isId(subject.id) && isId(subject.number) && isBigint(subject.generation));
+}
+
+export type ListedSubject = WalkSubject & { anchor: string };
+const listedKey = (record: number) => `absence-listing:${record}`;
+/** The subjects earlier runs of this pass saw in the absence listing, one record per run, kept beside the pass's cached pages. */
+export async function readListedSubjects(pass: SweepPass): Promise<{ records: number; subjects: ListedSubject[] }> {
+  const subjects: ListedSubject[] = [];
+  let records = 0;
+  for (let record; (record = await pass.read(listedKey(records))) !== undefined; records++) {
+    ensure(Array.isArray(record));
+    for (const row of record) {
+      ensure(isFields(row) && typeof row.anchor === "string" && (row.kind === "issue" || row.kind === "pull_request")
+        && isId(row.id) && isId(row.number) && typeof row.updatedAt === "string" && Number.isFinite(Date.parse(row.updatedAt)));
+      subjects.push({ anchor: row.anchor, kind: row.kind, id: row.id, number: row.number, updatedAt: new Date(row.updatedAt) });
+    }
+  }
+  return { records, subjects };
+}
+/** A dropped record (the page ceiling) only makes the next run list those subjects again. */
+export async function recordListedSubjects(pass: SweepPass, record: number, subjects: ListedSubject[]): Promise<void> {
+  if (subjects.length > 0) await pass.write(listedKey(record), subjects.map((subject) => ({ ...subject, updatedAt: subject.updatedAt.toISOString() })));
 }

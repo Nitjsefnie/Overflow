@@ -10,8 +10,7 @@ describe("last-update reconciliation walk", () => {
     expect((await f.window(20)).issues.map(({ id }) => id)).toEqual([1, 2, 3, 4]);
     expect(f.listed[1]).toEqual({ since: instant(2).toISOString(), cursor: null });
     expect([...f.counts]).toEqual([[1, 1], [2, 1], [3, 1], [4, 1]]);
-    expect(f.pass.read).not.toHaveBeenCalled();
-    expect(f.pass.write).not.toHaveBeenCalled();
+    for (const io of [f.pass.read, f.pass.write]) expect(vi.mocked(io).mock.calls.every(([key]) => key.startsWith("absence-listing:"))).toBe(true);
   });
 
   it("gathers an unstaged timestamp tie behind the anchor and skips staged repeats across pages", async () => {
@@ -129,8 +128,7 @@ describe("last-update reconciliation walk", () => {
   it("restarts completion correctly after a hold during the absence sweep", async () => {
     const f = fixture([subject(1), subject(2)]);
     await expect(f.window(3)).rejects.toBeInstanceOf(SweepBudgetSpent);
-    f.live.delete(1);
-    f.issues.delete(1);
+    f.live.delete(1); f.issues.delete(1);
     expect((await f.window(20)).issues.map(({ id }) => id)).toEqual([2]);
     expect((await f.window(20)).issues.map(({ id }) => id)).toEqual([2]);
     expect(f.counts.get(2)).toBe(1);

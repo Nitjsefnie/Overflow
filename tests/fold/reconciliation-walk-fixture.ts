@@ -23,11 +23,11 @@ export function pullRequest(id: number, repositoryGitHubId = 42): GitHubPullRequ
 
 export function memoryPass() {
   const anchors: Record<string, { updatedAt: Date; key: number }> = {};
-  const rows = new Map<string, Awaited<ReturnType<SweepPass["readStaged"]>>[number]>();
+  const rows = new Map<string, Awaited<ReturnType<SweepPass["readStaged"]>>[number]>(), pages = new Map<string, unknown>();
   const pass: SweepPass = {
     id: "pass", scanStartedAt: instant(0), dirtySubjects: [],
-    read: vi.fn(async () => { throw new Error("Page cache read"); }),
-    write: vi.fn(async () => { throw new Error("Page cache write"); }),
+    read: vi.fn(async (key) => { if (key.startsWith("absence-listing:")) return structuredClone(pages.get(key)); throw new Error("Page cache read: a replayed request"); }),
+    write: vi.fn(async (key, payload) => { if (key.startsWith("absence-listing:")) pages.set(key, structuredClone(payload)); else throw new Error("Page cache write: a replayed request"); }),
     walkAnchors: () => structuredClone(anchors),
     stage: vi.fn(async ({ anchor, kind, subjectKey, updatedAt, payload }) => {
       rows.set(`${kind}:${subjectKey}`, { kind, subjectKey, updatedAt, payload: structuredClone(payload) });
@@ -38,7 +38,7 @@ export function memoryPass() {
     }),
     readStaged: async () => structuredClone([...rows.values()]),
     deleteStaged: vi.fn(async (keys) => { for (const { kind, subjectKey } of keys) rows.delete(`${kind}:${subjectKey}`); }),
-    complete: vi.fn(async () => { rows.clear(); }),
+    complete: vi.fn(async () => { rows.clear(); pages.clear(); }),
   };
   return pass;
 }
