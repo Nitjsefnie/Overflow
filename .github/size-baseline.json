@@ -1,4 +1,7 @@
 {
+  "trees": {
+    "tests/": 199663
+  },
   "schema_version": 1,
   "baseline": {
     "scripts/check-page-geometry.mjs": 1379,
