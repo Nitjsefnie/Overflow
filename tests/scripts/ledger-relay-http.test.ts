@@ -58,7 +58,15 @@ function world() {
     fetchFn, delayFn: async (ms) => { state.delays.push(ms); },
     readPinMap: async () => ({ verify: ".github/workflows/ci.yml" }),
   };
-  return { state, deps, run: (over = {}) => runRelay({ ...deps, ...over }) };
+  /** A triggered start's environment: the green push run 9001 at HEAD names the mirror. */
+  const mirrorEnv = () => ({
+    ...deps.env, OVERFLOW_LEDGER_SWEEP_ONLY: "false", OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "9001",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: HEAD, OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: ".github/workflows/ci.yml",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "success", OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "push",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main", OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: `https://github.com/${REPO}/actions/runs/9001`,
+  });
+  return { state, deps, mirrorEnv, run: (over = {}) => runRelay({ ...deps, ...over }) };
 }
 
 /** Never answers; a real AbortSignal.timeout must settle this attempt. */
@@ -227,13 +235,7 @@ describe("ledger relay request lifetime", () => {
         external_id: newerId, status: "completed", conclusion: "failure" });
       throw new DOMException("request timed out", "TimeoutError");
     };
-    const env = mode === "sweep" ? w.deps.env : {
-      ...w.deps.env, OVERFLOW_LEDGER_SWEEP_ONLY: "false", OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "9001",
-      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: HEAD, OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: ".github/workflows/ci.yml",
-      OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "success", OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "push",
-      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main", OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
-      OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: `https://github.com/${REPO}/actions/runs/9001`,
-    };
+    const env = mode === "sweep" ? w.deps.env : w.mirrorEnv();
 
     const result = await w.run({ env });
 
@@ -408,8 +410,8 @@ describe("ledger relay request lifetime", () => {
 });
 
 describe("ledger relay rate-limit handling (issue 1355)", () => {
-  /** A RelayHttpDeps whose clock is injected and whose fetch replays `responses`. */
-  function rateLimitDeps(responses: Response[]) {
+  /** A RelayHttpDeps whose clock is injected and whose fetch replays `responses` ("network" throws). */
+  function rateLimitDeps(responses: Array<Response | "network">) {
     const state = { now: 10_000, requests: [] as number[], delays: [] as number[] };
     const deps: RelayHttpDeps = {
       deadlineMs: 60_000,
@@ -418,6 +420,7 @@ describe("ledger relay rate-limit handling (issue 1355)", () => {
       fetchFn: async () => {
         state.requests.push(state.now);
         const next = responses.shift();
+        if (next === "network") throw new TypeError("fetch failed");
         if (next === undefined) throw new Error("unexpected extra request");
         return next;
       },
@@ -512,15 +515,8 @@ describe("ledger relay rate-limit handling (issue 1355)", () => {
     w.state.intercept = async (url) => {
       if (url === `${ROOT}/actions/runs/9001/jobs?filter=latest&per_page=100`) return rateLimited(resetSec);
     };
-    const env = {
-      ...w.deps.env, OVERFLOW_LEDGER_SWEEP_ONLY: "false", OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "9001",
-      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: HEAD, OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: ".github/workflows/ci.yml",
-      OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "success", OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "push",
-      OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main", OVERFLOW_GITHUB_WORKFLOW_RUN_ATTEMPT: "1",
-      OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: `https://github.com/${REPO}/actions/runs/9001`,
-    };
 
-    const error = await caught(w.run({ env }));
+    const error = await caught(w.run({ env: w.mirrorEnv() }));
 
     expect(error).toBeInstanceOf(RateLimitExceededError);
     expect(error.message).toContain(new Date(resetSec * 1000).toISOString());
@@ -597,19 +593,7 @@ describe("ledger relay rate-limit handling (issue 1355)", () => {
   });
 
   it("does not let an earlier rate limit name a later network failure", async () => {
-    const delays: number[] = [];
-    let now = 10_000;
-    let requests = 0;
-    const deps: RelayHttpDeps = {
-      deadlineMs: 60_000,
-      nowFn: () => now,
-      delayFn: async (ms) => { delays.push(ms); now += ms; },
-      fetchFn: async () => {
-        requests += 1;
-        if (requests === 1) return rateLimited(14);
-        throw new TypeError("fetch failed");
-      },
-    };
+    const { deps, state } = rateLimitDeps([rateLimited(14), "network", "network"]);
 
     const error = await caught(apiCall(deps, theCall, what));
 
@@ -618,8 +602,8 @@ describe("ledger relay rate-limit handling (issue 1355)", () => {
     // start would defer on.
     expect(error).not.toBeInstanceOf(RateLimitExceededError);
     expect(error.message).toContain("failed after 3 attempts: fetch failed");
-    expect(delays).toEqual([4_000, 2_000]);
-    expect(requests).toBe(3);
+    expect(state.delays).toEqual([4_000, 2_000]);
+    expect(state.requests).toHaveLength(3);
   });
 
   describe("a read whose last attempt is answered 5xx (issue 1532)", () => {
@@ -639,21 +623,13 @@ describe("ledger relay rate-limit handling (issue 1355)", () => {
     });
 
     it("decides by the final attempt: earlier network errors do not stop a last 5xx from qualifying", async () => {
-      let requests = 0;
-      const deps: RelayHttpDeps = {
-        deadlineMs: Date.now() + 60_000, delayFn: async () => {},
-        fetchFn: async () => {
-          requests += 1;
-          if (requests < 3) throw new TypeError("fetch failed");
-          return serverError(503);
-        },
-      };
+      const { deps, state } = rateLimitDeps(["network", "network", serverError(503)]);
 
       const error = await caught(apiCall(deps, theCall, what));
 
       expect(error).toBeInstanceOf(ServerErrorExhaustedError);
       expect(error.message).toBe(`${what} failed after 3 attempts: HTTP 503: boom`);
-      expect(requests).toBe(3);
+      expect(state.requests).toHaveLength(3);
     });
 
     it("throws it for a single-attempt GET answered 5xx", async () => {
@@ -670,18 +646,11 @@ describe("ledger relay rate-limit handling (issue 1355)", () => {
       ["a POST answered 5xx on every attempt", { ...theCall, method: "POST" as const },
         [serverError(), serverError(), serverError()], "HTTP 500: boom"],
       ["a GET answered 5xx then a network error last", theCall,
-        [serverError(), serverError(), "network"], "fetch failed"],
+        [serverError(), serverError(), "network" as const], "fetch failed"],
       ["a GET whose last answer is a 429 without rate-limit markers", theCall,
         [serverError(), serverError(), unmarked429()], "HTTP 429: too many"],
     ])("keeps the plain attempts error for %s", async (_name, call, answers, last) => {
-      const { deps, state } = rateLimitDeps([]);
-      deps.fetchFn = async () => {
-        state.requests.push(state.now);
-        const next = answers.shift();
-        if (typeof next === "string") throw new TypeError("fetch failed");
-        if (next === undefined) throw new Error("unexpected extra request");
-        return next;
-      };
+      const { deps, state } = rateLimitDeps(answers);
 
       const error = await caught(apiCall(deps, call, what));
 

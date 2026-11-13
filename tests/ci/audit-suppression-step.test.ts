@@ -323,31 +323,40 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     return { status: result.status, stdout: result.stdout, stderr: result.stderr, runnerTemp, argvLog };
   }
 
-  it("passes when the merge tree repeats the base's suppression list exactly", async () => {
-    const config = { auditConfig: { ignoreGhsas: ["GHSA-vfj7-8cjw-p6xm"] } };
-    const fx = await fixture(PACKAGE_JSON(config), PACKAGE_JSON(config));
+  /** Runs the leg and asserts its silent success: exit 0, nothing on stdout, no annotation. */
+  async function expectPasses(fx: { workspace: string; base: string }) {
     const result = await runStep(fx);
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
     expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
     expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+    return result;
+  }
+
+  /** Runs the leg and asserts a red exit that prints `refusal` and never the planted MARKER. */
+  async function expectRefuses(fx: { workspace: string; base: string }, refusal: string): Promise<void> {
+    const result = await runStep(fx);
+    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain(refusal);
+    expect(`${result.stdout}${result.stderr}`, "no pull-request bytes may reach the log").not.toContain(MARKER);
+  }
+
+  it("passes when the merge tree repeats the base's suppression list exactly", async () => {
+    const config = { auditConfig: { ignoreGhsas: ["GHSA-vfj7-8cjw-p6xm"] } };
+    const fx = await fixture(PACKAGE_JSON(config), PACKAGE_JSON(config));
+    await expectPasses(fx);
   });
 
   it("refuses a pull request that adds a suppression the base does not carry", async () => {
     const config = { auditConfig: { ignoreGhsas: ["GHSA-vfj7-8cjw-p6xm"] } };
     const attack = { auditConfig: { ignoreGhsas: ["GHSA-vfj7-8cjw-p6xm", MARKER] } };
     const fx = await fixture(PACKAGE_JSON(config), PACKAGE_JSON(attack));
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.divergence);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
+    await expectRefuses(fx, REFUSALS.divergence);
   });
 
   it("refuses a pull request that removes the suppression list entirely", async () => {
     const config = { auditConfig: { ignoreGhsas: ["GHSA-vfj7-8cjw-p6xm"] } };
     const fx = await fixture(PACKAGE_JSON(config), PACKAGE_JSON(undefined));
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.divergence);
+    await expectRefuses(fx, REFUSALS.divergence);
   });
 
   it("refuses a pull request that commits its package.json as a symlink", async () => {
@@ -356,20 +365,14 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
       mode: "120000",
       content: `../../evil-package.json ${MARKER}`,
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.entry);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
+    await expectRefuses(fx, REFUSALS.entry);
   });
 
   it("refuses a NUL byte in the pull request's package.json", async () => {
     const config = { auditConfig: { ignoreGhsas: ["GHSA-vfj7-8cjw-p6xm"] } };
     const content = `{"name":"scratch\u0000${MARKER}","pnpm":{"auditConfig":{"ignoreGhsas":["GHSA-vfj7-8cjw-p6xm"]}}}`;
     const fx = await fixture(PACKAGE_JSON(config), content);
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.nul);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
+    await expectRefuses(fx, REFUSALS.nul);
   });
 
   it("refuses when the pinned base commit cannot be fetched", async () => {
@@ -394,10 +397,7 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     ["every id", { ignoreGhsas: [ID_A, ID_B] }, { ignoreGhsas: [] }],
   ])("passes a merge tree that only removes %s from ignoreGhsas", async (_label, base, merge) => {
     const fx = await fixture(listed(base), listed(merge));
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
-    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+    await expectPasses(fx);
   });
 
   it.each([
@@ -422,10 +422,7 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     ["removes an id and turns another key's 1 into true", { ignoreCves: 1, ignoreGhsas: [ID_A, ID_B] }, { ignoreCves: true, ignoreGhsas: [ID_A] }],
   ])("refuses a merge tree whose ignoreGhsas change %s", async (_label, base, merge) => {
     const fx = await fixture(listed(base), listed(merge));
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.divergence);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
+    await expectRefuses(fx, REFUSALS.divergence);
   });
 
   it.each([
@@ -433,10 +430,7 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     ["an audited .npmrc key", { ".npmrc": `audit-level=critical ${MARKER}\n` }, REFUSALS.npmrcDivergence],
   ])("refuses a merge tree that removes an id and also changes %s", async (_label, merge, refusal) => {
     const fx = await fixture(listed({ ignoreGhsas: [ID_A, ID_B] }), listed({ ignoreGhsas: [ID_A] }), { merge });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(refusal);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
+    await expectRefuses(fx, refusal);
   });
 
   // ---------------------------------------------------------------------------
@@ -458,10 +452,7 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
       base: { "pnpm-workspace.yaml": ws },
       merge: { "pnpm-workspace.yaml": ws },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
-    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+    await expectPasses(fx);
   });
 
   it.each([
@@ -476,10 +467,7 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
       base: { "pnpm-workspace.yaml": base },
       merge: { "pnpm-workspace.yaml": merge },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
-    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+    await expectPasses(fx);
   });
 
   it("refuses a suppression list moved into pnpm-workspace.yaml", async () => {
@@ -488,28 +476,21 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
         "pnpm-workspace.yaml": `auditConfig:\n  ignoreGhsas:\n    - GHSA-vfj7-8cjw-p6xm\n    - ${MARKER}\n`,
       },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.wsDivergence);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
+    await expectRefuses(fx, REFUSALS.wsDivergence);
   });
 
   it("refuses an auditLevel moved into pnpm-workspace.yaml", async () => {
     const fx = await fixture(PACKAGE_JSON(undefined), PACKAGE_JSON(undefined), {
       merge: { "pnpm-workspace.yaml": "auditLevel: critical\n" },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.wsDivergence);
+    await expectRefuses(fx, REFUSALS.wsDivergence);
   });
 
   it("refuses a registries mapping moved into pnpm-workspace.yaml", async () => {
     const fx = await fixture(PACKAGE_JSON(undefined), PACKAGE_JSON(undefined), {
       merge: { "pnpm-workspace.yaml": "registries:\n  default: https://attacker.invalid/\n" },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.wsDivergence);
+    await expectRefuses(fx, REFUSALS.wsDivergence);
   });
 
   it("refuses an unparseable pnpm-workspace.yaml whose bytes differ from the base", async () => {
@@ -517,43 +498,14 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
       base: { "pnpm-workspace.yaml": "packages:\n  - \"x\"\n" },
       merge: { "pnpm-workspace.yaml": "auditConfig:\n\tignoreGhsas: [oops\n" },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.wsParse);
+    await expectRefuses(fx, REFUSALS.wsParse);
   });
 
   it("refuses pnpm-workspace.yaml committed as a symlink", async () => {
     const config = { auditConfig: { ignoreGhsas: ["GHSA-vfj7-8cjw-p6xm"] } };
     const fx = await fixture(PACKAGE_JSON(config), PACKAGE_JSON(config));
-    const target = await writeBlobNow(fx.workspace, `../../evil-workspace.yaml ${MARKER}`);
-    const g = (args: string[]): string => {
-      const result = spawnSync("git", args, {
-        cwd: fx.workspace,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          GIT_AUTHOR_NAME: "scratch repository",
-          GIT_AUTHOR_EMAIL: "scratch@example.invalid",
-          GIT_COMMITTER_NAME: "scratch repository",
-          GIT_COMMITTER_EMAIL: "scratch@example.invalid",
-        },
-      });
-      if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
-      return result.stdout.trim();
-    };
-    g(["update-index", "--add", "--cacheinfo", `120000,${target},pnpm-workspace.yaml`]);
-    const tree = g(["write-tree"]);
-    // The workspace clone is shallow (depth 1 at the merge), so the base commit
-    // object must be fetched before it can parent a new commit.
-    g(["fetch", "--depth=1", "origin", fx.base]);
-    const merge = g(["commit-tree", tree, "-p", fx.base, "-m", "ws symlink"]);
-    // The merge commit was built locally in the workspace, so it is checked
-    // out directly; only the guard's own base fetch goes through origin.
-    g(["checkout", "--detach", merge]);
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.sharedEntry);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
+    await checkoutSymlinkMerge(fx, "pnpm-workspace.yaml", `../../evil-workspace.yaml ${MARKER}`);
+    await expectRefuses(fx, REFUSALS.sharedEntry);
   });
 
   it("passes when .npmrc is byte-identical on both sides", async () => {
@@ -563,30 +515,21 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
       base: { ".npmrc": npmrc },
       merge: { ".npmrc": npmrc },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
-    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+    await expectPasses(fx);
   });
 
   it("passes when the merge adds .npmrc carrying none of the audited keys", async () => {
     const fx = await fixture(PACKAGE_JSON(undefined), PACKAGE_JSON(undefined), {
       merge: { ".npmrc": "save-exact=true\nfund=false\n# a comment\n" },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
-    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+    await expectPasses(fx);
   });
 
   it("refuses an audit-level bar added in .npmrc", async () => {
     const fx = await fixture(PACKAGE_JSON(undefined), PACKAGE_JSON(undefined), {
       merge: { ".npmrc": `audit-level=critical ${MARKER}\n` },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.npmrcDivergence);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
+    await expectRefuses(fx, REFUSALS.npmrcDivergence);
   });
 
   it("refuses a registry redirect changed in .npmrc", async () => {
@@ -594,10 +537,7 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
       base: { ".npmrc": "registry=https://registry.npmjs.org/\n" },
       merge: { ".npmrc": `registry=https://${MARKER}.invalid/\n` },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.npmrcDivergence);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
+    await expectRefuses(fx, REFUSALS.npmrcDivergence);
   });
 
   it("passes when .npmrc carries only a scoped registry key", async () => {
@@ -607,10 +547,7 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     const fx = await fixture(PACKAGE_JSON(undefined), PACKAGE_JSON(undefined), {
       merge: { ".npmrc": "@attk:registry=https://attacker.invalid/\n" },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
-    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+    await expectPasses(fx);
   });
 
   it("refuses an unparseable .npmrc whose bytes differ from the base", async () => {
@@ -618,15 +555,23 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
       base: { ".npmrc": "save-exact=true\n" },
       merge: { ".npmrc": "save-exact=true\n[attacker]\nregistry=x\n" },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.npmrcParse);
+    await expectRefuses(fx, REFUSALS.npmrcParse);
   });
 
   it("refuses .npmrc committed as a symlink", async () => {
     const config = { auditConfig: { ignoreGhsas: ["GHSA-vfj7-8cjw-p6xm"] } };
     const fx = await fixture(PACKAGE_JSON(config), PACKAGE_JSON(config));
-    const target = await writeBlobNow(fx.workspace, `../../evil-npmrc ${MARKER}`);
+    await checkoutSymlinkMerge(fx, ".npmrc", `../../evil-npmrc ${MARKER}`);
+    await expectRefuses(fx, REFUSALS.sharedEntry);
+  });
+
+  /**
+   * Checks out, in the fixture's workspace, a new merge commit whose tree
+   * swaps `path` for a 120000 symlink leaf naming `target` (index surgery on
+   * top of an existing fixture).
+   */
+  async function checkoutSymlinkMerge(fx: { workspace: string; base: string }, path: string, target: string) {
+    const id = await writeBlobNow(fx.workspace, target);
     const g = (args: string[]): string => {
       const result = spawnSync("git", args, {
         cwd: fx.workspace,
@@ -642,24 +587,18 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
       if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
       return result.stdout.trim();
     };
-    g(["update-index", "--add", "--cacheinfo", `120000,${target},.npmrc`]);
+    g(["update-index", "--add", "--cacheinfo", `120000,${id},${path}`]);
     const tree = g(["write-tree"]);
+    // The workspace clone is shallow (depth 1 at the merge), so the base commit
+    // object must be fetched before it can parent a new commit.
     g(["fetch", "--depth=1", "origin", fx.base]);
-    const merge = g(["commit-tree", tree, "-p", fx.base, "-m", "npmrc symlink"]);
+    const merge = g(["commit-tree", tree, "-p", fx.base, "-m", `${path} symlink`]);
     // The merge commit was built locally in the workspace, so it is checked
     // out directly; only the guard's own base fetch goes through origin.
     g(["checkout", "--detach", merge]);
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.sharedEntry);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
-  });
+  }
 
-  /**
-   * Writes `content` as a loose blob in the given repository; returns its
-   * object id. (Module-scope helper for the symlink cases above, which add
-   * index surgery on top of an existing fixture.)
-   */
+  /** Writes `content` as a loose blob in the given repository; returns its object id. */
   async function writeBlobNow(repo: string, content: string): Promise<string> {
     counter += 1;
     const file = join(root, `blob-${counter}`);
@@ -684,18 +623,11 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     // The manifest is what main pins; until this lands on main every
     // workspace-changing pull request reds here rather than judging with an
     // unpinned module.
-    const fx = await fixture(
-      PACKAGE_JSON(undefined),
-      PACKAGE_JSON(undefined),
-      {
-        base: { "pnpm-workspace.yaml": "packages:\n  - \"a\"\n" },
-        merge: { "pnpm-workspace.yaml": "packages:\n  - \"b\"\n" },
-      },
-      { noManifest: true },
-    );
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.manifestMissing);
+    const fx = await fixture(PACKAGE_JSON(undefined), PACKAGE_JSON(undefined), {
+      base: { "pnpm-workspace.yaml": "packages:\n  - \"a\"\n" },
+      merge: { "pnpm-workspace.yaml": "packages:\n  - \"b\"\n" },
+    }, { noManifest: true });
+    await expectRefuses(fx, REFUSALS.manifestMissing);
   });
 
   it("fails closed when the hash-pinned install itself fails", async () => {
@@ -713,21 +645,15 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     // records the argv, the install is real), and the workspace parse then
     // runs against the module the install produced, from the FETCHED base's
     // manifest.
-    const fx = await fixture(
-      PACKAGE_JSON(undefined),
-      PACKAGE_JSON(undefined),
-      {
-        base: {
-          "pnpm-workspace.yaml": "packages:\n  - \"a\"\nauditConfig:\n  ignoreGhsas:\n    - GHSA-vfj7-8cjw-p6xm\n",
-        },
-        merge: {
-          "pnpm-workspace.yaml": "packages: [\"a\"]\nauditConfig:\n  ignoreGhsas:\n    - GHSA-vfj7-8cjw-p6xm\n",
-        },
+    const fx = await fixture(PACKAGE_JSON(undefined), PACKAGE_JSON(undefined), {
+      base: {
+        "pnpm-workspace.yaml": "packages:\n  - \"a\"\nauditConfig:\n  ignoreGhsas:\n    - GHSA-vfj7-8cjw-p6xm\n",
       },
-    );
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
+      merge: {
+        "pnpm-workspace.yaml": "packages: [\"a\"]\nauditConfig:\n  ignoreGhsas:\n    - GHSA-vfj7-8cjw-p6xm\n",
+      },
+    });
+    const result = await expectPasses(fx);
 
     const invocations = (await readFile(result.argvLog, "utf8")).split("\n").filter((line) => line !== "");
     expect(invocations, "exactly one pip invocation").toHaveLength(1);

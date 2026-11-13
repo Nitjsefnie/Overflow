@@ -143,14 +143,31 @@ describe("sweep-only relay runs (issue 1116)", () => {
     };
   }
 
+  const triggeredEnv = () => sweepOnlyEnv({
+    OVERFLOW_LEDGER_SWEEP_ONLY: "false",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_ID: RUN_ID,
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: HEAD_SHA,
+    OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: PATH_CI,
+    OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "success",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: `https://github.com/Nitjsefnie/Overflow/actions/runs/${RUN_ID}`,
+    OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "push",
+    OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main",
+  });
+
+  const triggeredStart = () => makeFetch([
+    token(),
+    { status: 200, body: { jobs: [{ name: "verify", run_attempt: 1, status: "completed", conclusion: "success" }] } },
+    sweepListing([sweepRun(9001, { event: "push", head_branch: "main" })]),
+    checkRunsListing([]),
+    { status: 201, body: { id: 1 } },
+  ]);
+
+  const relay = (env: Record<string, string>, fetchFn: typeof fetch, delayFn = makeDelay().fn) =>
+    runRelay({ env, fetchFn, delayFn, readPinMap: async () => PIN_MAP });
+
   it("sweeps alone: the listing runs, the mirror and the heal never do, and it exits 0", async () => {
     const fetchStub = makeFetch([token(), sweepListing([])]);
-    const result = await runRelay({
-      env: sweepOnlyEnv(),
-      fetchFn: fetchStub.fn,
-      delayFn: makeDelay().fn,
-      readPinMap: async () => PIN_MAP,
-    });
+    const result = await relay(sweepOnlyEnv(), fetchStub.fn);
 
     expect(result.posted).toEqual([]);
     expect(result.decisions).toEqual([]);
@@ -175,12 +192,7 @@ describe("sweep-only relay runs (issue 1116)", () => {
       },
       { status: 201, body: { id: 1 } },
     ]);
-    const result = await runRelay({
-      env: sweepOnlyEnv(),
-      fetchFn: fetchStub.fn,
-      delayFn: makeDelay().fn,
-      readPinMap: async () => PIN_MAP,
-    });
+    const result = await relay(sweepOnlyEnv(), fetchStub.fn);
 
     expect(result.posted).toEqual([]);
     expect(result.sweep.relayed).toEqual([{ context: "actionlint", runId: "9002" }]);
@@ -200,14 +212,7 @@ describe("sweep-only relay runs (issue 1116)", () => {
     ["the dispatch run id", { OVERFLOW_LEDGER_DISPATCH_RUN_ID: RUN_ID }],
   ])("refuses sweep-only mode when %s is also set", async (_name, over) => {
     const fetchStub = makeFetch([token(), sweepListing([])]);
-    const error = await caughtError(
-      runRelay({
-        env: sweepOnlyEnv(over),
-        fetchFn: fetchStub.fn,
-        delayFn: makeDelay().fn,
-        readPinMap: async () => PIN_MAP,
-      }),
-    );
+    const error = await caughtError(relay(sweepOnlyEnv(over), fetchStub.fn));
 
     expect(error, "a sweep-only start names no triggering run").toBeInstanceOf(Error);
     expect(error?.message).toContain("LEDGER_SWEEP_ONLY=true is a sweep-only relay");
@@ -225,14 +230,7 @@ describe("sweep-only relay runs (issue 1116)", () => {
     ["a digit", "1"],
   ])("refuses a OVERFLOW_LEDGER_SWEEP_ONLY value that is neither true nor false: %j (%s)", async (_name, value) => {
     const fetchStub = makeFetch([token(), sweepListing([])]);
-    const error = await caughtError(
-      runRelay({
-        env: sweepOnlyEnv({ OVERFLOW_LEDGER_SWEEP_ONLY: value }),
-        fetchFn: fetchStub.fn,
-        delayFn: makeDelay().fn,
-        readPinMap: async () => PIN_MAP,
-      }),
-    );
+    const error = await caughtError(relay(sweepOnlyEnv({ OVERFLOW_LEDGER_SWEEP_ONLY: value }), fetchStub.fn));
 
     expect(error, "an ambiguous mode must fail closed").toBeInstanceOf(Error);
     expect(error?.message).toContain('LEDGER_SWEEP_ONLY must be exactly "true" or "false"');
@@ -241,14 +239,7 @@ describe("sweep-only relay runs (issue 1116)", () => {
 
   it("reads OVERFLOW_LEDGER_SWEEP_ONLY=false with no run id as today's no-triggering-run refusal", async () => {
     const fetchStub = makeFetch([token(), sweepListing([])]);
-    const error = await caughtError(
-      runRelay({
-        env: sweepOnlyEnv({ OVERFLOW_LEDGER_SWEEP_ONLY: "false" }),
-        fetchFn: fetchStub.fn,
-        delayFn: makeDelay().fn,
-        readPinMap: async () => PIN_MAP,
-      }),
-    );
+    const error = await caughtError(relay(sweepOnlyEnv({ OVERFLOW_LEDGER_SWEEP_ONLY: "false" }), fetchStub.fn));
 
     expect(error, "false is absent, and absent means today's refusal").toBeInstanceOf(Error);
     expect(error?.message).toContain("no triggering run in the environment");
@@ -269,14 +260,7 @@ describe("sweep-only relay runs (issue 1116)", () => {
       return fetchStub.fn(url as string, init);
     }) as unknown as typeof fetch;
     const delay = makeDelay();
-    const error = await caughtError(
-      runRelay({
-        env: sweepOnlyEnv(),
-        fetchFn: fn,
-        delayFn: delay.fn,
-        readPinMap: async () => PIN_MAP,
-      }),
-    );
+    const error = await caughtError(relay(sweepOnlyEnv(), fn, delay.fn));
 
     expect(error, "a thrown sweep must leave the job red").toBeInstanceOf(Error);
     expect(error?.message).toBe(
@@ -303,12 +287,7 @@ describe("sweep-only relay runs (issue 1116)", () => {
     const fetchStub = makeFetch([token(), sweepListing([sweepRun(9002, { path: PATH_ACTIONLINT })])]);
     const suites = failingSuites(fetchStub.fn, () => true);
     const delay = makeDelay();
-    const result = await runRelay({
-      env: sweepOnlyEnv(),
-      fetchFn: suites.fn,
-      delayFn: delay.fn,
-      readPinMap: async () => PIN_MAP,
-    });
+    const result = await relay(sweepOnlyEnv(), suites.fn, delay.fn);
 
     expect(result.sweepOnly).toBe(true);
     expect(result.sweepDeferred).toBe(`the ledger App's check-suites at ${HEAD_SHA} failed after 3 attempts: HTTP 500: `);
@@ -321,16 +300,9 @@ describe("sweep-only relay runs (issue 1116)", () => {
   });
 
   it("keeps a triggered start red when its orphan sweep's check-suites read stays 5xx (issue 1532)", async () => {
-    // The primary's own check-suites reads answer normally. The second runs
-    // listing is the sweep's: it names an orphan at the same head, and every
-    // check-suites read from then on fails.
-    const fetchStub = makeFetch([
-      token(),
-      { status: 200, body: { jobs: [{ name: "verify", run_attempt: 1, status: "completed", conclusion: "success" }] } },
-      sweepListing([sweepRun(9001, { event: "push", head_branch: "main" })]),
-      checkRunsListing([]),
-      { status: 201, body: { id: 1 } },
-    ]);
+    // The second runs listing is the sweep's: it names an orphan at the same
+    // head, and every check-suites read from then on fails.
+    const fetchStub = triggeredStart();
     let listings = 0;
     const withOrphan = (async (url: unknown, init?: RequestInit) => {
       if (String(url) === SWEEP_RUNS_URL && ++listings > 1) {
@@ -340,21 +312,7 @@ describe("sweep-only relay runs (issue 1116)", () => {
     }) as unknown as typeof fetch;
     const suites = failingSuites(withOrphan, () => listings > 1);
     const delay = makeDelay();
-    const error = await caughtError(runRelay({
-      env: sweepOnlyEnv({
-        OVERFLOW_LEDGER_SWEEP_ONLY: "false",
-        OVERFLOW_GITHUB_WORKFLOW_RUN_ID: RUN_ID,
-        OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: HEAD_SHA,
-        OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: PATH_CI,
-        OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "success",
-        OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: `https://github.com/Nitjsefnie/Overflow/actions/runs/${RUN_ID}`,
-        OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "push",
-        OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main",
-      }),
-      fetchFn: suites.fn,
-      delayFn: delay.fn,
-      readPinMap: async () => PIN_MAP,
-    }));
+    const error = await caughtError(relay(triggeredEnv(), suites.fn, delay.fn));
 
     expect(error, "a triggered start must not defer on a 5xx sweep read").toBeInstanceOf(Error);
     expect(error?.message).toBe(`the ledger App's check-suites at ${HEAD_SHA} failed after 3 attempts: HTTP 500: `);
@@ -376,12 +334,7 @@ describe("sweep-only relay runs (issue 1116)", () => {
       },
     ]);
     const delay = makeDelay();
-    const result = await runRelay({
-      env: sweepOnlyEnv(),
-      fetchFn: fetchStub.fn,
-      delayFn: delay.fn,
-      readPinMap: async () => PIN_MAP,
-    });
+    const result = await relay(sweepOnlyEnv(), fetchStub.fn, delay.fn);
 
     expect(result.sweepOnly).toBe(true);
     expect(result.sweepDeferred).toContain("rate limit exhausted");
@@ -405,34 +358,14 @@ describe("sweep-only relay runs (issue 1116)", () => {
     const rateLimited = () => new Response("API rate limit exceeded for installation ID 166057493", {
       status: 403, headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(resetSec) },
     });
-    const fetchStub = makeFetch([
-      token(),
-      { status: 200, body: { jobs: [{ name: "verify", run_attempt: 1, status: "completed", conclusion: "success" }] } },
-      sweepListing([sweepRun(9001, { event: "push", head_branch: "main" })]),
-      checkRunsListing([]),
-      { status: 201, body: { id: 1 } },
-    ]);
+    const fetchStub = triggeredStart();
     let listings = 0;
     const fn = (async (url: unknown, init?: RequestInit) => {
       if (String(url) === SWEEP_RUNS_URL && ++listings > 1) return rateLimited();
       return fetchStub.fn(url as string, init);
     }) as unknown as typeof fetch;
     const delay = makeDelay();
-    const error = await caughtError(runRelay({
-      env: sweepOnlyEnv({
-        OVERFLOW_LEDGER_SWEEP_ONLY: "false",
-        OVERFLOW_GITHUB_WORKFLOW_RUN_ID: RUN_ID,
-        OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_SHA: HEAD_SHA,
-        OVERFLOW_GITHUB_WORKFLOW_RUN_PATH: PATH_CI,
-        OVERFLOW_GITHUB_WORKFLOW_RUN_CONCLUSION: "success",
-        OVERFLOW_GITHUB_WORKFLOW_RUN_HTML_URL: `https://github.com/Nitjsefnie/Overflow/actions/runs/${RUN_ID}`,
-        OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "push",
-        OVERFLOW_GITHUB_WORKFLOW_RUN_HEAD_BRANCH: "main",
-      }),
-      fetchFn: fn,
-      delayFn: delay.fn,
-      readPinMap: async () => PIN_MAP,
-    }));
+    const error = await caughtError(relay(triggeredEnv(), fn, delay.fn));
 
     expect(error, "a triggered start must not defer on a rate-limited sweep").toBeInstanceOf(Error);
     expect(error?.message).toContain("the repository's workflow-run listing for the orphan sweep failed: " +
