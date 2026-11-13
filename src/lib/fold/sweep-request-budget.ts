@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { readEnv } from "@/lib/env";
 
 export { formatSweepWindow, readSweepWindowMs } from "@/lib/fold/sweep-window";
 
@@ -8,10 +9,12 @@ export class SweepBudgetSpent extends Error {
   }
 }
 
+const MAX_POSTGRES_INTEGER_BUDGET = 2147483647;
+
 export function readSweepRequestBudget(environment: Partial<Record<string, string>>): number {
-  const raw = environment.RECONCILIATION_SWEEP_REQUEST_BUDGET ?? "";
+  const raw = readEnv("RECONCILIATION_SWEEP_REQUEST_BUDGET", environment) ?? "";
   const value = /^\d+$/.test(raw) ? Number(raw) : NaN;
-  return Number.isSafeInteger(value) && value > 0 ? value : 3000;
+  return Number.isSafeInteger(value) && value > 0 && value <= MAX_POSTGRES_INTEGER_BUDGET ? value : 3000;
 }
 
 let observerFailureReported = false;

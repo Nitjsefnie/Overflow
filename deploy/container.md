@@ -89,7 +89,7 @@ The app service needs a `.env` file beside `docker-compose.yml` with the auth
 and webhook variables from [.env.example](../.env.example): `AUTH_SECRET`,
 `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET`, `OVERFLOW_TOKEN_ENCRYPTION_KEY`, `OVERFLOW_APP_URL`,
 `OVERFLOW_GITHUB_WEBHOOK_URL`, `OVERFLOW_GITLAB_WEBHOOK_URL`, `OVERFLOW_MODERATOR_GITHUB_USER_IDS`, and
-`GITHUB_GRAPHQL_BUDGET_RESERVE`. Compose feeds that file to the container and
+`OVERFLOW_GITHUB_GRAPHQL_BUDGET_RESERVE`. Compose feeds that file to the container and
 then overrides `OVERFLOW_DATABASE_URL` to reach postgres over the compose network by
 service name, so the loopback address a host-side `.env` would carry never
 reaches the app.

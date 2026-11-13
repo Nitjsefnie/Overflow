@@ -1,3 +1,5 @@
+import { readEnv } from "@/lib/env";
+
 export type GitHubGraphqlBudgetReading = {
   readonly remaining: number;
   readonly limit: number | null;
@@ -118,7 +120,7 @@ export function assessGraphqlBudget(
 export const DEFAULT_GRAPHQL_BUDGET_RESERVE: number = 500;
 
 export function readGraphqlBudgetReserve(env: NodeJS.ProcessEnv): number {
-  const value = env.GITHUB_GRAPHQL_BUDGET_RESERVE;
+  const value = readEnv("GITHUB_GRAPHQL_BUDGET_RESERVE", env);
   if (value === undefined || value.trim() === "") return DEFAULT_GRAPHQL_BUDGET_RESERVE;
   const reserve = Number(value);
   return Number.isInteger(reserve) && reserve >= 0 ? reserve : DEFAULT_GRAPHQL_BUDGET_RESERVE;
