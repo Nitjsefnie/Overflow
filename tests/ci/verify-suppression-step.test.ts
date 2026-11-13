@@ -27,8 +27,9 @@ const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "verify
  *
  * Two fixtures matter per case: the BASE commit (the acceptance's home) and
  * the MERGE commit (what the pull request would land). The step refuses
- * whenever the two trees carry different `pnpm.auditConfig` values, read from
- * git objects on both sides — never from the filesystem — and every refusal
+ * whenever the two trees carry different `pnpm.auditConfig` values (save a
+ * merge `ignoreGhsas` that strictly shrinks the base's), read from git
+ * objects on both sides — never from the filesystem — and every refusal
  * prints a FIXED constant that carries no pull-request bytes.
  */
 
@@ -389,6 +390,58 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
     expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.divergence);
     expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
+  });
+
+  // Issue 1592: removing ids makes the audit stricter, so a merge list that is
+  // a strict subset of the base's passes; every other change still refuses.
+  const [ID_A, ID_B, ID_C] = ["GHSA-vfj7-8cjw-p6xm", "GHSA-pxg6-pf52-xh8x", "GHSA-c2qf-rxjj-qqgw"];
+  const CVES = { ignoreCves: ["CVE-2099-0001"] };
+  const listed = (config: Record<string, unknown>): string => BASE_PACKAGE_JSON({ auditConfig: config });
+
+  it.each([
+    ["one id", { ignoreGhsas: [ID_A, ID_B] }, { ignoreGhsas: [ID_A] }],
+    ["several ids beside an unchanged key", { ...CVES, ignoreGhsas: [ID_A, ID_B, ID_C] }, { ...CVES, ignoreGhsas: [ID_B] }],
+    ["every id", { ignoreGhsas: [ID_A, ID_B] }, { ignoreGhsas: [] }],
+  ])("passes a merge tree that only removes %s from ignoreGhsas", async (_label, base, merge) => {
+    const fx = await fixture(listed(base), listed(merge));
+    const result = await runStep(fx);
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
+    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+  });
+
+  it.each([
+    ["removes one id and adds another", { ignoreGhsas: [ID_A, ID_B] }, { ignoreGhsas: [ID_A, MARKER] }],
+    ["repeats a kept id", { ignoreGhsas: [ID_A, ID_B] }, { ignoreGhsas: [ID_A, ID_A] }],
+    ["reorders the ids without removing one", { ignoreGhsas: [ID_A, ID_B] }, { ignoreGhsas: [ID_B, ID_A] }],
+    ["deletes the ignoreGhsas key", { ...CVES, ignoreGhsas: [ID_A, ID_B] }, { ...CVES }],
+    ["carries a non-string member", { ignoreGhsas: [ID_A, ID_B] }, { ignoreGhsas: [ID_A, { id: MARKER }] }],
+    ["turns the list into a mapping of kept ids", { ignoreGhsas: [ID_A, ID_B] }, { ignoreGhsas: { [ID_A]: true } }],
+    [
+      "removes an id and changes another auditConfig key",
+      { ...CVES, ignoreGhsas: [ID_A, ID_B] },
+      { ignoreCves: ["CVE-2099-0001", MARKER], ignoreGhsas: [ID_A] },
+    ],
+    ["removes an id and turns another key's 1 into true", { ignoreCves: 1, ignoreGhsas: [ID_A, ID_B] }, { ignoreCves: true, ignoreGhsas: [ID_A] }],
+  ])("refuses a merge tree whose ignoreGhsas change %s", async (_label, base, merge) => {
+    const fx = await fixture(listed(base), listed(merge));
+    const result = await runStep(fx);
+    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.divergence);
+    expect(`${result.stdout}${result.stderr}`, "no pull-request bytes may reach the log").not.toContain(MARKER);
+  });
+
+  it.each([
+    ["a workspace auditConfig", { "pnpm-workspace.yaml": `auditConfig:\n  ignoreGhsas:\n    - ${MARKER}\n` }, REFUSALS.wsDivergence],
+    ["a workspace auditLevel", { "pnpm-workspace.yaml": "auditLevel: critical\n" }, REFUSALS.wsDivergence],
+    ["a workspace registries mapping", { "pnpm-workspace.yaml": "registries:\n  default: https://attacker.invalid/\n" }, REFUSALS.wsDivergence],
+    ["an audited .npmrc key", { ".npmrc": `audit-level=critical ${MARKER}\n` }, REFUSALS.npmrcDivergence],
+  ])("refuses a merge tree that removes an id and also changes %s", async (_label, merge, refusal) => {
+    const fx = await fixture(listed({ ignoreGhsas: [ID_A, ID_B] }), listed({ ignoreGhsas: [ID_A] }), { merge });
+    const result = await runStep(fx);
+    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain(refusal);
+    expect(`${result.stdout}${result.stderr}`, "no pull-request bytes may reach the log").not.toContain(MARKER);
   });
 
   it("refuses a package.json committed as a symlink, and never prints the planted target", async () => {

@@ -379,7 +379,10 @@ jobs:
       # indentation and escaping never reach the comparison, while every nested
       # value and the order of the ignoreGhsas list itself do. Removal of the
       # whole key counts as divergence, as does adding one; present-null and
-      # absent read as the same, because pnpm treats both as no config.
+      # absent read as the same, because pnpm treats both as no config. The
+      # one admitted change is a merge ignoreGhsas list that strictly shrinks
+      # the base's (no repeated id, the rest of auditConfig equal): removing
+      # ids only makes the audit stricter.
       #
       # pnpm-workspace.yaml and .npmrc are read the same way, with two
       # differences their optionality buys: absent compares equal to a file
@@ -403,8 +406,9 @@ jobs:
       # projections so ordinary edits stay green.
       #
       # Every refusal is a FIXED constant: no pull-request-controlled bytes ever
-      # reach the log. Identical lists exit 0 silently. The step carries the
-      # event gate the leg itself implies — this file receives nothing but
+      # reach the log. Identical lists, and such a shrunk one, exit 0
+      # silently. The step carries the event gate the leg itself implies —
+      # this file receives nothing but
       # workflow_run, so the gate is redundant by the closed-trigger-set
       # argument, and it is pinned in the reachability suite so it cannot be
       # mutated into unreachability silently.
@@ -488,9 +492,10 @@ jobs:
           # the dump uniquely parseable back to one value, so string equality of the two
           # sides is structural equality - key order, indentation and escaping in
           # package.json never reach the comparison, while every nested value and the
-          # order of the ignoreGhsas list itself do.
+          # order of the ignoreGhsas list itself do, except the strict-subset rule the
+          # pre-parse applies when handed the base's value.
           value_of() {
-            git cat-file blob "${1:?}" | python3 -c "${pre_parse}"
+            git cat-file blob "${1:?}" | python3 -c "${pre_parse}" "${@:2}"
           }
           
           # Projects one side's pnpm-workspace.yaml (a blob id, or the ABSENT sentinel)
@@ -543,10 +548,23 @@ jobs:
               pnpm = parsed.get("pnpm")
               if isinstance(pnpm, dict):
                   config = pnpm.get("auditConfig")
+          canonical = lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"))
+          # Given the base's canonical value, a merge list that is a strict subset of
+          # the base's (no repeats, the rest of auditConfig equal) projects to the
+          # base's value: removing ids only makes the audit stricter.
+          def ids_of(value):
+              ids = value.get("ignoreGhsas") if isinstance(value, dict) else None
+              return ids if isinstance(ids, list) and all(isinstance(i, str) for i in ids) else None
+          reference = json.loads(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1] != "absent" else None
+          base_ids, merge_ids = ids_of(reference), ids_of(config)
+          if base_ids is not None and merge_ids is not None:
+              rest = lambda value: canonical({k: v for k, v in value.items() if k != "ignoreGhsas"})
+              if rest(config) == rest(reference) and len(set(merge_ids)) == len(merge_ids) and set(merge_ids) < set(base_ids):
+                  config = reference
           if config is None:
               sys.stdout.write("absent")
           else:
-              sys.stdout.write(json.dumps(config, sort_keys=True, separators=(",", ":")))
+              sys.stdout.write(canonical(config))
           PY
           )
           ws_pre_parse=$(cat <<'PY'
@@ -731,7 +749,7 @@ jobs:
           base_blob=$(blob_of "${OVERFLOW_BASE_SHA:?}")
           merge_blob=$(blob_of "${OVERFLOW_MERGE_SHA:?}")
           base_value=$(value_of "${base_blob}") || exit 1
-          merge_value=$(value_of "${merge_blob}") || exit 1
+          merge_value=$(value_of "${merge_blob}" "${base_value}") || exit 1
           if [ "${base_value}" != "${merge_value}" ]; then
             echo "::error::this pull request changes pnpm.auditConfig; a pull request cannot change the audit suppression list — the list moves only through a maintainer-reviewed merge"
             exit 1
