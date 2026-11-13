@@ -1,4 +1,4 @@
-import { discardInactivePassAfterFailure, StagedPassDataUnreadable, withSweepPass, type ReconciliationSweepControl, type SweepPass } from "@/lib/fold/sweep-pass";
+import { discardInactivePassAfterFailure, discardSweepPass, StagedPassDataUnreadable, withSweepPass, type ReconciliationSweepControl, type SweepPass } from "@/lib/fold/sweep-pass";
 import type { ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
 import { readEnv } from "@/lib/env";
 import { readDiffOnlyBacklogThreshold } from "@/lib/fold/repository-size";
@@ -306,9 +306,6 @@ async function reconcileRepositoryAfterRepositoryRead(
   const runId = await dependencies.store.beginRun(repositoryId, { rederivation: rederive });
   let failedCost: Omit<ReconciliationCostCharge, "completedAt"> | null = null;
   let pass: SweepPass | undefined;
-  const discardPass = async () => {
-    try { await pass?.complete(); } catch { console.error("Could not discard reconciliation sweep checkpoints."); }
-  };
   try {
     if (!repository.active) {
       await dependencies.sweep?.discardPass(repositoryId);
@@ -358,13 +355,13 @@ async function reconcileRepositoryAfterRepositoryRead(
         // rename or transfer, so every read below is aimed by the numeric identity instead.
         const verified = await dependencies.github.getRepositoryById(repository.githubRepositoryId);
         if (verified === null) {
-          await discardPass();
+          await discardSweepPass(pass);
           return declineCrawl(dependencies, repositoryId, runId, "NOT_FOUND", now());
         }
         // GitHub answering for an id other than the one asked for should be impossible;
         // decline rather than materialize whatever it did answer with.
         if (verified.id !== repository.githubRepositoryId) {
-          await discardPass();
+          await discardSweepPass(pass);
           return declineCrawl(dependencies, repositoryId, runId, "IDENTITY_MISMATCH", now());
         }
         // Only public repositories can be registered, and one that stopped being public
@@ -373,7 +370,7 @@ async function reconcileRepositoryAfterRepositoryRead(
         // and lands in NOT_FOUND above. The branch is kept for a broader-scoped token,
         // where materializing a private repository would be worse than declining.
         if (verified.visibility !== "PUBLIC") {
-          await discardPass();
+          await discardSweepPass(pass);
           return declineCrawl(dependencies, repositoryId, runId, "NOT_PUBLIC", now());
         }
 
@@ -550,7 +547,7 @@ async function reconcileRepositoryAfterRepositoryRead(
             pullRequests: [...pullRequestEvidence].map(([id, evidence]) => ({ id, ...evidence })), dirtySubjects,
           } });
 
-          await discardPass();
+          await discardSweepPass(pass);
           return {
             repositoryId,
             runId,
@@ -581,7 +578,7 @@ async function reconcileRepositoryAfterRepositoryRead(
       return { repositoryId, runId: null, skipped: true, budgetHeldUntil: error.resetAt,
         adds: 0, changes: 0, removals: 0, added: 0, changed: 0, removed: 0 };
     }
-    if (error instanceof StagedPassDataUnreadable) await discardPass();
+    if (error instanceof StagedPassDataUnreadable) await discardSweepPass(pass);
     // The stored message stays fixed: an upstream error can carry the sponsor's
     // GitHub token in a URL, and reconciliation_runs is read by the product.
     // PostgreSQL diagnostic fields can quote the forge record. Keep them out

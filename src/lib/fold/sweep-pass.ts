@@ -53,6 +53,9 @@ export async function discardInactivePassAfterFailure<T>(
     throw error;
   }
 }
+export async function discardSweepPass(pass: SweepPass | undefined): Promise<void> {
+  try { await pass?.complete(); } catch { console.error("Could not discard reconciliation sweep checkpoints."); }
+}
 const passes = new AsyncLocalStorage<SweepPass>();
 const freshReads = new AsyncLocalStorage<boolean>();
 export function withSweepPass<T>(pass: SweepPass | undefined, work: () => Promise<T>): Promise<T> {
