@@ -46,9 +46,7 @@ describe("paused full-pass pages", () => {
       const f = await materializeRepositoryFixture(sql);
       const pass = await new PostgresSweepPassStore(sql).open({ repositoryId: f.repositoryId,
         evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
-      await pass.write("first", { page: 1 });
-      await pass.write("second", { page: 2 });
-      await pass.write("third", { page: 3 });
+      await writePages(pass, ["first", "second", "third"]);
       expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
       expect(await pass.read("third")).toBeUndefined();
     } finally {
@@ -79,30 +77,21 @@ describe("paused full-pass pages", () => {
     expect(results.map((result) => result.status)).toEqual(["rejected", "fulfilled"]);
     await pass.write("second", { page: 2 }, "cursor-two");
     expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
-    expect(await pass.read("failed")).toBeUndefined();
-    expect(await pass.read("first")).toEqual({ page: 1 });
-    expect(await pass.read("second")).toEqual({ page: 2 });
-    expect(await sql`select walk_cursor from reconciliation_sweep_passes where pass_id = ${pass.id}`)
-      .toEqual([{ walk_cursor: "cursor-two" }]);
+    expect(await readPages(pass, ["failed", "first", "second"])).toEqual([undefined, { page: 1 }, { page: 2 }]);
+    expect(await sql`select walk_cursor from reconciliation_sweep_passes where pass_id = ${pass.id}`).toEqual([{ walk_cursor: "cursor-two" }]);
   });
 
   it("stops storing at the ceiling and replays the stored pair on reopen", async () => {
     const f = await materializeRepositoryFixture(sql);
     const input = { repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] };
     const pass = await new PostgresSweepPassStore(sql, 2).open(input);
-    await pass.write("first", { page: 1 }, "cursor-one");
-    await pass.write("second", { page: 2 }, "cursor-two");
-    await pass.write("third", { page: 3 }, "cursor-three");
+    await writePages(pass, ["first", "second", "third"], 1, ["cursor-one", "cursor-two", "cursor-three"]);
     expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
-    expect(await pass.read("first")).toEqual({ page: 1 });
-    expect(await pass.read("second")).toEqual({ page: 2 });
-    expect(await pass.read("third")).toBeUndefined();
-    expect(await sql`select walk_cursor from reconciliation_sweep_passes where pass_id = ${pass.id}`)
-      .toEqual([{ walk_cursor: "cursor-two" }]);
+    expect(await readPages(pass, ["first", "second", "third"])).toEqual([{ page: 1 }, { page: 2 }, undefined]);
+    expect(await sql`select walk_cursor from reconciliation_sweep_passes where pass_id = ${pass.id}`).toEqual([{ walk_cursor: "cursor-two" }]);
     const reopened = await new PostgresSweepPassStore(sql, 2).open(input);
     expect(reopened.id).toBe(pass.id);
-    expect(await reopened.read("first")).toEqual({ page: 1 });
-    expect(await reopened.read("second")).toEqual({ page: 2 });
+    expect(await readPages(reopened, ["first", "second"])).toEqual([{ page: 1 }, { page: 2 }]);
     await reopened.write("fourth", { page: 4 });
     expect(await reopened.read("fourth")).toBeUndefined();
     expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
@@ -112,34 +101,24 @@ describe("paused full-pass pages", () => {
     const f = await materializeRepositoryFixture(sql);
     const input = { repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] };
     const old = await new PostgresSweepPassStore(sql, 3).open(input);
-    await old.write("first", { page: 1 });
-    await old.write("second", { page: 2 });
-    await old.write("third", { page: 3 });
+    await writePages(old, ["first", "second", "third"]);
     expect(await stagedCounts(f.repositoryId, old.id)).toEqual({ passes: 1, pages: 3 });
     const pass = await new PostgresSweepPassStore(sql, 2).open(input);
     expect(pass.id).toBe(old.id);
     expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 0 });
     expect(await pass.read("first")).toBeUndefined();
-    await pass.write("new-first", { page: 4 });
-    await pass.write("new-second", { page: 5 });
-    await pass.write("new-third", { page: 6 });
+    await writePages(pass, ["new-first", "new-second", "new-third"], 4);
     expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
-    expect(await pass.read("new-first")).toEqual({ page: 4 });
-    expect(await pass.read("new-second")).toEqual({ page: 5 });
-    expect(await pass.read("new-third")).toBeUndefined();
+    expect(await readPages(pass, ["new-first", "new-second", "new-third"])).toEqual([{ page: 4 }, { page: 5 }, undefined]);
   });
 
   it("keeps each repository pass's ceiling independent", async () => {
     const store = new PostgresSweepPassStore(sql, 2);
     for (const f of [await materializeRepositoryFixture(sql), await materializeRepositoryFixture(sql)]) {
       const pass = await store.open({ repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
-      await pass.write("first", { page: 1 });
-      await pass.write("second", { page: 2 });
-      await pass.write("third", { page: 3 });
+      await writePages(pass, ["first", "second", "third"]);
       expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
-      expect(await pass.read("first")).toEqual({ page: 1 });
-      expect(await pass.read("second")).toEqual({ page: 2 });
-      expect(await pass.read("third")).toBeUndefined();
+      expect(await readPages(pass, ["first", "second", "third"])).toEqual([{ page: 1 }, { page: 2 }, undefined]);
     }
   });
 
@@ -149,23 +128,17 @@ describe("paused full-pass pages", () => {
       evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
     await pass.write("first", { page: 1 }, "cursor-one");
     await pass.write("first", { page: 99 }, "duplicate-cursor");
-    expect(await sql`select walk_cursor from reconciliation_sweep_passes where pass_id = ${pass.id}`)
-      .toEqual([{ walk_cursor: "cursor-one" }]);
-    await pass.write("second", { page: 2 }, "cursor-two");
-    await pass.write("third", { page: 3 }, "cursor-three");
+    expect(await sql`select walk_cursor from reconciliation_sweep_passes where pass_id = ${pass.id}`).toEqual([{ walk_cursor: "cursor-one" }]);
+    await writePages(pass, ["second", "third"], 2, ["cursor-two", "cursor-three"]);
     expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
-    expect(await pass.read("first")).toEqual({ page: 1 });
-    expect(await pass.read("second")).toEqual({ page: 2 });
-    expect(await pass.read("third")).toBeUndefined();
+    expect(await readPages(pass, ["first", "second", "third"])).toEqual([{ page: 1 }, { page: 2 }, undefined]);
   });
 
   it("completes a capped pass by deleting the pass and its pages", async () => {
     const f = await materializeRepositoryFixture(sql);
     const pass = await new PostgresSweepPassStore(sql, 2).open({ repositoryId: f.repositoryId,
       evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
-    await pass.write("first", { page: 1 });
-    await pass.write("second", { page: 2 });
-    await pass.write("third", { page: 3 });
+    await writePages(pass, ["first", "second", "third"]);
     expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
     await pass.complete();
     expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 0, pages: 0 });
@@ -297,14 +270,12 @@ describe("paused full-pass pages", () => {
     expect(await runNextReconciliationJob({ store: f.store, now: () => at, scheduleLeaseRenewal: () => () => {},
       reconcile: (id, options) => reconcileRepository(dependencies, id, options) })).toBe("RECONCILED");
     expect(sent).toBe(5);
-    expect(await sql`select spent from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`)
-      .toEqual([{ spent: 3 }]);
+    expect(await sql`select spent from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`).toEqual([{ spent: 3 }]);
     // The same spent round still holds a fold that runs under it.
     await f.store.enqueueReconciliationJob(f.repositoryId, "SWEEP");
     expect(await runNextReconciliationJob({ store: f.store, now: () => at, scheduleLeaseRenewal: () => () => {},
       reconcile: (id, options) => reconcileRepository(dependencies, id, options) })).toBe("BUDGET_HELD");
-    expect(await sql`select spent from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`)
-      .toEqual([{ spent: 3 }]);
+    expect(await sql`select spent from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`).toEqual([{ spent: 3 }]);
   });
 
   it("continues unread REST and GraphQL pages after budget exhaustion and a process restart", async () => {
@@ -791,6 +762,14 @@ function signal() {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => { resolve = done; });
   return { promise, resolve };
+}
+
+async function writePages(pass: SweepPass, keys: string[], first = 1, cursors: string[] = []) {
+  for (const [index, key] of keys.entries()) await pass.write(key, { page: first + index }, cursors[index]);
+}
+
+function readPages(pass: SweepPass, keys: string[]) {
+  return Promise.all(keys.map((key) => pass.read(key)));
 }
 
 async function stagedCounts(repositoryId: string, passId: string) {

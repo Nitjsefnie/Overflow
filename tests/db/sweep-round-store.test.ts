@@ -33,8 +33,7 @@ afterAll(async () => {
 
 async function insertSponsor(): Promise<string> {
   const githubUserId = 5_000_000 + (externalId += 1);
-  const [row] = await sql<{ id: string }[]>`
-    insert into users (github_user_id, github_login)
+  const [row] = await sql<{ id: string }[]>`insert into users (github_user_id, github_login)
     values (${githubUserId}, ${`sponsor-${externalId}`}) returning id`;
   return row.id;
 }
@@ -94,8 +93,7 @@ describe("per-sponsor durable sweep rounds", () => {
     expect(await store.spend(sponsorId, repositoryId, new Date(at.getTime() + 89 * minute), 1)).toEqual(new Date(at.getTime() + 90 * minute));
     // 200 minutes in, the round aligns to the window grid: 2 * 90 minutes.
     expect(await store.spend(sponsorId, repositoryId, new Date(at.getTime() + 200 * minute), 1)).toBeNull();
-    expect(await round()).toEqual({ window_start: new Date(at.getTime() + 180 * minute),
-      next_enqueue_at: new Date(at.getTime() + 180 * minute) });
+    expect(await round()).toEqual({ window_start: new Date(at.getTime() + 180 * minute), next_enqueue_at: new Date(at.getTime() + 180 * minute) });
   });
 
   it("takes the window from the environment when none is passed", async () => {
@@ -157,8 +155,7 @@ describe("per-sponsor durable sweep rounds", () => {
     expect(await store.enqueueNext(sponsorId, ids, new Date(at.getTime() + 915_000), 3000, offer)).toBeNull();
     expect(await store.enqueueNext(sponsorId, ids, new Date(at.getTime() + 1_110_000), 3000, offer)).toBeNull();
     expect(await store.enqueueNext(sponsorId, ids, new Date(at.getTime() + 1_125_000), 3000, offer)).toBe("002");
-    expect(await sql`select next_enqueue_at from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`)
-      .toEqual([{ next_enqueue_at: new Date(at.getTime() + 1_332_000) }]);
+    expect(await sql`select next_enqueue_at from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`).toEqual([{ next_enqueue_at: new Date(at.getTime() + 1_332_000) }]);
     expect(offered).toEqual(["000", "001", "002"]);
   });
 
@@ -179,8 +176,7 @@ describe("per-sponsor durable sweep rounds", () => {
     expect(await tick(new Date(at.getTime() + 15_000))).toEqual({ attempted: 1, enqueued: 1, failed: 0 });
     expect(attempted).toEqual(["a", "a"]);
     expect(failures).toEqual(["a"]);
-    expect(await sql`select rotation_cursor from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`)
-      .toEqual([{ rotation_cursor: "a" }]);
+    expect(await sql`select rotation_cursor from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`).toEqual([{ rotation_cursor: "a" }]);
   });
 
   it("atomically admits exactly the ceiling under concurrent stores and survives restart", async () => {
@@ -246,8 +242,7 @@ describe("per-sponsor durable sweep rounds", () => {
       // table's row is untouched. Each sponsor's window anchors at its first
       // sweep, so the singleton's spent never becomes any sponsor's debt.
       expect(await upgradeSql`select * from reconciliation_sweep_rounds`).toEqual([]);
-      expect(await upgradeSql`select window_start, spent from reconciliation_sweep_round`)
-        .toEqual([{ window_start: at, spent: 3000 }]);
+      expect(await upgradeSql`select window_start, spent from reconciliation_sweep_round`).toEqual([{ window_start: at, spent: 3000 }]);
 
       // First touch after deploy: the sponsor's row starts from zero and the
       // first fold's spend admits at once, charging one. The sponsor row and
