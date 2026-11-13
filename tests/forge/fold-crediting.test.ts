@@ -422,20 +422,28 @@ describe("linking claims past GitLab work (decision 3 retroactivity)", () => {
     await publish(scenario, foldOf(scenario));
     // Self-work: the debtor IS the linking contributor. The existing row is
     // re-pointed to the contributor as its debtor, keeping its identity.
-    await sql`
+    const [settlement] = await sql`
       update settlements
       set debtor_id = ${scenario.linkedUserId}, creditor_id = null
       where issue_id in (select id from issues where repository_id = ${scenario.repositoryId})
+      returning id
     `;
+    // A stored moderation line naming the row (migration 091 dropped its foreign key) never blocks the claim.
+    const user = scenario.linkedUserId;
+    await sql`with event as (insert into moderation_events (target_user_id, actor_id, prior_state, new_state, reason)
+        values (${user}, ${user}, 'ACTIVE', 'ACTIVE', 'Fixture.') returning id),
+      audit as (insert into calibration_audits (account_id, reporter_id, rationale, sample_started_at, sample_ended_at, settled_sample_size)
+        values (${user}, ${user}, 'Fixture.', '2025-01-01', '2025-02-01', 1) returning id),
+      adjustment as (insert into moderation_credit_adjustments (moderation_event_id, calibration_audit_id, target_account_id,
+        gap_per_pair, pair_count, total_amount, reason) select event.id, audit.id, ${user}, 4, 1, 4, 'Fixture.' from event, audit returning id)
+      insert into moderation_credit_adjustment_lines (adjustment_id, settlement_id, creditor_id, amount)
+        select id, ${settlement.id}, ${user}, 4 from adjustment`;
 
-    await claimForgeIdentity(sql, {
-      userId: scenario.linkedUserId,
-      instanceUrl: INSTANCE,
-      forgeUserId: FORGE_USER_ID,
-    });
-    // The self-work arm consumes the row: the calibration stands and the
-    // settlement row is gone.
+    await claimForgeIdentity(sql, { userId: user, instanceUrl: INSTANCE, forgeUserId: FORGE_USER_ID });
+    // The self-work arm consumes the row: the calibration stands, the
+    // settlement row is gone and the line naming it stays.
     expect(await settlementRows(scenario.repositoryId)).toEqual([]);
+    expect(await sql`select amount from moderation_credit_adjustment_lines where settlement_id = ${settlement.id}`).toEqual([{ amount: 4 }]);
     const calibrations = await sql`
       select user_id::text as user_id, actual_points from self_work_calibrations
       where user_id = ${scenario.linkedUserId}
