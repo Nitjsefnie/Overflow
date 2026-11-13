@@ -120,6 +120,16 @@ describe("per-sponsor durable sweep rounds", () => {
     expect(row).toEqual({ window_start: at, spent: 1, next_enqueue_at: at });
   });
 
+  it("bounds a spend at the largest integer column budget", async () => {
+    const store = new PostgresSponsorSweepRoundStore(sql);
+    const sponsorId = await insertSponsor();
+    const repositoryId = await insertRepository(sponsorId);
+    expect(await store.spend(sponsorId, repositoryId, at, 2147483647)).toBeNull();
+    await sql`update reconciliation_sweep_rounds set spent = 2147483647 where sponsor_id = ${sponsorId}`;
+    expect(await store.spend(sponsorId, repositoryId, at, 2147483647)).toEqual(next);
+    await expect(store.spend(sponsorId, repositoryId, at, 2147483648)).rejects.toThrow();
+  });
+
   it("offers every repository of a sponsor within six hours at the production 15-second poll cadence", async () => {
     const store = new PostgresSponsorSweepRoundStore(sql);
     const sponsorId = await insertSponsor();
@@ -146,8 +156,7 @@ describe("per-sponsor durable sweep rounds", () => {
     const store = new PostgresSponsorSweepRoundStore(sql);
     const sponsorId = await insertSponsor();
     const ids = Array.from({ length: 100 }, (_, index) => String(index).padStart(3, "0"));
-    const offered: string[] = [];
-    const offer = async (id: string) => { offered.push(id); };
+    const offered: string[] = [], offer = async (id: string) => { offered.push(id); };
     await store.enqueueNext(sponsorId, ids, at, 3000, offer);
     const resumedAt = new Date(at.getTime() + 900_000);
     expect(await store.enqueueNext(sponsorId, ids, resumedAt, 3000, offer)).toBe("001");
@@ -162,8 +171,7 @@ describe("per-sponsor durable sweep rounds", () => {
   it("retries the same durable slot after the production sweep reports an enqueue failure", async () => {
     const store = new PostgresSponsorSweepRoundStore(sql);
     const sponsorId = await insertSponsor();
-    const attempted: string[] = [];
-    const failures: string[] = [];
+    const attempted: string[] = [], failures: string[] = [];
     let reject = true;
     const tick = (now: Date) => sweepReconciliations({
       round: store, now: () => now,
@@ -196,8 +204,7 @@ describe("per-sponsor durable sweep rounds", () => {
     let store = new PostgresSponsorSweepRoundStore(sql);
     const sponsorId = await insertSponsor();
     const repositoryId = await insertRepository(sponsorId);
-    const queued: string[] = [];
-    const offer = async (id: string) => { queued.push(id); };
+    const queued: string[] = [], offer = async (id: string) => { queued.push(id); };
     expect(await store.enqueueNext(sponsorId, ["c", "a", "b"], at, 2, offer)).toBe("a");
     store = new PostgresSponsorSweepRoundStore(sql);
     expect(await store.enqueueNext(sponsorId, ["c", "a", "b"], at, 2, offer)).toBeNull();
