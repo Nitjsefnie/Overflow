@@ -2269,7 +2269,6 @@ for (const scenario of PRT_SCENARIOS) {
   });
 }
 
-
 for (const scenario of SCENARIOS.filter((entry) => entry.file === "ci.yml")) {
   it(`runs the prerender gate on ${scenario.label}`, () => {
     const selected = selectSteps(stepsFor(scenario), contextFor(scenario));

@@ -13,7 +13,6 @@ import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-director
 const fixtureDirectories = createOwnedTempDirectoryRegistry(join(tmpdir(), "legal-revisions-"));
 afterAll(() => fixtureDirectories.disposeAsync());
 
-
 const TERMS = "src/app/terms/page.tsx";
 const RULES = "src/app/rules/page.tsx";
 const ACCOUNT_DATA = "src/app/account-data/page.tsx";

@@ -926,7 +926,6 @@ describe("reconciliation budget holds under the repository lock", () => {
     await expect(schedule.drain()).resolves.toEqual([]);
     expect(informed).not.toHaveBeenCalled();
   });
-
 });
 
 describe("reconciliation drains concurrent GitHub reads before recording failure cost", () => {

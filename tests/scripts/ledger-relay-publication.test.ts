@@ -1112,7 +1112,6 @@ describe("trigger validation still recovers displaced completions", () => {
   });
 });
 
-
 describe("panel regression: App suite visibility", () => {
   it.each([999, 1001])("preserves the newer failure behind %i newer non-App suites", async (laterSuites) => {
     const w = world("pr-gates");
@@ -1448,7 +1447,6 @@ describe("mirror reserve scope", () => {
     expect(w.state.checks[0]).toMatchObject({ external_id: "9001:1", conclusion: "success" });
   });
 });
-
 
 describe("issue 1207 queued late completions", () => {
   it.each([

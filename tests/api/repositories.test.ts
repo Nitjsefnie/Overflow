@@ -2046,7 +2046,6 @@ describe("DELETE /api/repositories", () => {
     });
   });
 
-
   // A cross-site form post carries the session cookie by itself, so a forged
   // unregistration must cost the server nothing: no token lookup, no session
   // read, no unregister setup.
@@ -2482,7 +2481,6 @@ describe("repository writes for a deleted account (issue 733)", () => {
       error: { code: "FORBIDDEN", message: "A member account is required." },
     });
   });
-
 
   it("lets a live account through, consulting the role read once", async () => {
     const getCurrentRole = vi.fn(async () => "MEMBER" as const);

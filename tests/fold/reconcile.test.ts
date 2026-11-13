@@ -2467,4 +2467,3 @@ class StatefulSettlementMaterializer {
     return [...this.state.entries()].sort(([left], [right]) => left - right);
   }
 }
-

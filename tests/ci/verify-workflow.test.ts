@@ -805,7 +805,6 @@ describe("the verify workflow's conflict-marker and commit-scope gates", () => {
   });
 });
 
-
 describe("the verify workflow's prerender step", () => {
   let steps: WorkflowStep[] = [];
   beforeAll(async () => {

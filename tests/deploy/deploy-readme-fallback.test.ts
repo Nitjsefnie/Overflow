@@ -9,7 +9,6 @@ import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-director
 
 const fixtureDirectories = createOwnedTempDirectoryRegistry(path.join(tmpdir(), "overflow-readme-fallback-"));
 
-
 const readme = fileURLToPath(new URL("../../deploy/README.md", import.meta.url));
 const deployScript = fileURLToPath(new URL("../../scripts/deploy-revision.sh", import.meta.url));
 
