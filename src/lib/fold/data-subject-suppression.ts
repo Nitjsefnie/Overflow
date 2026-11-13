@@ -1,6 +1,6 @@
 import { DELETED_ACCOUNT_LOGIN } from "@/lib/accounts/deletion";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
-import type { SqlClient, TransactionClient } from "@/lib/db/types";
+import type { TransactionClient } from "@/lib/db/types";
 import type { FoldResult } from "@/lib/fold/repository-fold";
 import type { GitHubIssue, GitHubIssueComment, GitHubIssueHistoryEvent, GitHubPullRequest } from "@/lib/github/types";
 import type { ReconciliationSynchronization } from "@/lib/fold/reconciliation-evidence";
@@ -353,16 +353,11 @@ export function suppressionScope(provider: string, instanceUrl: string | null): 
   return { provider, instanceUrl: normalizeInstanceUrl(instanceUrl ?? "https://github.com") };
 }
 
-/** A scope's suppressions, narrowed to the given forge ids when named. */
-export async function listSuppressions(
-  sql: SqlClient | TransactionClient,
+async function listSuppressions(
+  sql: TransactionClient,
   scope: { provider: string; instanceUrl: string },
-  forgeIds?: readonly number[],
 ): Promise<{ forge_id: number | string; logins: string[] }[]> {
-  if (forgeIds?.length === 0) return [];
   return sql<{ forge_id: number | string; logins: string[] }[]>`
-    select forge_id, logins from data_subject_suppressions
-    where provider = ${scope.provider} and instance_url = ${scope.instanceUrl}
-      and (${forgeIds === undefined} or forge_id = any(${sql.array((forgeIds ?? []).map(String))}::bigint[]))
+    select forge_id, logins from data_subject_suppressions where provider = ${scope.provider} and instance_url = ${scope.instanceUrl}
   `;
 }
