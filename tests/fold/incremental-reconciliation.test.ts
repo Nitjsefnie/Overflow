@@ -49,8 +49,7 @@ describe("incremental reconciliation", () => {
     issue.body = "Dirty\u0000body";
     issue.updatedAt = "2026-09-08T09:58:00Z";
     await f.dirty("ISSUE", issue);
-    f.clock = new Date("2026-09-08T10:02:00Z");
-    await f.run();
+    await f.runAt("2026-09-08T10:02:00Z");
 
     expect(f.issueReads).toEqual([issue.number]);
     const [issueRow] = await sql`select title, body from issues where repository_id = ${f.id} and github_issue_id = ${issue.id}`;
@@ -58,8 +57,7 @@ describe("incremental reconciliation", () => {
     // the issue body outright, so the sanitized title is the surviving check.
     expect(issueRow).toMatchObject({ title: "Dirty\uFFFDtitle", body: null });
     const [cachedFact] = await sql<{ payload: { title: string; body?: string } }[]>`
-      select payload from repository_reconciliation_evidence_facts
-      where repository_id = ${f.id} and kind = 'issue' and subject_key = ${String(issue.id)}`;
+      select payload from repository_reconciliation_evidence_facts where repository_id = ${f.id} and kind = 'issue' and subject_key = ${String(issue.id)}`;
     expect(cachedFact!.payload).toMatchObject({ title: "Dirty\uFFFDtitle" });
     expect("body" in cachedFact!.payload).toBe(false);
   });
@@ -86,11 +84,9 @@ describe("incremental reconciliation", () => {
     expect(prRow).toMatchObject({ title: "PR\uFFFDtitle", body: null,
       proof_sha256: createHash("sha256").update("diff\uFFFDbody").digest("hex") });
     const [cachedIssueFact] = await sql<{ payload: { body?: string; comments: Array<{ body: string }>; closingPullRequests: Array<Record<string, unknown>> } }[]>`
-      select payload from repository_reconciliation_evidence_facts
-      where repository_id = ${f.id} and kind = 'issue' and subject_key = ${String(issue.id)}`;
+      select payload from repository_reconciliation_evidence_facts where repository_id = ${f.id} and kind = 'issue' and subject_key = ${String(issue.id)}`;
     const [cachedPrFact] = await sql<{ payload: { id: number; rawDiff: string } }[]>`
-      select payload from repository_reconciliation_evidence_facts
-      where repository_id = ${f.id} and kind = 'pull_request' and subject_key = ${String(pr.id)}`;
+      select payload from repository_reconciliation_evidence_facts where repository_id = ${f.id} and kind = 'pull_request' and subject_key = ${String(pr.id)}`;
     expect(cachedIssueFact).toBeDefined();
     expect(cachedPrFact).toBeDefined();
     // New cache writes stop holding body text (issue 681): comment bodies
@@ -106,8 +102,7 @@ describe("incremental reconciliation", () => {
     expect("body" in cachedIssue.closingPullRequests[0]!).toBe(false);
     expect(cachedPrFact!.payload).toMatchObject({ id: pr.id, rawDiff: "diff\uFFFDbody" });
 
-    f.clock = new Date("2026-09-08T10:02:00Z");
-    await f.run();
+    await f.runAt("2026-09-08T10:02:00Z");
     const [secondPrRow] = await sql`select proof_sha256 from pull_requests where repository_id = ${f.id} and github_pull_request_id = ${pr.id}`;
     expect(secondPrRow!.proof_sha256).toBe(prRow!.proof_sha256);
     expect(f.diffReads.filter((number) => number === pr.number)).toHaveLength(1);
@@ -124,15 +119,13 @@ describe("incremental reconciliation", () => {
       where repository_id = ${f.id} and github_issue_id = ${issue.id}`)[0]!.done_when;
     const freshPass = async (minute: number) => {
       issue.updatedAt = `2026-09-08T10:${minute}:00Z`;
-      f.clock = new Date(`2026-09-08T10:${minute + 1}:00Z`);
-      await f.run();
+      await f.runAt(`2026-09-08T10:${minute + 1}:00Z`);
       expect(f.scans.at(-1)).toBeDefined();
       return doneWhen();
     };
     await f.run();
     expect(await doneWhen()).toBe("Done when the suite passes.");
-    f.clock = new Date("2026-09-08T10:04:00Z");
-    await f.run();
+    await f.runAt("2026-09-08T10:04:00Z");
     expect(f.scans.at(-1)).toBeDefined();
     expect(f.issueReads).toEqual([]);
     expect(await doneWhen()).toBe("Done when the suite passes.");
@@ -154,26 +147,65 @@ describe("incremental reconciliation", () => {
     issue.comments = [{ id: "done-when", databaseId: 90003, authorLogin: issue.authorLogin, authorGitHubUserId: issue.authorGitHubUserId,
       body: "Done when the suite passes.", createdAt: "2026-09-01T09:00:00Z", lastEditedAt: null }];
     const statements = () => sql`select github_issue_id, done_when from issues where repository_id = ${f.id} and done_when is not null`;
-    const pass = async (updatedAt: string | null, clock: string, since: string) => {
+    // Every pass after the suppression is a full listing: the sponsor's cache is never folded.
+    const pass = async (updatedAt: string | null, clock: string) => {
       if (updatedAt !== null) issue.updatedAt = updatedAt;
-      f.clock = new Date(clock);
-      await f.run();
-      expect(f.scans.at(-1)).toBe(since);
+      await f.runAt(clock);
+      expect(f.scans.at(-1)).toBeUndefined();
     };
     await f.run();
     expect(await statements()).toEqual([{ github_issue_id: String(issue.id), done_when: "Done when the suite passes." }]);
     await sql`insert into data_subject_suppressions (provider, instance_url, forge_id, logins)
       values ('github', 'https://github.com', ${issue.authorGitHubUserId}, ${sql.array([issue.authorLogin])})`;
 
-    await pass("2026-09-08T10:04:00Z", "2026-09-08T10:06:00Z", "2026-09-08T09:59:00.000Z");
+    await pass("2026-09-08T10:04:00Z", "2026-09-08T10:06:00Z");
     expect(await sql`select done_when from issues where repository_id = ${f.id} and github_issue_id = ${issue.id}`)
       .toEqual([{ done_when: null }]);
-    await pass(null, "2026-09-08T10:20:00Z", "2026-09-08T10:05:00.000Z");
+    await pass(null, "2026-09-08T10:20:00Z");
     expect(f.issueReads).toEqual([]);
     expect(await statements()).toEqual([]);
-    await pass("2026-09-08T10:30:00Z", "2026-09-08T10:31:00Z", "2026-09-08T10:19:00.000Z");
+    expect(await sql`select issue_number from issues where repository_id = ${f.id} order by 1`).toEqual([{ issue_number: 1 }, { issue_number: 2 }]);
+    await pass("2026-09-08T10:30:00Z", "2026-09-08T10:31:00Z");
     expect(await sql`select done_when from issues where repository_id = ${f.id} and github_issue_id = ${issue.id}`)
       .toEqual([{ done_when: null }]);
+  });
+
+  it("folds a suppressed sponsor's repository only from fresh reads, so no cached pass drops its rows", async () => {
+    const f = await fixture();
+    const rows = async () => [await sql`select github_issue_id from issues where repository_id = ${f.id} order by 1`, await sql`select github_pull_request_id
+      from pull_requests where repository_id = ${f.id} order by 1`, await sql`select s.status, pr.github_pull_request_id from settlements s
+      join pull_requests pr on pr.id = s.pull_request_id where pr.repository_id = ${f.id} order by 2`];
+    await f.run();
+    const before = await rows();
+    expect(before.map((table) => table.length)).toEqual([2, 2, 2]);
+    await sql`insert into data_subject_suppressions (provider, instance_url, forge_id, logins)
+      values ('github', 'https://github.com', ${f.issues[0]!.authorGitHubUserId}, ${sql.array([f.issues[0]!.authorLogin])})`;
+    for (const clock of ["2026-09-08T10:04:00Z", "2026-09-08T10:20:00Z"]) {
+      expect(await f.runAt(clock)).toMatchObject({ skipped: false, removed: 0 });
+      expect(await rows()).toEqual(before);
+    }
+    expect(await f.runAt("2026-09-08T10:30:00Z", { reason: "WEBHOOK" })).toMatchObject({ skipped: true, sweepPending: true });
+    expect(await rows()).toEqual(before);
+    expect(f.scans).toEqual([undefined, undefined, undefined]);
+  });
+
+  it("reads the sponsor as suppressed only by the sponsor's own forge id within the repository's provider and origin", async () => {
+    const f = await fixture();
+    const [sponsor, linked] = [f.issues[0]!.authorGitHubUserId!, externalId++];
+    await sql`insert into user_forge_identities (user_id, provider, instance_url, forge_user_id, forge_login)
+      values (${(await f.store.getRepository(f.id))!.sponsor.id}, 'gitlab', 'https://GitLab.test', ${linked}, 'sponsor')`;
+    // Each refused row differs from an accepted one in one of provider, origin and forge id.
+    const cases: Array<[string, string | null, string, string, number, boolean]> = [["github", null, "github", "https://github.com", sponsor, true],
+      ["github", null, "github", "https://github.com", f.contributorGitHubId, false], ["github", null, "github", "https://github.example", sponsor, false],
+      ["github", null, "gitlab", "https://github.com", sponsor, false], ["github", null, "github", "https://github.com", linked, false],
+      ["gitlab", "https://GitLab.test", "gitlab", "https://gitlab.test", linked, true], ["gitlab", "https://gitlab.test", "gitlab", "https://gitlab.test", sponsor, false],
+      ["gitlab", "https://other.test", "gitlab", "https://other.test", linked, false]];
+    for (const [provider, instanceUrl, suppressedProvider, suppressedOrigin, forgeId, expected] of cases) {
+      await sql`update registered_repositories set provider = ${provider}, instance_url = ${instanceUrl} where id = ${f.id}`;
+      await sql`insert into data_subject_suppressions (provider, instance_url, forge_id) values (${suppressedProvider}, ${suppressedOrigin}, ${forgeId})`;
+      expect([provider, suppressedOrigin, forgeId, (await f.store.getRepository(f.id))!.sponsorSuppressed]).toEqual([provider, suppressedOrigin, forgeId, expected]);
+      await sql`delete from data_subject_suppressions where forge_id = ${forgeId}`;
+    }
   });
 
   it("charges quiet retained history only for current observations", async () => {
@@ -183,22 +215,13 @@ describe("incremental reconciliation", () => {
     f.measuredReviewCost = 5;
     const full = await f.run();
     expect(full.skipped).toBe(false);
-    f.clock = new Date("2026-09-08T10:04:00Z");
-    const quiet = await f.run();
+    const quiet = await f.runAt("2026-09-08T10:04:00Z");
     expect(quiet.skipped).toBe(false);
     expect(f.reviewReads).toEqual([11, 12]);
     f.issues[0]!.updatedAt = "2026-09-08T10:05:00Z";
-    f.clock = new Date("2026-09-08T10:06:00Z");
-    const active = await f.run();
+    const active = await f.runAt("2026-09-08T10:06:00Z");
     expect(active.skipped).toBe(false);
-    const costs = [];
-    for (const result of [full, quiet, active]) {
-      if (result.skipped) throw new Error("Expected a completed test fold.");
-      const [row] = await sql<{ cost: number }[]>`select graphql_cost::int as cost
-        from reconciliation_runs where id = ${result.runId}`;
-      costs.push(row!.cost);
-    }
-    expect(costs).toEqual([11, 1, 6]);
+    expect(await runCosts([full, quiet, active])).toEqual([11, 1, 6]);
   });
 
   it("charges one current scan for a larger retained history and only refreshed reviews after a dirty event", async () => {
@@ -216,24 +239,15 @@ describe("incremental reconciliation", () => {
     f.measuredIssueCost = 1;
     f.measuredReviewCost = 5;
     const full = await f.run();
-    f.clock = new Date("2026-09-08T10:04:00Z");
-    const quiet = await f.run();
+    const quiet = await f.runAt("2026-09-08T10:04:00Z");
     expect((await f.store.getReconciliationEvidence(f.id))?.issues).toHaveLength(23);
     expect(f.reviewReads).toHaveLength(22);
     await f.dirty("ISSUE", f.issues[0]!);
-    f.clock = new Date("2026-09-08T10:06:00Z");
-    const dirty = await f.run();
+    const dirty = await f.runAt("2026-09-08T10:06:00Z");
     expect(f.issueReads).toEqual([1]);
     expect(f.reviewReads).toHaveLength(23);
     expect(f.reviewReads.at(-1)).toBe(11);
-    const costs = [];
-    for (const result of [full, quiet, dirty]) {
-      if (result.skipped) throw new Error("Expected a completed test fold.");
-      const [row] = await sql<{ cost: number }[]>`select graphql_cost::int as cost
-        from reconciliation_runs where id = ${result.runId}`;
-      costs.push(row!.cost);
-    }
-    expect(costs).toEqual([111, 1, 6]);
+    expect(await runCosts([full, quiet, dirty])).toEqual([111, 1, 6]);
   });
 
   it("refreshes legacy evidence and removes a stale not-planned closure on the next pass", async () => {
@@ -241,11 +255,7 @@ describe("incremental reconciliation", () => {
     const issue = f.issues[1]!;
     issue.closingPullRequests = [];
     await f.run();
-    const closures = () => sql`
-      select unwritable_closures.kind::text from unwritable_closures
-      join issues on issues.id = unwritable_closures.issue_id
-      where issues.repository_id = ${f.id} and issues.github_issue_id = ${issue.id}
-    `;
+    const closures = () => closuresOf(f.id, issue.id);
     expect(await closures()).toEqual([{ kind: "NO_CLOSING_PULL_REQUEST" }]);
     // Version 1 retained issues without a closure reason. Keep the upstream
     // timestamp unchanged so only cache invalidation can recover the reason.
@@ -279,19 +289,14 @@ describe("incremental reconciliation", () => {
       from issues where repository_id = ${f.id} and github_issue_id = ${issue.id}
       on conflict (issue_id) do nothing
     `;
-    const closures = () => sql`
-      select unwritable_closures.kind::text from unwritable_closures
-      join issues on issues.id = unwritable_closures.issue_id
-      where issues.repository_id = ${f.id} and issues.github_issue_id = ${issue.id}
-    `;
+    const closures = () => closuresOf(f.id, issue.id);
     expect(await closures()).toEqual([{ kind: "NO_CLOSING_PULL_REQUEST" }]);
     const [evidence] = await sql`select format_version from repository_reconciliation_evidence where repository_id = ${f.id}`;
     expect(evidence!.format_version).toBe(RECONCILIATION_EVIDENCE_FORMAT);
     expect((await f.store.getReconciliationEvidence(f.id))?.issues.find(({ id }) => id === issue.id))
       .toMatchObject({ stateReason: "DUPLICATE" });
 
-    f.clock = new Date("2026-09-08T10:02:00Z");
-    await f.run();
+    await f.runAt("2026-09-08T10:02:00Z");
 
     expect(f.issueReads).toEqual([]);
     expect(await closures()).toEqual([]);
@@ -302,8 +307,7 @@ describe("incremental reconciliation", () => {
     await f.run();
     await sql`update repository_reconciliation_evidence set format_version = ${format} where repository_id = ${f.id}`;
     f.issues = [f.issues[0]!];
-    f.clock = new Date("2026-09-08T10:05:00Z");
-    await f.run();
+    await f.runAt("2026-09-08T10:05:00Z");
     expect(f.scans.at(-1)).toBeUndefined();
     expect((await f.store.getReconciliationEvidence(f.id))?.issues).toHaveLength(1);
     expect((await derived(f.id)).issues).toHaveLength(1);
@@ -343,13 +347,10 @@ describe("incremental reconciliation", () => {
     const initial = await derived(f.id);
     expect(initial.issues).toHaveLength(2);
     expect(initial.pullRequests).toHaveLength(2);
-    f.clock = new Date("2026-09-08T10:02:00Z");
-    await f.run();
-    f.clock = new Date("2026-09-08T10:04:00Z");
-    await f.run();
+    await f.runAt("2026-09-08T10:02:00Z");
+    await f.runAt("2026-09-08T10:04:00Z");
     f.store = new PostgresFoldStore(sql, encryptionKey);
-    f.clock = new Date("2026-09-08T10:05:00Z");
-    await f.run();
+    await f.runAt("2026-09-08T10:05:00Z");
     expect(f.scans).toEqual([undefined, "2026-09-08T09:59:00.000Z", "2026-09-08T10:01:00.000Z", "2026-09-08T10:03:00.000Z"]);
     expect(f.reviewReads).toEqual([11, 12, 11]);
     expect(f.diffReads).toEqual([11, 12, 11]);
@@ -363,8 +364,7 @@ describe("incremental reconciliation", () => {
     const f = await fixture();
     await f.run();
     f.issues[0] = { ...f.issues[0]!, body: "edited body", comments: [], title: "edited title" };
-    f.clock = new Date("2026-09-08T10:02:00Z");
-    await f.run();
+    await f.runAt("2026-09-08T10:02:00Z");
     const cache = await f.store.getReconciliationEvidence(f.id);
     expect(cache?.issues.map((issue) => ({ number: issue.number, hasBody: "body" in issue }))).toEqual([
       { number: 1, hasBody: false }, { number: 2, hasBody: false }, { number: 3, hasBody: false },
@@ -381,10 +381,8 @@ describe("incremental reconciliation", () => {
     const scheme = validDifficultyScheme();
     scheme.openingLabels.push({ label: "future", comparisonPoints: 4, reservePoints: 4 });
     await sql`update registered_repositories set difficulty_scheme = ${sql.json(scheme)} where id = ${f.id}`;
-    f.clock = new Date("2026-09-08T10:03:00Z");
-    await f.run();
-    f.clock = new Date("2026-09-08T10:05:00Z");
-    await f.run();
+    await f.runAt("2026-09-08T10:03:00Z");
+    await f.runAt("2026-09-08T10:05:00Z");
     const rows = await derived(f.id);
     expect(rows.pullRequests.every(({ author_id }) => author_id === user.id)).toBe(true);
     expect(rows.issues.map(({ title }) => title)).toEqual(["Issue 1", "Issue 2", "Issue 3"]);
@@ -399,10 +397,8 @@ describe("incremental reconciliation", () => {
     const changedPr = f.issues[0]!.closingPullRequests[0]!;
     f.issues[0] = { ...f.issues[0]!, title: "old reference removed", closingPullRequests: [] };
     f.issues[1] = { ...f.issues[1]!, title: "new reference added", closingPullRequests: [changedPr] };
-    f.references = [
-      { id: f.issues[1]!.id, number: 2, repositoryGitHubId: f.githubRepositoryId },
-      { id: 999, number: 1, repositoryGitHubId: f.githubRepositoryId + 1 },
-    ];
+    f.references = [{ id: f.issues[1]!.id, number: 2, repositoryGitHubId: f.githubRepositoryId },
+      { id: 999, number: 1, repositoryGitHubId: f.githubRepositoryId + 1 }];
     f.reviews = [{ id: 401, state: "DISMISSED", submittedAt: "2026-09-01T09:00:00Z",
       dismissal: { at: "2026-09-01T13:00:00Z", previousState: "CHANGES_REQUESTED" } }];
     await f.dirty("PULL_REQUEST", changedPr);
@@ -436,24 +432,15 @@ describe("incremental reconciliation", () => {
       expect(issueInputs.map(({ number, closingPullRequests }) => ({
         number,
         closingPullRequests: closingPullRequests.map(({ number, reviews, rawDiff }) => ({ number, reviews, rawDiff })),
-      }))).toEqual([
-        { number: 1, closingPullRequests: [{ number: 11, rawDiff: "replacement diff", reviews: [{
-          id: 501, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T09:00:00Z", dismissal: null,
-        }] }] },
-        { number: 2, closingPullRequests: [{ number: 11, rawDiff: "replacement diff", reviews: [{
-          id: 501, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T09:00:00Z", dismissal: null,
-        }] }] },
-      ]);
+      }))).toEqual([1, 2].map((number) => ({ number, closingPullRequests: [{ number: 11, rawDiff: "replacement diff",
+        reviews: [{ id: 501, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T09:00:00Z", dismissal: null }] }] })));
     } finally {
       fold.mockRestore();
     }
     expect(f.diffReads).toEqual([11, 11]);
     const [pr] = await sql`select pr.proof_sha256, (select count(*)::int from review_rounds r where r.pull_request_id = pr.id) as reviews
       from pull_requests pr where pr.repository_id = ${f.id}`;
-    expect(pr).toEqual({
-      proof_sha256: "bb4a70592c7e8e3fcb5637474e8dde68f44f0affc057373c8113bdb820d551b3",
-      reviews: 1,
-    });
+    expect(pr).toEqual({ proof_sha256: createHash("sha256").update("replacement diff").digest("hex"), reviews: 1 });
     expect((await f.store.getReconciliationEvidence(f.id))?.pullRequests).toMatchObject([{ rawDiff: "replacement diff", reviews: [{ id: 501 }] }]);
   });
 
@@ -462,8 +449,7 @@ describe("incremental reconciliation", () => {
     const f = await fixture();
     await f.run();
     f.issues = [f.issues[0]!];
-    f.clock = new Date("2026-09-08T10:02:00Z");
-    await f.run();
+    await f.runAt("2026-09-08T10:02:00Z");
     expect((await f.store.getReconciliationEvidence(f.id))?.issues).toHaveLength(3);
     if (reason === "six hours") f.clock = new Date("2026-09-08T16:00:00Z");
     if (reason === "incompatible cache") await sql`update repository_reconciliation_evidence set format_version = 99 where repository_id = ${f.id}`;
@@ -492,8 +478,7 @@ describe("incremental reconciliation", () => {
     expect(flagged!.omitted_oversized_facts).toBe(2);
     // Quiet partial pass five minutes later, no upstream change: the hole must
     // not read as absence, so the pass goes full (no `since` on the scan).
-    f.clock = new Date("2026-09-08T10:05:00Z");
-    await f.run();
+    await f.runAt("2026-09-08T10:05:00Z");
     expect(f.scans.at(-1)).toBeUndefined();
     expect((await derived(f.id)).issues).toHaveLength(2);
     expect((await f.store.getReconciliationEvidence(f.id))?.issues).toHaveLength(1);
@@ -545,9 +530,7 @@ describe("incremental reconciliation", () => {
     expect(await f.store.getDirtyReconciliationSubjects(f.id)).toEqual(dirty);
     expect(await derived(f.id)).toEqual(rows);
     // A failed read restarts pagination on each of its three bounded attempts.
-    if (failure === "issue page two") expect(f.failedPageCursors).toEqual([
-      null, "page-two", null, "page-two", null, "page-two",
-    ]);
+    if (failure === "issue page two") expect(f.failedPageCursors).toEqual([null, "page-two", null, "page-two", null, "page-two"]);
     expect(await sql`select status from reconciliation_runs where repository_id = ${f.id} order by started_at`)
       .toEqual([{ status: "COMPLETED" }, { status: "FAILED" }]);
     expect(await sql`select graphql_cost, graphql_cost_sponsor_id, graphql_observed_responses, graphql_unmeasured_responses
@@ -647,7 +630,8 @@ async function fixture() {
         action: kind === "ISSUE" ? "edited" : "dismissed", repositoryGitHubId: githubRepositoryId,
         repositoryFullName: `octo/repo-${githubRepositoryId}`, subject: { kind, id: subject.id, number: subject.number } });
     },
-    run: (options?: { rederive?: boolean }) => reconcileRepository({ store: f.store, github, now: () => f.clock, onBudgetChange: () => {} }, f.id, options),
+    run: (options?: Parameters<typeof reconcileRepository>[2]) => reconcileRepository({ store: f.store, github, now: () => f.clock, onBudgetChange: () => {} }, f.id, options),
+    runAt: (clock: string, options?: Parameters<typeof reconcileRepository>[2]) => { f.clock = new Date(clock); return f.run(options); },
     runAsSponsor: () => reconcileRepositoryAsSponsor(f.store, f.id, () => github),
   };
   const github: ReconciliationGateway = {
@@ -690,6 +674,21 @@ async function fixture() {
     getPullRequestDiff: async (_reference, number) => { f.diffReads.push(number); return f.diff; },
   };
   return f;
+}
+
+function closuresOf(repositoryId: string, issueId: number) {
+  return sql`select unwritable_closures.kind::text from unwritable_closures join issues on issues.id = unwritable_closures.issue_id
+    where issues.repository_id = ${repositoryId} and issues.github_issue_id = ${issueId}`;
+}
+
+async function runCosts(results: Awaited<ReturnType<typeof reconcileRepository>>[]) {
+  const costs = [];
+  for (const result of results) {
+    if (result.skipped) throw new Error("Expected a completed test fold.");
+    const [row] = await sql<{ cost: number }[]>`select graphql_cost::int as cost from reconciliation_runs where id = ${result.runId}`;
+    costs.push(row!.cost);
+  }
+  return costs;
 }
 
 async function derived(repositoryId: string) {
