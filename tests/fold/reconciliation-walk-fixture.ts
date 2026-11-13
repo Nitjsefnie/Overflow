@@ -38,7 +38,7 @@ export function memoryPass() {
     }),
     readStaged: async () => structuredClone([...rows.values()]),
     deleteStaged: vi.fn(async (keys) => { for (const { kind, subjectKey } of keys) rows.delete(`${kind}:${subjectKey}`); }),
-    complete: vi.fn(async () => { rows.clear(); pages.clear(); }),
+    hold: vi.fn(async () => {}), complete: vi.fn(async () => { rows.clear(); pages.clear(); }),
   };
   return pass;
 }

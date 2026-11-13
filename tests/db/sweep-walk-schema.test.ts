@@ -24,15 +24,15 @@ describe("sweep walk schema", () => {
   async function insertPass() {
     const { repositoryId } = await materializeRepositoryFixture(sql);
     const passId = randomUUID();
-    // The previous release's insert omits walk_anchors.
+    // Earlier releases' inserts omit walk_anchors and failed_runs, and the previous one still serves during a deploy.
     await sql`insert into reconciliation_sweep_passes (repository_id, pass_id, scan_started_at, dirty_subjects)
       values (${repositoryId}, ${passId}, now(), '[]'::jsonb)`;
     return passId;
   }
 
-  it("keeps anchors nullable jsonb for the previous release's pass writer", async () => {
+  it("keeps anchors nullable jsonb and counts no failed run for an earlier release's pass writer", async () => {
     const passId = await insertPass();
-    expect(await sql`select walk_anchors from reconciliation_sweep_passes where pass_id = ${passId}`).toEqual([{ walk_anchors: null }]);
+    expect(await sql`select walk_anchors, failed_runs from reconciliation_sweep_passes where pass_id = ${passId}`).toEqual([{ walk_anchors: null, failed_runs: 0 }]);
     expect(await sql`select data_type, is_nullable from information_schema.columns
       where table_name = 'reconciliation_sweep_passes' and column_name = 'walk_anchors'`)
       .toEqual([{ data_type: "jsonb", is_nullable: "YES" }]);

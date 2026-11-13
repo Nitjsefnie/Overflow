@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { getSql } from "@/lib/db/client";
 import type { SqlClient, TransactionClient } from "@/lib/db/types";
 import type { DirtyReconciliationSubject } from "@/lib/fold/reconciliation-evidence";
-import { readSweepPassPageCeiling, type SweepPass, type SweepPassInput } from "@/lib/fold/sweep-pass";
+import { readSweepPassPageCeiling, SWEEP_PASS_FAILED_RUN_BOUND, SWEEP_PASS_MAX_AGE_MS, type SweepPass, type SweepPassInput } from "@/lib/fold/sweep-pass";
 import { isDirtySubjects } from "@/lib/fold/staged-pass-data";
 
 type PassRow = { pass_id: string; scan_started_at: Date; dirty_subjects: DirtyReconciliationSubject[]; walk_anchors: unknown };
@@ -55,19 +55,23 @@ export class PostgresSweepPassStore {
     let writes = Promise.resolve();
     const row = await this.sql.begin(async (transaction) => {
       // The fold's repository lock serializes opens. A changed evidence version
-      // means an incremental publication superseded this snapshot; restart it.
+      // means an incremental publication superseded this snapshot; restart it,
+      // and a pass past its failed-run or age bound, so its subjects are read again.
       await transaction`delete from reconciliation_sweep_passes where repository_id = ${input.repositoryId}
-        and evidence_version is distinct from ${input.evidenceVersion}`;
+        and (evidence_version is distinct from ${input.evidenceVersion} or failed_runs >= ${SWEEP_PASS_FAILED_RUN_BOUND}
+          or scan_started_at <= ${new Date(input.scanStartedAt.getTime() - SWEEP_PASS_MAX_AGE_MS)})`;
       // The open caller has no pass to discard yet, so a pass whose own dirty subjects are unreadable is restarted here.
       const [stored] = await transaction<{ dirty_subjects: unknown }[]>`select dirty_subjects
         from reconciliation_sweep_passes where repository_id = ${input.repositoryId}`;
       if (stored !== undefined && !isDirtySubjects(stored.dirty_subjects)) {
         await transaction`delete from reconciliation_sweep_passes where repository_id = ${input.repositoryId}`;
       }
+      // Each open counts its run; completion deletes the pass and a hold resets the count, so the
+      // next open reads the runs that failed (or died before their handler) since the last hold.
       await transaction`insert into reconciliation_sweep_passes
-        (repository_id, pass_id, scan_started_at, evidence_version, dirty_subjects)
-        values (${input.repositoryId}, ${randomUUID()}, ${input.scanStartedAt}, ${input.evidenceVersion}, ${transaction.json(input.dirtySubjects)})
-        on conflict (repository_id) do nothing`;
+        (repository_id, pass_id, scan_started_at, evidence_version, dirty_subjects, failed_runs)
+        values (${input.repositoryId}, ${randomUUID()}, ${input.scanStartedAt}, ${input.evidenceVersion}, ${transaction.json(input.dirtySubjects)}, 1)
+        on conflict (repository_id) do update set failed_runs = reconciliation_sweep_passes.failed_runs + 1`;
       const [row] = await transaction<PassRow[]>`select pass_id, scan_started_at, dirty_subjects, walk_anchors
         from reconciliation_sweep_passes where repository_id = ${input.repositoryId}`;
       const [pages] = await transaction<{ count: number }[]>`select count(*)::int as count
@@ -143,6 +147,7 @@ export class PostgresSweepPassStore {
           and (kind, subject_key) in (select kind, "subjectKey" from
             jsonb_to_recordset(${this.sql.json([...keys])}) as requested(kind text, "subjectKey" bigint))`;
       },
+      hold: async () => { await this.sql`update reconciliation_sweep_passes set failed_runs = 0 where pass_id = ${row.pass_id}`; },
       complete: async () => { await this.sql`delete from reconciliation_sweep_passes where pass_id = ${row.pass_id}`; },
     };
   }
