@@ -25,7 +25,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch)
-        uses: Nitjsefnie-Actions/size-ratchet@dcd7bb5427ac951d7270bf493c2c12e749432d72 # v3.1.2
+        uses: Nitjsefnie-Actions/size-ratchet@aab4bf6961786200b30785302e7a788280c3ba85 # v4.0.0
         with:
           ceilings: ''
           overrides: |
@@ -46,4 +46,4 @@ jobs:
           stale: 'warn'
           require-tight: 'false'
           push-key: ${{ secrets.MASTER_PUSH_DEPLOY_KEY }}
-          tree-budgets: ''
+          tree-budgets: 'tests/'
