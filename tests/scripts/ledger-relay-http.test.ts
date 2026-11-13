@@ -3,7 +3,7 @@ import { appSuiteListing, appChecksUrl, appSuitesUrl, RELAY_OWN_RUN_ENV, relayJo
 import { generateKeyPairSync } from "node:crypto";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import { apiCall, RateLimitExceededError, RATE_LIMIT_RESET_MARGIN_MS,
+import { apiCall, RateLimitExceededError, RATE_LIMIT_RESET_MARGIN_MS, ServerErrorExhaustedError,
   type RelayHttpDeps } from "../../scripts/ledger-relay-http.ts";
 import { renderRelayResult, runRelay, type RelayDeps } from "../../scripts/ledger-relay.ts";
 
@@ -157,15 +157,14 @@ describe("ledger relay request lifetime", () => {
     expect(w.state.requests).toEqual([]);
   });
 
-  it.each(["HTTP", "network", "timeout", "malformed"])("stays red when the timed-out POST re-read fails (%s)", async (failure) => {
+  it.each(["network", "timeout", "malformed"])("stays red when the timed-out POST re-read fails (%s)", async (failure) => {
     const w = world();
     w.state.intercept = async (url, init) => {
       if (url === `${ROOT}/check-runs` && w.state.posts === 1) throw new DOMException("request timed out", "TimeoutError");
       if (url !== CHECKS || w.state.posts === 0) return;
       if (failure === "network") throw new TypeError("latest checks unavailable");
       if (failure === "timeout") return stalled(init.signal);
-      if (failure === "malformed") return response({});
-      return new Response("latest checks unavailable", { status: 503 });
+      return response({});
     };
 
     await expect(w.run({ requestTimeoutMs: 5 })).rejects.toThrow(
@@ -176,6 +175,21 @@ describe("ledger relay request lifetime", () => {
     expect(w.state.posts).toBe(1);
     expect(w.state.checks).toEqual([]);
     expect(w.state.requests.filter(({ url }) => url === CHECKS)).toHaveLength(failure === "malformed" ? 2 : 4);
+  });
+
+  it("defers a sweep-only start, without repeating the POST, when the timed-out POST re-read stays 5xx (issue 1532)", async () => {
+    const w = world();
+    w.state.intercept = async (url) => {
+      if (url === `${ROOT}/check-runs` && w.state.posts === 1) throw new DOMException("request timed out", "TimeoutError");
+      if (url === CHECKS && w.state.posts > 0) return new Response("latest checks unavailable", { status: 503 });
+    };
+
+    const result = await w.run({ requestTimeoutMs: 5 });
+
+    expect(result.sweepDeferred).toMatch(/ failed after 3 attempts: HTTP 503: latest checks unavailable$/);
+    expect(w.state.posts).toBe(1);
+    expect(w.state.checks).toEqual([]);
+    expect(w.state.requests.filter(({ url }) => url === CHECKS)).toHaveLength(4);
   });
 
   it.each([
@@ -606,5 +620,76 @@ describe("ledger relay rate-limit handling (issue 1355)", () => {
     expect(error.message).toContain("failed after 3 attempts: fetch failed");
     expect(delays).toEqual([4_000, 2_000]);
     expect(requests).toBe(3);
+  });
+
+  describe("a read whose last attempt is answered 5xx (issue 1532)", () => {
+    const serverError = (status = 500) => new Response("boom", { status });
+    const unmarked429 = () => new Response("too many", { status: 429 });
+
+    it("throws ServerErrorExhaustedError for a GET answered 5xx on every attempt, keeping the attempts message", async () => {
+      const { deps, state } = rateLimitDeps([serverError(), serverError(502), serverError()]);
+
+      const error = await caught(apiCall(deps, theCall, what));
+
+      expect(error).toBeInstanceOf(ServerErrorExhaustedError);
+      expect(error.name).toBe("ServerErrorExhaustedError");
+      expect(error.message).toBe(`${what} failed after 3 attempts: HTTP 500: boom`);
+      expect(state.delays).toEqual([1_000, 2_000]);
+      expect(state.requests).toHaveLength(3);
+    });
+
+    it("decides by the final attempt: earlier network errors do not stop a last 5xx from qualifying", async () => {
+      let requests = 0;
+      const deps: RelayHttpDeps = {
+        deadlineMs: Date.now() + 60_000, delayFn: async () => {},
+        fetchFn: async () => {
+          requests += 1;
+          if (requests < 3) throw new TypeError("fetch failed");
+          return serverError(503);
+        },
+      };
+
+      const error = await caught(apiCall(deps, theCall, what));
+
+      expect(error).toBeInstanceOf(ServerErrorExhaustedError);
+      expect(error.message).toBe(`${what} failed after 3 attempts: HTTP 503: boom`);
+      expect(requests).toBe(3);
+    });
+
+    it("throws it for a single-attempt GET answered 5xx", async () => {
+      const { deps, state } = rateLimitDeps([serverError()]);
+
+      const error = await caught(apiCall(deps, theCall, what, false));
+
+      expect(error).toBeInstanceOf(ServerErrorExhaustedError);
+      expect(error.message).toBe(`${what} failed after 1 attempts: HTTP 500: boom`);
+      expect(state.delays).toEqual([]);
+    });
+
+    it.each([
+      ["a POST answered 5xx on every attempt", { ...theCall, method: "POST" as const },
+        [serverError(), serverError(), serverError()], "HTTP 500: boom"],
+      ["a GET answered 5xx then a network error last", theCall,
+        [serverError(), serverError(), "network"], "fetch failed"],
+      ["a GET whose last answer is a 429 without rate-limit markers", theCall,
+        [serverError(), serverError(), unmarked429()], "HTTP 429: too many"],
+    ])("keeps the plain attempts error for %s", async (_name, call, answers, last) => {
+      const { deps, state } = rateLimitDeps([]);
+      deps.fetchFn = async () => {
+        state.requests.push(state.now);
+        const next = answers.shift();
+        if (typeof next === "string") throw new TypeError("fetch failed");
+        if (next === undefined) throw new Error("unexpected extra request");
+        return next;
+      };
+
+      const error = await caught(apiCall(deps, call, what));
+
+      expect(error).not.toBeInstanceOf(ServerErrorExhaustedError);
+      expect(error).not.toBeInstanceOf(RateLimitExceededError);
+      expect(error.name).toBe("Error");
+      expect(error.message).toBe(`${what} failed after 3 attempts: ${last}`);
+      expect(state.requests).toHaveLength(3);
+    });
   });
 });
