@@ -237,6 +237,23 @@ async function runStep(
   return { status: result.status, stdout: result.stdout, stderr: result.stderr, runnerTemp, argvLog };
 }
 
+/** Runs the step and asserts its silent success: exit 0, nothing on stdout, no annotation. */
+async function expectPasses(fx: { repo: string; base: string; merge: string }) {
+  const result = await runStep(fx);
+  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
+  expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+  return result;
+}
+
+/** Runs the step and asserts a red exit that prints `refusal` and never the planted MARKER. */
+async function expectRefuses(fx: { repo: string; base: string; merge: string }, refusal: string): Promise<void> {
+  const result = await runStep(fx);
+  expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+  expect(`${result.stdout}${result.stderr}`).toContain(refusal);
+  expect(`${result.stdout}${result.stderr}`, "no pull-request bytes may reach the log").not.toContain(MARKER);
+}
+
 describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
   it("is wired as the guard requires: base-defined event values, gated on the event, silent on success", () => {
     const step = theStep();
@@ -314,10 +331,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
   it("passes when the merge tree repeats the base's suppression list exactly", async () => {
     const config = { auditConfig: { ignoreGhsas: ["GHSA-vfj7-8cjw-p6xm"] } };
     const fx = await fixture(BASE_PACKAGE_JSON(config), BASE_PACKAGE_JSON(config));
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
-    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+    await expectPasses(fx);
   });
 
   it("passes when the two package.json files differ in every way but the auditConfig value", async () => {
@@ -328,68 +342,45 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     const mergePackage =
       `{\n  "pnpm": {\n    "auditConfig": {\n      "ignoreGhsas": ["GHSA-vfj7-8cjw-p6xm"]\n    }\n  },\n  "name": "\\u0073cratch"\n}\n`;
     const fx = await fixture(BASE_PACKAGE_JSON(config), mergePackage);
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
-    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+    await expectPasses(fx);
   });
 
   it("passes when neither side carries an audit suppression list", async () => {
     const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined));
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
-    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+    await expectPasses(fx);
   });
 
   it("refuses a pull request that adds a suppression the base does not carry", async () => {
     const config = { auditConfig: { ignoreGhsas: ["GHSA-vfj7-8cjw-p6xm"] } };
     const attack = { auditConfig: { ignoreGhsas: ["GHSA-vfj7-8cjw-p6xm", MARKER] } };
     const fx = await fixture(BASE_PACKAGE_JSON(config), BASE_PACKAGE_JSON(attack));
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.divergence);
-    expect(`${result.stdout}${result.stderr}`, "no pull-request bytes may reach the log").not.toContain(
-      MARKER,
-    );
+    await expectRefuses(fx, REFUSALS.divergence);
   });
 
   it("refuses a pull request that removes the suppression list entirely", async () => {
     // Issue 1035's reproduction: `del(.pnpm.auditConfig)` must go red.
     const config = { auditConfig: { ignoreGhsas: ["GHSA-vfj7-8cjw-p6xm"] } };
     const fx = await fixture(BASE_PACKAGE_JSON(config), BASE_PACKAGE_JSON(undefined));
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.divergence);
+    await expectRefuses(fx, REFUSALS.divergence);
   });
 
   it("refuses a pull request that reorders the accepted advisory ids", async () => {
     const config = { auditConfig: { ignoreGhsas: ["GHSA-vfj7-8cjw-p6xm"] } };
     const attack = { auditConfig: { ignoreGhsas: [MARKER, "GHSA-vfj7-8cjw-p6xm"] } };
     const fx = await fixture(BASE_PACKAGE_JSON(config), BASE_PACKAGE_JSON(attack));
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
+    await expectRefuses(fx, REFUSALS.divergence);
   });
 
   it("refuses a pull request that nulls the suppression list", async () => {
     const config = { auditConfig: { ignoreGhsas: ["GHSA-vfj7-8cjw-p6xm"] } };
-    const fx = await fixture(
-      BASE_PACKAGE_JSON(config),
-      `${JSON.stringify({ name: "scratch", pnpm: { auditConfig: null } })}\n`,
-    );
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.divergence);
+    const fx = await fixture(BASE_PACKAGE_JSON(config), `${JSON.stringify({ name: "scratch", pnpm: { auditConfig: null } })}\n`);
+    await expectRefuses(fx, REFUSALS.divergence);
   });
 
   it("refuses a pull request that adds a suppression list to an unlisted base", async () => {
     const attack = { auditConfig: { ignoreGhsas: [MARKER] } };
     const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(attack));
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.divergence);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
+    await expectRefuses(fx, REFUSALS.divergence);
   });
 
   // Issue 1592: removing ids makes the audit stricter, so a merge list that is
@@ -404,10 +395,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     ["every id", { ignoreGhsas: [ID_A, ID_B] }, { ignoreGhsas: [] }],
   ])("passes a merge tree that only removes %s from ignoreGhsas", async (_label, base, merge) => {
     const fx = await fixture(listed(base), listed(merge));
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
-    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+    await expectPasses(fx);
   });
 
   it.each([
@@ -432,10 +420,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     ["removes an id and turns another key's 1 into true", { ignoreCves: 1, ignoreGhsas: [ID_A, ID_B] }, { ignoreCves: true, ignoreGhsas: [ID_A] }],
   ])("refuses a merge tree whose ignoreGhsas change %s", async (_label, base, merge) => {
     const fx = await fixture(listed(base), listed(merge));
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.divergence);
-    expect(`${result.stdout}${result.stderr}`, "no pull-request bytes may reach the log").not.toContain(MARKER);
+    await expectRefuses(fx, REFUSALS.divergence);
   });
 
   it.each([
@@ -445,21 +430,12 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     ["an audited .npmrc key", { ".npmrc": `audit-level=critical ${MARKER}\n` }, REFUSALS.npmrcDivergence],
   ])("refuses a merge tree that removes an id and also changes %s", async (_label, merge, refusal) => {
     const fx = await fixture(listed({ ignoreGhsas: [ID_A, ID_B] }), listed({ ignoreGhsas: [ID_A] }), { merge });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(refusal);
-    expect(`${result.stdout}${result.stderr}`, "no pull-request bytes may reach the log").not.toContain(MARKER);
+    await expectRefuses(fx, refusal);
   });
 
   it("refuses a package.json committed as a symlink, and never prints the planted target", async () => {
-    const fx = await fixture(
-      BASE_PACKAGE_JSON(undefined),
-      { mode: "120000", content: `../../evil-package.json ${MARKER}` },
-    );
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.entry);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), { mode: "120000", content: `../../evil-package.json ${MARKER}` });
+    await expectRefuses(fx, REFUSALS.entry);
   });
 
   it("refuses a BASE whose package.json is a symlink, even when the merge side is clean", async () => {
@@ -476,10 +452,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     git(baseRepo, "update-index", "--add", "--cacheinfo", `100644,${mergeId},package.json`);
     const mergeTree = git(baseRepo, "write-tree");
     const merge = git(baseRepo, "commit-tree", mergeTree, "-p", symlinkBase, "-m", "merge");
-    const result = await runStep({ repo: baseRepo, base: symlinkBase, merge });
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.entry);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
+    await expectRefuses({ repo: baseRepo, base: symlinkBase, merge }, REFUSALS.entry);
   });
 
   it.each([
@@ -488,26 +461,19 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
   ])("refuses a package.json committed as %s", async (_label, mode) => {
     const config = { auditConfig: { ignoreGhsas: ["GHSA-vfj7-8cjw-p6xm"] } };
     const fx = await fixture(BASE_PACKAGE_JSON(undefined), { mode, content: BASE_PACKAGE_JSON(config) });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.entry);
+    await expectRefuses(fx, REFUSALS.entry);
   });
 
   it("refuses a merge tree with no package.json at all", async () => {
     const config = { auditConfig: { ignoreGhsas: ["GHSA-vfj7-8cjw-p6xm"] } };
     const fx = await fixture(BASE_PACKAGE_JSON(config), null);
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.entry);
+    await expectRefuses(fx, REFUSALS.entry);
   });
 
   it("refuses a NUL byte anywhere in the file", async () => {
     const content = `{"name":"scratch\u0000${MARKER}","pnpm":{"auditConfig":{"ignoreGhsas":["GHSA-vfj7-8cjw-p6xm"]}}}`;
     const fx = await fixture(BASE_PACKAGE_JSON(undefined), content);
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.nul);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
+    await expectRefuses(fx, REFUSALS.nul);
   });
 
   it("refuses a package.json that is not valid UTF-8", async () => {
@@ -534,28 +500,19 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     const id = git(repo, "hash-object", "-w", file);
     git(repo, "update-index", "--add", "--cacheinfo", `100644,${id},package.json`);
     const merge = git(repo, "commit-tree", git(repo, "write-tree"), "-p", base, "-m", "utf8");
-    const result = await runStep({ repo, base, merge });
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.utf8);
+    await expectRefuses({ repo, base, merge }, REFUSALS.utf8);
   });
 
   it("refuses a package.json that does not parse as JSON", async () => {
-    const fx = await fixture(
-      BASE_PACKAGE_JSON(undefined),
-      `{"name": "scratch", "pnpm": { BROKEN\n`,
-    );
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.json);
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), `{"name": "scratch", "pnpm": { BROKEN\n`);
+    await expectRefuses(fx, REFUSALS.json);
   });
 
   it("refuses a package.json over the 65536-byte cap", async () => {
     const config = { auditConfig: { ignoreGhsas: ["GHSA-vfj7-8cjw-p6xm"] } };
     const padded = `${JSON.stringify({ name: "scratch", description: "x".repeat(70_000), pnpm: config })}\n`;
     const fx = await fixture(BASE_PACKAGE_JSON(undefined), padded);
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.size);
+    await expectRefuses(fx, REFUSALS.size);
   });
 
   // ---------------------------------------------------------------------------
@@ -576,20 +533,14 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
       base: { "pnpm-workspace.yaml": ws },
       merge: { "pnpm-workspace.yaml": ws },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
-    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+    await expectPasses(fx);
   });
 
   it("passes when the merge adds pnpm-workspace.yaml carrying no audit-affecting setting", async () => {
     const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
       merge: { "pnpm-workspace.yaml": "packages:\n  - \"a\"\n  - \"b\"\n" },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
-    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+    await expectPasses(fx);
   });
 
   it.each([
@@ -609,10 +560,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
       base: { "pnpm-workspace.yaml": base },
       merge: { "pnpm-workspace.yaml": merge },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
-    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+    await expectPasses(fx);
   });
 
   it("refuses a suppression list moved into pnpm-workspace.yaml", async () => {
@@ -621,46 +569,31 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
         "pnpm-workspace.yaml": `auditConfig:\n  ignoreGhsas:\n    - GHSA-vfj7-8cjw-p6xm\n    - ${MARKER}\n`,
       },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.wsDivergence);
-    expect(`${result.stdout}${result.stderr}`, "no pull-request bytes may reach the log").not.toContain(
-      MARKER,
-    );
+    await expectRefuses(fx, REFUSALS.wsDivergence);
   });
 
   it("refuses an auditLevel moved into pnpm-workspace.yaml", async () => {
     const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
       merge: { "pnpm-workspace.yaml": "auditLevel: critical\n" },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.wsDivergence);
+    await expectRefuses(fx, REFUSALS.wsDivergence);
   });
 
   it("refuses a registries mapping moved into pnpm-workspace.yaml", async () => {
     const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
       merge: { "pnpm-workspace.yaml": "registries:\n  default: https://attacker.invalid/\n" },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.wsDivergence);
+    await expectRefuses(fx, REFUSALS.wsDivergence);
   });
 
   it("refuses a suppression list added to pnpm-workspace.yaml that the base lacks", async () => {
-    const fx = await fixture(
-      BASE_PACKAGE_JSON(undefined),
-      BASE_PACKAGE_JSON(undefined),
-      {
-        base: { "pnpm-workspace.yaml": "packages:\n  - \"x\"\n" },
-        merge: {
-          "pnpm-workspace.yaml": "packages:\n  - \"x\"\nauditConfig:\n  ignoreGhsas:\n    - GHSA-vfj7-8cjw-p6xm\n",
-        },
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
+      base: { "pnpm-workspace.yaml": "packages:\n  - \"x\"\n" },
+      merge: {
+        "pnpm-workspace.yaml": "packages:\n  - \"x\"\nauditConfig:\n  ignoreGhsas:\n    - GHSA-vfj7-8cjw-p6xm\n",
       },
-    );
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.wsDivergence);
+    });
+    await expectRefuses(fx, REFUSALS.wsDivergence);
   });
 
   it("refuses an unparseable pnpm-workspace.yaml whose bytes differ from the base", async () => {
@@ -668,9 +601,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
       base: { "pnpm-workspace.yaml": "packages:\n  - \"x\"\n" },
       merge: { "pnpm-workspace.yaml": "auditConfig:\n\tignoreGhsas: [oops\n" },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.wsParse);
+    await expectRefuses(fx, REFUSALS.wsParse);
   });
 
   it("refuses pnpm-workspace.yaml committed as a symlink, and never prints the target", async () => {
@@ -683,53 +614,35 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     git(fx.repo, "update-index", "--add", "--cacheinfo", `120000,${id},pnpm-workspace.yaml`);
     const tree = git(fx.repo, "write-tree");
     const merge = git(fx.repo, "commit-tree", tree, "-p", fx.base, "-m", "ws symlink");
-    const result = await runStep({ repo: fx.repo, base: fx.base, merge });
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.sharedEntry);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
+    await expectRefuses({ repo: fx.repo, base: fx.base, merge }, REFUSALS.sharedEntry);
   });
 
   it.each([
-    ["a NUL byte", "nul"],
-    ["invalid UTF-8", "utf8"],
-    ["an oversize body", "size"],
-  ])("refuses %s in pnpm-workspace.yaml", async (label, kind) => {
+    ["a NUL byte", "pnpm-workspace.yaml", Buffer.from(`auditConfig:\n  ignoreGhsas:\n    - a\u0000${MARKER}\n`, "utf8"), REFUSALS.sharedNul],
+    ["invalid UTF-8", "pnpm-workspace.yaml", Buffer.from(`auditConfig:\n  ignoreGhsas:\n    - ok\njunk: \xff\xfe\n`, "latin1"), REFUSALS.sharedUtf8],
+    ["an oversize body", "pnpm-workspace.yaml", Buffer.from(`packages:\n  - ${"\"x".repeat(40_000)}\n`, "utf8"), REFUSALS.sharedSize],
+    ["a NUL byte", ".npmrc", Buffer.from(`registry=http://127.0.0.1\u0000${MARKER}/\n`, "utf8"), REFUSALS.sharedNul],
+    ["invalid UTF-8", ".npmrc", Buffer.from(`registry=http://ok/\njunk: \xff\xfe\n`, "latin1"), REFUSALS.sharedUtf8],
+    ["an oversize body", ".npmrc", Buffer.from(`# pad\n${"x".repeat(70_000)}\n`, "utf8"), REFUSALS.sharedSize],
+  ])("refuses %s in %s", async (label, path, raw, refusal) => {
     counter += 1;
-    const repo = join(root, `ws-${kind}-${counter}`);
+    const repo = join(root, `shared-${counter}`);
     await mkdir(repo, { recursive: true });
     git(repo, "init", "--quiet", "--initial-branch=main");
     // A benign package.json on both sides: the guard checks it first, and an
-    // absent one would refuse before the workspace file is ever read.
-    const base = await commitFiles(
-      repo,
-      {
-        "README.md": "# scratch\n",
-        "package.json": `${JSON.stringify({ name: "scratch" })}\n`,
-        ".github/requirements-pyyaml.txt": pyyamlManifest,
-      },
-      "base",
-    );
-    let raw: Buffer;
-    if (kind === "nul") {
-      raw = Buffer.from(`auditConfig:\n  ignoreGhsas:\n    - a\u0000${MARKER}\n`, "utf8");
-    } else if (kind === "utf8") {
-      raw = Buffer.from(`auditConfig:\n  ignoreGhsas:\n    - ok\njunk: \xff\xfe\n`, "latin1");
-    } else {
-      raw = Buffer.from(`packages:\n  - ${"\"x".repeat(40_000)}\n`, "utf8");
-    }
-    const file = join(root, `ws-${kind}-blob-${counter}`);
+    // absent one would refuse before the shared file is ever read. Only the
+    // workspace file's parse needs the PyYAML manifest on the base.
+    const base = await commitFiles(repo, {
+      "README.md": "# scratch\n",
+      "package.json": `${JSON.stringify({ name: "scratch" })}\n`,
+      ...(path === "pnpm-workspace.yaml" ? { ".github/requirements-pyyaml.txt": pyyamlManifest } : {}),
+    }, "base");
+    const file = join(root, `shared-blob-${counter}`);
     await writeFile(file, raw);
     const id = git(repo, "hash-object", "-w", file);
-    git(repo, "update-index", "--add", "--cacheinfo", `100644,${id},pnpm-workspace.yaml`);
-    const tree = git(repo, "write-tree");
-    const merge = git(repo, "commit-tree", tree, "-p", base, "-m", `ws ${label}`);
-    const result = await runStep({ repo, base, merge });
-    const output = `${result.stdout}${result.stderr}`;
-    expect(result.status, output).not.toBe(0);
-    expect(output).toContain(
-      kind === "nul" ? REFUSALS.sharedNul : kind === "utf8" ? REFUSALS.sharedUtf8 : REFUSALS.sharedSize,
-    );
-    expect(output).not.toContain(MARKER);
+    git(repo, "update-index", "--add", "--cacheinfo", `100644,${id},${path}`);
+    const merge = git(repo, "commit-tree", git(repo, "write-tree"), "-p", base, "-m", `${path} ${label}`);
+    await expectRefuses({ repo, base, merge }, refusal);
   });
 
   it("passes when .npmrc is byte-identical on both sides", async () => {
@@ -738,47 +651,29 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
       base: { ".npmrc": npmrc },
       merge: { ".npmrc": npmrc },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
-    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+    await expectPasses(fx);
   });
 
   it("passes when the merge adds .npmrc carrying none of the audited keys", async () => {
     const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
       merge: { ".npmrc": "save-exact=true\nfund=false\n# a comment\n" },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
-    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+    await expectPasses(fx);
   });
 
   it("refuses an audit-level bar added in .npmrc", async () => {
     const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
       merge: { ".npmrc": `audit-level=critical ${MARKER}\n` },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.npmrcDivergence);
-    expect(`${result.stdout}${result.stderr}`, "no pull-request bytes may reach the log").not.toContain(
-      MARKER,
-    );
+    await expectRefuses(fx, REFUSALS.npmrcDivergence);
   });
 
   it("refuses a registry redirect changed in .npmrc", async () => {
-    const fx = await fixture(
-      BASE_PACKAGE_JSON(undefined),
-      BASE_PACKAGE_JSON(undefined),
-      {
-        base: { ".npmrc": "registry=https://registry.npmjs.org/\n" },
-        merge: { ".npmrc": `registry=https://${MARKER}.invalid/\n` },
-      },
-    );
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.npmrcDivergence);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
+      base: { ".npmrc": "registry=https://registry.npmjs.org/\n" },
+      merge: { ".npmrc": `registry=https://${MARKER}.invalid/\n` },
+    });
+    await expectRefuses(fx, REFUSALS.npmrcDivergence);
   });
 
   it("refuses strict-ssl, cafile or a proxy added in .npmrc", async () => {
@@ -786,9 +681,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
       const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
         merge: { ".npmrc": `${line}\n` },
       });
-      const result = await runStep(fx);
-      expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-      expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.npmrcDivergence);
+      await expectRefuses(fx, REFUSALS.npmrcDivergence);
     }
   });
 
@@ -800,10 +693,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
       merge: { ".npmrc": "@attk:registry=https://attacker.invalid/\n" },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
-    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+    await expectPasses(fx);
   });
 
   it("refuses an unparseable .npmrc whose bytes differ from the base", async () => {
@@ -811,9 +701,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
       base: { ".npmrc": "save-exact=true\n" },
       merge: { ".npmrc": "save-exact=true\n[attacker]\nregistry=x\n" },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.npmrcParse);
+    await expectRefuses(fx, REFUSALS.npmrcParse);
   });
 
   it("refuses .npmrc committed as a symlink", async () => {
@@ -824,74 +712,25 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     git(fx.repo, "update-index", "--add", "--cacheinfo", `120000,${id},.npmrc`);
     const tree = git(fx.repo, "write-tree");
     const merge = git(fx.repo, "commit-tree", tree, "-p", fx.base, "-m", "npmrc symlink");
-    const result = await runStep({ repo: fx.repo, base: fx.base, merge });
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.sharedEntry);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
-  });
-
-  it.each([
-    ["a NUL byte", "nul"],
-    ["invalid UTF-8", "utf8"],
-    ["an oversize body", "size"],
-  ])("refuses %s in .npmrc", async (label, kind) => {
-    counter += 1;
-    const repo = join(root, `npmrc-${kind}-${counter}`);
-    await mkdir(repo, { recursive: true });
-    git(repo, "init", "--quiet", "--initial-branch=main");
-    const base = await commitFiles(
-      repo,
-      { "README.md": "# scratch\n", "package.json": `${JSON.stringify({ name: "scratch" })}\n` },
-      "base",
-    );
-    let raw: Buffer;
-    if (kind === "nul") {
-      raw = Buffer.from(`registry=http://127.0.0.1\u0000${MARKER}/\n`, "utf8");
-    } else if (kind === "utf8") {
-      raw = Buffer.from(`registry=http://ok/\njunk: \xff\xfe\n`, "latin1");
-    } else {
-      raw = Buffer.from(`# pad\n${"x".repeat(70_000)}\n`, "utf8");
-    }
-    const file = join(root, `npmrc-${kind}-blob-${counter}`);
-    await writeFile(file, raw);
-    const id = git(repo, "hash-object", "-w", file);
-    git(repo, "update-index", "--add", "--cacheinfo", `100644,${id},.npmrc`);
-    const tree = git(repo, "write-tree");
-    const merge = git(repo, "commit-tree", tree, "-p", base, "-m", `npmrc ${label}`);
-    const result = await runStep({ repo, base, merge });
-    const output = `${result.stdout}${result.stderr}`;
-    expect(result.status, output).not.toBe(0);
-    expect(output).toContain(
-      kind === "nul" ? REFUSALS.sharedNul : kind === "utf8" ? REFUSALS.sharedUtf8 : REFUSALS.sharedSize,
-    );
-    expect(output).not.toContain(MARKER);
+    await expectRefuses({ repo: fx.repo, base: fx.base, merge }, REFUSALS.sharedEntry);
   });
 
   it("matches .npmrc keys case-insensitively", async () => {
     const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
       merge: { ".npmrc": "Audit-Level=critical\n" },
     });
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.npmrcDivergence);
+    await expectRefuses(fx, REFUSALS.npmrcDivergence);
   });
 
   it("refuses a base that lacks the PyYAML manifest when the workspace file changed", async () => {
     // The manifest is what main pins; until this lands on main every
     // workspace-changing pull request reds here rather than judging with an
     // unpinned module.
-    const fx = await fixture(
-      BASE_PACKAGE_JSON(undefined),
-      BASE_PACKAGE_JSON(undefined),
-      {
-        base: { "pnpm-workspace.yaml": "packages:\n  - \"a\"\n" },
-        merge: { "pnpm-workspace.yaml": "packages:\n  - \"b\"\n" },
-      },
-      { noManifest: true },
-    );
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.manifestMissing);
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
+      base: { "pnpm-workspace.yaml": "packages:\n  - \"a\"\n" },
+      merge: { "pnpm-workspace.yaml": "packages:\n  - \"b\"\n" },
+    }, { noManifest: true });
+    await expectRefuses(fx, REFUSALS.manifestMissing);
   });
 
   it("refuses a PyYAML manifest committed as a symlink on the base", async () => {
@@ -915,10 +754,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     git(baseRepo, "update-index", "--add", "--cacheinfo", `100644,${mergeId},pnpm-workspace.yaml`);
     const mergeTree = git(baseRepo, "write-tree");
     const merge = git(baseRepo, "commit-tree", mergeTree, "-p", symlinkBase, "-m", "merge");
-    const result = await runStep({ repo: baseRepo, base: symlinkBase, merge });
-    expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.manifestEntry);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(MARKER);
+    await expectRefuses({ repo: baseRepo, base: symlinkBase, merge }, REFUSALS.manifestEntry);
   });
 
   it.each([
@@ -931,22 +767,11 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
   ])("refuses %s in the PyYAML manifest by the pin grammar", async (_label, pinLine) => {
     // The fixture's base manifest is the committed pin; the extra.base entry
     // overrides it with the broken content the grammar gate must refuse.
-    const fx = await fixture(
-      BASE_PACKAGE_JSON(undefined),
-      BASE_PACKAGE_JSON(undefined),
-      {
-        base: { ".github/requirements-pyyaml.txt": pinLine },
-        merge: { "pnpm-workspace.yaml": "packages:\n  - \"b\"\n" },
-      },
-    );
-    const result = await runStep(fx);
-    const output = `${result.stdout}${result.stderr}`;
-    expect(result.status, output).not.toBe(0);
-    if (pinLine.includes("\n")) {
-      expect(output).toContain(REFUSALS.manifestSecondLine);
-    } else {
-      expect(output).toContain(REFUSALS.manifestGrammar);
-    }
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
+      base: { ".github/requirements-pyyaml.txt": pinLine },
+      merge: { "pnpm-workspace.yaml": "packages:\n  - \"b\"\n" },
+    });
+    await expectRefuses(fx, pinLine.includes("\n") ? REFUSALS.manifestSecondLine : REFUSALS.manifestGrammar);
   });
 
   it("fails closed when the hash-pinned install itself fails", async () => {
@@ -964,24 +789,17 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     // records the argv, the install is real), and the workspace parse then
     // runs against the module the install produced. ubuntu-latest's python
     // is the interpreter this case exercises.
-    const fx = await fixture(
-      BASE_PACKAGE_JSON(undefined),
-      BASE_PACKAGE_JSON(undefined),
-      {
-        base: {
-          "pnpm-workspace.yaml": "packages:\n  - \"a\"\nauditConfig:\n  ignoreGhsas:\n    - GHSA-vfj7-8cjw-p6xm\n",
-        },
-        merge: {
-          // Formatting differs, so the blob ids differ and the parse runs;
-          // the audit-affecting settings are identical, so the step passes.
-          "pnpm-workspace.yaml": "packages: [\"a\"]\nauditConfig:\n  ignoreGhsas:\n    - GHSA-vfj7-8cjw-p6xm\n",
-        },
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
+      base: {
+        "pnpm-workspace.yaml": "packages:\n  - \"a\"\nauditConfig:\n  ignoreGhsas:\n    - GHSA-vfj7-8cjw-p6xm\n",
       },
-    );
-    const result = await runStep(fx);
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(result.stdout, "the silent success prints nothing on stdout").toBe("");
-    expect(`${result.stdout}${result.stderr}`, "and raises no workflow-command annotation").not.toContain("::error::");
+      merge: {
+        // Formatting differs, so the blob ids differ and the parse runs;
+        // the audit-affecting settings are identical, so the step passes.
+        "pnpm-workspace.yaml": "packages: [\"a\"]\nauditConfig:\n  ignoreGhsas:\n    - GHSA-vfj7-8cjw-p6xm\n",
+      },
+    });
+    const result = await expectPasses(fx);
 
     const invocations = (await readFile(result.argvLog, "utf8")).split("\n").filter((line) => line !== "");
     expect(invocations, "exactly one pip invocation").toHaveLength(1);
