@@ -248,19 +248,22 @@ describe("closed PR dispute schema", () => {
       values (${applied.id}, ${fixture.contributorId}, 0)
     `).rejects.toMatchObject({ code: "23514" });
 
-    const legs = await sql`
+    const legs = () => sql`
       select settlement_id, account_id, counterparty_id, amount, created_at from ledger_entries
       where created_at = ${adjustmentCreatedAt}
         and account_id = any(${[fixture.sponsorId, fixture.contributorId, fixture.landingCreditorId]}::uuid[])
       order by amount
     `;
-    expect(legs).toEqual([
-      { settlement_id: fixture.settlementId, account_id: fixture.landingCreditorId,
-        counterparty_id: fixture.sponsorId, amount: -6, created_at: new Date(adjustmentCreatedAt) },
+    const award = [
       { settlement_id: null, account_id: fixture.sponsorId,
         counterparty_id: fixture.contributorId, amount: -3, created_at: new Date(adjustmentCreatedAt) },
       { settlement_id: null, account_id: fixture.contributorId,
         counterparty_id: fixture.sponsorId, amount: 3, created_at: new Date(adjustmentCreatedAt) },
+    ];
+    expect(await legs()).toEqual([
+      { settlement_id: fixture.settlementId, account_id: fixture.landingCreditorId,
+        counterparty_id: fixture.sponsorId, amount: -6, created_at: new Date(adjustmentCreatedAt) },
+      ...award,
       { settlement_id: fixture.settlementId, account_id: fixture.sponsorId,
         counterparty_id: fixture.landingCreditorId, amount: 6, created_at: new Date(adjustmentCreatedAt) },
     ]);
@@ -271,6 +274,10 @@ describe("closed PR dispute schema", () => {
     expect(new Map(balances.map((row) => [row.account_id, row.balance]))).toEqual(new Map([
       [fixture.sponsorId, -3], [fixture.contributorId, 3], [fixture.landingCreditorId, 0],
     ]));
+    // The settlement can go (migration 091) and both lines stay; the reversal line stays inert, never an award.
+    await sql`delete from settlements where id = ${fixture.settlementId}`;
+    expect(await sql`select count(*)::int as n from dispute_credit_adjustment_lines where adjustment_id = ${applied.id}`).toEqual([{ n: 2 }]);
+    expect(await legs()).toEqual(award);
   });
 });
 

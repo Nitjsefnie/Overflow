@@ -122,7 +122,7 @@ type EligibleIssueRow = {
  * nested-loop joins for the mis-estimate. An unnamed statement is re-planned
  * with the actual parameter values on every execution, so the collapse never
  * happens. Request values still bind as parameters; only the shared starting
- * limit is interpolated; migration 090's account_credit_limits view repeats
+ * limit is interpolated; migration 091's account_credit_limits view repeats
  * it, so a change needs a new migration. Future edits must keep the CTE-block
  * formatting: the migration-056 plan pins' `cteBlock()` parser matches
  * `^\s*CTE <name>$` headers and reads the deeper-indented lines under each, so
@@ -209,7 +209,7 @@ const BOARD_QUERY = `
         -- Moderation changes the balance a later contribution repays, but
         -- neither an adjustment nor its reversal is itself completed work.
         -- These immutable events use their creation time and UUID; they are
-        -- not re-materialized.
+        -- not re-materialized, and still count once their settlement is gone.
         select legs.account_id, legs.amount, adjustments.created_at, 1,
           adjustments.id::text, repositories.provider,
           coalesce(repositories.instance_url, ''),
@@ -217,10 +217,10 @@ const BOARD_QUERY = `
           pull_requests.pull_request_number, issues.issue_number
         from moderation_credit_adjustments as adjustments
         join moderation_credit_adjustment_lines as lines on lines.adjustment_id = adjustments.id
-        join settlements on settlements.id = lines.settlement_id
-        join pull_requests on pull_requests.id = settlements.pull_request_id
-        join issues on issues.id = settlements.issue_id
-        join registered_repositories as repositories on repositories.id = pull_requests.repository_id
+        left join settlements on settlements.id = lines.settlement_id
+        left join pull_requests on pull_requests.id = settlements.pull_request_id
+        left join issues on issues.id = settlements.issue_id
+        left join registered_repositories as repositories on repositories.id = pull_requests.repository_id
         cross join lateral (values
           (lines.creditor_id, lines.amount),
           (adjustments.target_account_id, -lines.amount)

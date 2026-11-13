@@ -57,13 +57,8 @@ afterAll(async () => {
 
 describe("a reconciliation that deletes materialized rows says so", () => {
   it("counts and records an issue that left the fold", async () => {
-    const { repositoryId, store, ownerName } = await registerRepository({
-      githubRepositoryId: 9_200_001,
-      ownerName: "example/abandoned-issue",
-      githubWebhookId: 9_200_002,
-      sponsorLogin: "removal-sponsor-one",
-      sponsorGitHubUserId: 9_300_001,
-    });
+    const { repositoryId, store, ownerName } = await registerRepository({ githubRepositoryId: 9_200_001, ownerName: "example/abandoned-issue",
+      githubWebhookId: 9_200_002, sponsorLogin: "removal-sponsor-one", sponsorGitHubUserId: 9_300_001 });
     let issues: GitHubIssue[] = [openIssue({ id: abandonedIssueGitHubId, number: 1, ownerName, ownerLogin: "removal-sponsor-one" })];
     const github = gateway(ownerName, () => issues);
 
@@ -109,13 +104,8 @@ describe("a reconciliation that deletes materialized rows says so", () => {
     const contributorLogin = "removal-contributor-two";
     const contributorGitHubUserId = 9_300_003;
     await insertUser(contributorLogin, contributorGitHubUserId);
-    const { repositoryId, store, ownerName } = await registerRepository({
-      githubRepositoryId: 9_200_003,
-      ownerName: "example/withdrawn-pull-request",
-      githubWebhookId: 9_200_004,
-      sponsorLogin,
-      sponsorGitHubUserId: 9_300_002,
-    });
+    const { repositoryId, store, ownerName } = await registerRepository({ githubRepositoryId: 9_200_003, ownerName: "example/withdrawn-pull-request",
+      githubWebhookId: 9_200_004, sponsorLogin, sponsorGitHubUserId: 9_300_002 });
     const closingPullRequest = mergedPullRequest({
       id: withdrawnPullRequestGitHubId,
       number: 11,
@@ -193,13 +183,8 @@ describe("a reconciliation that deletes materialized rows says so", () => {
     const contributorLogin = "removal-contributor-four";
     const contributorGitHubUserId = 9_300_006;
     await insertUser(contributorLogin, contributorGitHubUserId);
-    const { repositoryId, store, ownerName } = await registerRepository({
-      githubRepositoryId: 9_200_007,
-      ownerName: "example/retired-closure",
-      githubWebhookId: 9_200_008,
-      sponsorLogin,
-      sponsorGitHubUserId: 9_300_005,
-    });
+    const { repositoryId, store, ownerName } = await registerRepository({ githubRepositoryId: 9_200_007, ownerName: "example/retired-closure",
+      githubWebhookId: 9_200_008, sponsorLogin, sponsorGitHubUserId: 9_300_005 });
     const closingPullRequest = mergedPullRequest({
       id: retiredPullRequestGitHubId,
       number: 23,
@@ -288,18 +273,52 @@ describe("a reconciliation that deletes materialized rows says so", () => {
     expect({ removals: second.removals, removed: second.removed }).toEqual({ removals: 3, removed: 3 });
   });
 
+  // An earlier release's dispute reversal line and a moderation line both name the settlement a reopen removes.
+  it("publishes the removal of a settlement that stored adjustment lines name and keeps the lines", async () => {
+    const contributorLogin = "removal-contributor-eight";
+    const contributorId = await insertUser(contributorLogin, 9_300_012);
+    const { repositoryId, store, ownerName } = await registerRepository({ githubRepositoryId: 9_200_015,
+      ownerName: "example/adjusted-settlement", githubWebhookId: 9_200_016, sponsorLogin: "removal-sponsor-eight", sponsorGitHubUserId: 9_300_013 });
+    const landing = mergedPullRequest({ id: 9_100_011, number: 31, ownerName, githubRepositoryId: 9_200_015,
+      authorLogin: contributorLogin, authorGitHubUserId: 9_300_012 });
+    let issues: GitHubIssue[] = [{ ...openIssue({ id: 9_100_012, number: 30, ownerName, ownerLogin: "removal-sponsor-eight" }),
+      state: "CLOSED", claimAssigneeGitHubLogin: contributorLogin, closingPullRequests: [landing] }];
+    const github = gateway(ownerName, () => issues);
+    await reconcile(store, github, repositoryId);
+    const [settlement] = await sql`select settlements.* from settlements join issues on issues.id = settlements.issue_id
+      where issues.repository_id = ${repositoryId}`;
+    const lineCounts = () => sql`select (select count(*)::int from dispute_credit_adjustment_lines where settlement_id = ${settlement.id}) as dispute,
+      (select count(*)::int from moderation_credit_adjustment_lines where settlement_id = ${settlement.id}) as moderation`;
+    await sql`with closed as (insert into pull_requests (github_pull_request_id, repository_id, issue_id, pull_request_number, url, title, body, state)
+        values (9_100_013, ${repositoryId}, ${settlement.issue_id}, 32, 'https://example.test/pull/32', 'Closed', '', 'CLOSED') returning id),
+      request as (insert into closed_pr_dispute_requests (contributor_id, pull_request_id, issue_id, landed_pull_request_id, request_reason)
+        select ${contributorId}, closed.id, ${settlement.issue_id}, ${settlement.pull_request_id}, 'Landed.' from closed returning id),
+      event as (insert into moderation_events (target_user_id, actor_id, prior_state, new_state, reason)
+        values (${settlement.debtor_id}, ${contributorId}, 'ACTIVE', 'ACTIVE', 'Fixture.') returning id),
+      audit as (insert into calibration_audits (account_id, reporter_id, rationale, sample_started_at, sample_ended_at, settled_sample_size)
+        values (${settlement.debtor_id}, ${contributorId}, 'Fixture.', '2025-01-01', '2025-02-01', 1) returning id),
+      dispute as (insert into dispute_credit_adjustments (moderation_event_id, dispute_id, target_account_id, reason)
+        select event.id, request.id, ${settlement.debtor_id}, 'Fixture.' from event, request returning id),
+      moderation as (insert into moderation_credit_adjustments (moderation_event_id, calibration_audit_id, target_account_id,
+        gap_per_pair, pair_count, total_amount, reason) select event.id, audit.id, ${settlement.debtor_id}, 4, 1, 4, 'Fixture.' from event, audit returning id),
+      reversal as (insert into dispute_credit_adjustment_lines (adjustment_id, settlement_id, creditor_id, amount)
+        select id, ${settlement.id}, ${contributorId}, -6 from dispute)
+      insert into moderation_credit_adjustment_lines (adjustment_id, settlement_id, creditor_id, amount)
+        select id, ${settlement.id}, ${contributorId}, 4 from moderation`;
+    expect(await lineCounts()).toEqual([{ dispute: 1, moderation: 1 }]);
+    issues = [{ ...issues[0], state: "OPEN", closingPullRequests: [] }];
+    await reconcile(store, github, repositoryId);
+    await expect(materializedSettlementIssueIds(repositoryId)).resolves.toEqual([]);
+    expect(await lineCounts()).toEqual([{ dispute: 1, moderation: 1 }]);
+  });
+
   it("keeps a marked issue's row and removes its settlement while the closing connection is unreadable", async () => {
     const sponsorLogin = "removal-sponsor-five";
     const contributorLogin = "removal-contributor-five";
     const contributorGitHubUserId = 9_300_007;
     await insertUser(contributorLogin, contributorGitHubUserId);
-    const { repositoryId, store, ownerName } = await registerRepository({
-      githubRepositoryId: 9_200_009,
-      ownerName: "example/unreadable-closing",
-      githubWebhookId: 9_200_010,
-      sponsorLogin,
-      sponsorGitHubUserId: 9_300_008,
-    });
+    const { repositoryId, store, ownerName } = await registerRepository({ githubRepositoryId: 9_200_009, ownerName: "example/unreadable-closing",
+      githubWebhookId: 9_200_010, sponsorLogin, sponsorGitHubUserId: 9_300_008 });
     const closingPullRequest = mergedPullRequest({
       id: unreadablePullRequestGitHubId,
       number: 31,
@@ -400,13 +419,8 @@ describe("a reconciliation that deletes materialized rows says so", () => {
     const contributorLogin = "removal-contributor-six";
     const contributorGitHubUserId = 9_300_009;
     await insertUser(contributorLogin, contributorGitHubUserId);
-    const { repositoryId, store, ownerName } = await registerRepository({
-      githubRepositoryId: 9_200_011,
-      ownerName: "example/unreadable-opening",
-      githubWebhookId: 9_200_012,
-      sponsorLogin,
-      sponsorGitHubUserId: 9_300_010,
-    });
+    const { repositoryId, store, ownerName } = await registerRepository({ githubRepositoryId: 9_200_011, ownerName: "example/unreadable-opening",
+      githubWebhookId: 9_200_012, sponsorLogin, sponsorGitHubUserId: 9_300_010 });
     const closingPullRequest = mergedPullRequest({
       id: 9_100_009,
       number: 41,
@@ -489,13 +503,8 @@ describe("a reconciliation that deletes materialized rows says so", () => {
   });
 
   it("records no removal for a reconciliation that removes nothing", async () => {
-    const { repositoryId, store, ownerName } = await registerRepository({
-      githubRepositoryId: 9_200_005,
-      ownerName: "example/unchanged-fold",
-      githubWebhookId: 9_200_006,
-      sponsorLogin: "removal-sponsor-three",
-      sponsorGitHubUserId: 9_300_004,
-    });
+    const { repositoryId, store, ownerName } = await registerRepository({ githubRepositoryId: 9_200_005, ownerName: "example/unchanged-fold",
+      githubWebhookId: 9_200_006, sponsorLogin: "removal-sponsor-three", sponsorGitHubUserId: 9_300_004 });
     const issues = [openIssue({ id: survivingIssueGitHubId, number: 3, ownerName, ownerLogin: "removal-sponsor-three" })];
     const github = gateway(ownerName, () => issues);
 
@@ -509,13 +518,8 @@ describe("a reconciliation that deletes materialized rows says so", () => {
   });
 
   it("forwards keptIssueGitHubIds through the scrubber untouched", async () => {
-    const { repositoryId } = await registerRepository({
-      githubRepositoryId: 9_200_013,
-      ownerName: "example/scrub-forwarding",
-      githubWebhookId: 9_200_014,
-      sponsorLogin: "removal-sponsor-seven",
-      sponsorGitHubUserId: 9_300_011,
-    });
+    const { repositoryId } = await registerRepository({ githubRepositoryId: 9_200_013, ownerName: "example/scrub-forwarding",
+      githubWebhookId: 9_200_014, sponsorLogin: "removal-sponsor-seven", sponsorGitHubUserId: 9_300_011 });
     await sql`
       insert into data_subject_suppressions (provider, instance_url, forge_id, logins)
       values (${"github"}, ${"https://github.com"}, ${9_400_001}, ${sql.array(["suppressed-login"])})
@@ -539,23 +543,17 @@ describe("a reconciliation that deletes materialized rows says so", () => {
 });
 
 async function reconcile(
-  store: PostgresFoldStore,
-  github: ReconciliationGateway,
-  repositoryId: string,
+  store: PostgresFoldStore, github: ReconciliationGateway, repositoryId: string,
 ): Promise<{ runId: string; removals: number; removed: number }> {
   const summary = await reconcileRepository({ store, github }, repositoryId, { rederive: true });
-  if (summary.skipped) {
-    throw new Error("Expected the reconciliation to run.");
-  }
+  if (summary.skipped) throw new Error("Expected the reconciliation to run.");
   return { runId: summary.runId, removals: summary.removals, removed: summary.removed };
 }
 
 async function removalChanges(runId: string): Promise<ChangeRow[]> {
   return sql<ChangeRow[]>`
-    select entity_kind, change_kind, pull_request_id, before_state, after_state
-    from reconciliation_changes
-    where reconciliation_run_id = ${runId} and change_kind = ${"REMOVE"}
-    order by entity_kind::text asc
+    select entity_kind, change_kind, pull_request_id, before_state, after_state from reconciliation_changes
+    where reconciliation_run_id = ${runId} and change_kind = ${"REMOVE"} order by entity_kind::text asc
   `;
 }
 
@@ -568,24 +566,21 @@ async function materializedIssueIds(repositoryId: string): Promise<number[]> {
 
 async function materializedPullRequestIds(repositoryId: string): Promise<number[]> {
   const rows = await sql<{ github_pull_request_id: number | string }[]>`
-    select github_pull_request_id from pull_requests
-    where repository_id = ${repositoryId} order by github_pull_request_id asc
+    select github_pull_request_id from pull_requests where repository_id = ${repositoryId} order by github_pull_request_id asc
   `;
   return rows.map((row) => Number(row.github_pull_request_id));
 }
 
 async function storedViolationCodes(repositoryId: string): Promise<string[]> {
   const rows = await sql<Array<{ violation: { code?: string } }>>`
-    select violation from repository_policy_violations
-    where repository_id = ${repositoryId} order by violation->>'code' asc
+    select violation from repository_policy_violations where repository_id = ${repositoryId} order by violation->>'code' asc
   `;
   return rows.map((row) => row.violation.code ?? "").sort();
 }
 
 async function materializedSettlementIssueIds(repositoryId: string): Promise<number[]> {
   const rows = await sql<{ github_issue_id: number | string }[]>`
-    select issues.github_issue_id from settlements
-    join issues on issues.id = settlements.issue_id
+    select issues.github_issue_id from settlements join issues on issues.id = settlements.issue_id
     where issues.repository_id = ${repositoryId} order by issues.github_issue_id asc
   `;
   return rows.map((row) => Number(row.github_issue_id));
@@ -594,18 +589,13 @@ async function materializedSettlementIssueIds(repositoryId: string): Promise<num
 async function closureKinds(repositoryId: string): Promise<Array<{ kind: string; pull_request_id: string | null }>> {
   return sql<Array<{ kind: string; pull_request_id: string | null }>>`
     select unwritable_closures.kind::text as kind, unwritable_closures.pull_request_id
-    from unwritable_closures
-    join issues on issues.id = unwritable_closures.issue_id
+    from unwritable_closures join issues on issues.id = unwritable_closures.issue_id
     where issues.repository_id = ${repositoryId} order by issues.github_issue_id asc
   `;
 }
 
 async function registerRepository(input: {
-  githubRepositoryId: number;
-  ownerName: string;
-  githubWebhookId: number;
-  sponsorLogin: string;
-  sponsorGitHubUserId: number;
+  githubRepositoryId: number; ownerName: string; githubWebhookId: number; sponsorLogin: string; sponsorGitHubUserId: number;
 }): Promise<{ repositoryId: string; store: PostgresFoldStore; ownerName: string }> {
   const sponsorId = await insertUser(input.sponsorLogin, input.sponsorGitHubUserId);
   await sql`
@@ -614,27 +604,17 @@ async function registerRepository(input: {
     where id = ${sponsorId}
   `;
   const [repository] = await sql<{ id: string }[]>`
-    insert into registered_repositories (
-      github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme
-    )
-    values (
-      ${input.githubRepositoryId}, ${input.ownerName}, ${sponsorId}, ${"PUBLIC"}, ${input.githubWebhookId},
-      ${sql.json(difficultyScheme())}::jsonb
-    )
+    insert into registered_repositories (github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme)
+    values (${input.githubRepositoryId}, ${input.ownerName}, ${sponsorId}, ${"PUBLIC"}, ${input.githubWebhookId},
+      ${sql.json(difficultyScheme())}::jsonb)
     returning id
   `;
-  return {
-    repositoryId: repository.id,
-    store: new PostgresFoldStore(sql, tokenEncryptionKey),
-    ownerName: input.ownerName,
-  };
+  return { repositoryId: repository.id, store: new PostgresFoldStore(sql, tokenEncryptionKey), ownerName: input.ownerName };
 }
 
 async function insertUser(githubLogin: string, githubUserId: number): Promise<string> {
   const [user] = await sql<{ id: string }[]>`
-    insert into users (github_user_id, github_login)
-    values (${githubUserId}, ${githubLogin})
-    returning id
+    insert into users (github_user_id, github_login) values (${githubUserId}, ${githubLogin}) returning id
   `;
   return user.id;
 }
@@ -648,10 +628,7 @@ function difficultyScheme() {
       { label: "M", comparisonPoints: 5, reservePoints: 5 },
       { label: "L", comparisonPoints: 8, reservePoints: 8 },
     ],
-    actualLabels: Array.from({ length: 10 }, (_, index) => ({
-      label: `delivered/${index + 1}`,
-      points: index + 1,
-    })),
+    actualLabels: Array.from({ length: 10 }, (_, index) => ({ label: `delivered/${index + 1}`, points: index + 1 })),
   };
 }
 
@@ -666,13 +643,7 @@ function gateway(ownerName: string, issuesNow: () => readonly GitHubIssue[]): Re
   };
 }
 
-function openIssue(input: {
-  id: number;
-  number: number;
-  ownerName: string;
-  ownerLogin: string;
-  openingLabel?: string;
-}): GitHubIssue {
+function openIssue(input: { id: number; number: number; ownerName: string; ownerLogin: string; openingLabel?: string }): GitHubIssue {
   const openingLabel = input.openingLabel ?? "M";
   return {
     id: input.id,
@@ -690,30 +661,16 @@ function openIssue(input: {
     labels: [openingLabel],
     claimAssigneeGitHubLogin: null,
     claimAssigneeGitHubUserId: null,
-    history: [
-      {
-        kind: "LABELED",
-        id: `opening-${input.id}`,
-        actorLogin: input.ownerLogin,
-        actorGitHubUserId: null,
-        label: openingLabel,
-        createdAt: "2026-09-01T08:01:00.000Z",
-      },
-    ],
+    history: [{ kind: "LABELED", id: `opening-${input.id}`, actorLogin: input.ownerLogin, actorGitHubUserId: null,
+      label: openingLabel, createdAt: "2026-09-01T08:01:00.000Z" }],
     comments: [],
     closingPullRequests: [],
   };
 }
 
 function mergedPullRequest(input: {
-  id: number;
-  number: number;
-  ownerName: string;
-  githubRepositoryId: number;
-  authorLogin: string;
-  authorGitHubUserId: number;
-  mergedAt?: string;
-  finalCommitAt?: string;
+  id: number; number: number; ownerName: string; githubRepositoryId: number;
+  authorLogin: string; authorGitHubUserId: number; mergedAt?: string; finalCommitAt?: string;
 }): GitHubPullRequest {
   return {
     id: input.id,
