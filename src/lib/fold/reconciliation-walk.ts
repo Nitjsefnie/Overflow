@@ -130,34 +130,37 @@ async function walk({ pass, listing, gateway, repository, onDiscard }: Reconcili
     if (!recorded) fresh.push({ ...subject, anchor });
   };
   for (const { anchor, ...subject } of earlier.subjects) list(subject, anchor, true);
-  // Recorded after a completed listing too: the gathers and refreshes below can still be held.
-  try { await visitWalkListing(listing, { ...progress }, async (subject, anchor) => list(subject, anchor)); }
-  finally { await recordListedSubjects(pass, earlier.records, fresh); }
-  const refreshTargets = new Set([...referenced(issues().filter((issue) => listed.has(rowKey("issue", issue.id)))),
-    ...repository.disputePullRequests].map(({ id }) => id));
-  // References/disputes may name an unlisted PR; retain its completed refresh outcome for resume.
-  const omitted = [...staged.values()].filter((row) => !listed.has(rowKey(row.kind, row.subjectKey))
-    && !(row.kind === "pull_request" && refreshTargets.has(row.subjectKey) && isRefreshedPr(row.payload) && !row.payload.listed));
-  const absent: typeof omitted = [];
-  // The rare pagination-drift set costs one fresh, kind-aware lookup per omitted row.
-  for (const row of omitted) {
-    const subject = stagedIdentity(row.payload);
-    let fact: GitHubIssue | GitHubSubject | null;
-    try {
-      fact = row.kind === "issue" ? await gateway.gatherIssue(subject) : await gateway.getPullRequest(subject);
-    } catch (error) {
-      if (walkSubjectDiscardReason(error, row.kind, true, false) !== "NOT_FOUND") throw error;
-      fact = null;
+  // Recorded after a completed listing too: the lookups, gathers and refreshes below can still be held.
+  try {
+    await visitWalkListing(listing, { ...progress }, async (subject, anchor) => list(subject, anchor));
+    const refreshTargets = new Set([...referenced(issues().filter((issue) => listed.has(rowKey("issue", issue.id)))),
+      ...repository.disputePullRequests].map(({ id }) => id));
+    // References/disputes may name an unlisted PR; retain its completed refresh outcome for resume.
+    const omitted = [...staged.values()].filter((row) => !listed.has(rowKey(row.kind, row.subjectKey))
+      && !(row.kind === "pull_request" && refreshTargets.has(row.subjectKey) && isRefreshedPr(row.payload) && !row.payload.listed));
+    // The rare pagination-drift set costs one fresh, kind-aware lookup per omitted row. Each verdict
+    // survives a hold: an absent row is deleted at once, a present one is recorded as listed.
+    for (const row of omitted) {
+      const subject = stagedIdentity(row.payload);
+      let fact: GitHubIssue | GitHubSubject | null;
+      try {
+        fact = row.kind === "issue" ? await gateway.gatherIssue(subject) : await gateway.getPullRequest(subject);
+      } catch (error) {
+        if (walkSubjectDiscardReason(error, row.kind, true, false) !== "NOT_FOUND") throw error;
+        fact = null;
+      }
+      if (fact === null) {
+        await pass.deleteStaged([{ kind: row.kind, subjectKey: row.subjectKey }]);
+        staged.delete(rowKey(row.kind, row.subjectKey));
+        continue;
+      }
+      const observed: WalkSubject = { ...subject, kind: row.kind,
+        updatedAt: row.kind === "issue" ? new Date((fact as GitHubIssue).updatedAt) : row.updatedAt };
+      if (row.kind === "issue") await stageIssue(subject, "repair", fact as GitHubIssue);
+      else await gather(observed, "repair");
+      list(observed, "repair");
     }
-    if (fact === null) { absent.push(row); continue; }
-    const observed: WalkSubject = { ...subject, kind: row.kind,
-      updatedAt: row.kind === "issue" ? new Date((fact as GitHubIssue).updatedAt) : row.updatedAt };
-    if (row.kind === "issue") await stageIssue(subject, "repair", fact as GitHubIssue);
-    else await gather(observed, "repair");
-    listed.set(rowKey(row.kind, row.subjectKey), observed);
-  }
-  await pass.deleteStaged(absent.map(({ kind, subjectKey }) => ({ kind, subjectKey })));
-  for (const row of absent) staged.delete(rowKey(row.kind, row.subjectKey));
+  } finally { await recordListedSubjects(pass, earlier.records, fresh); }
   for (const [key, subject] of listed) {
     const previous = staged.get(key);
     if (previous === undefined || previous.updatedAt < subject.updatedAt) await gather(subject, "repair");
