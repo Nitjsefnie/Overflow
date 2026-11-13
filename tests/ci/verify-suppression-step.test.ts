@@ -396,7 +396,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
   // a strict subset of the base's passes; every other change still refuses.
   const [ID_A, ID_B, ID_C] = ["GHSA-vfj7-8cjw-p6xm", "GHSA-pxg6-pf52-xh8x", "GHSA-c2qf-rxjj-qqgw"];
   const CVES = { ignoreCves: ["CVE-2099-0001"] };
-  const listed = (config: Record<string, unknown>): string => BASE_PACKAGE_JSON({ auditConfig: config });
+  const listed = (config: unknown): string => BASE_PACKAGE_JSON({ auditConfig: config });
 
   it.each([
     ["one id", { ignoreGhsas: [ID_A, ID_B] }, { ignoreGhsas: [ID_A] }],
@@ -412,16 +412,23 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
 
   it.each([
     ["removes one id and adds another", { ignoreGhsas: [ID_A, ID_B] }, { ignoreGhsas: [ID_A, MARKER] }],
+    ["replaces every id with a new one", { ignoreGhsas: [ID_A, ID_B] }, { ignoreGhsas: [MARKER] }],
+    ["removes two ids and adds a new one", { ignoreGhsas: [ID_A, ID_B, ID_C] }, { ignoreGhsas: [ID_A, MARKER] }],
     ["repeats a kept id", { ignoreGhsas: [ID_A, ID_B] }, { ignoreGhsas: [ID_A, ID_A] }],
     ["reorders the ids without removing one", { ignoreGhsas: [ID_A, ID_B] }, { ignoreGhsas: [ID_B, ID_A] }],
     ["deletes the ignoreGhsas key", { ...CVES, ignoreGhsas: [ID_A, ID_B] }, { ...CVES }],
     ["carries a non-string member", { ignoreGhsas: [ID_A, ID_B] }, { ignoreGhsas: [ID_A, { id: MARKER }] }],
     ["turns the list into a mapping of kept ids", { ignoreGhsas: [ID_A, ID_B] }, { ignoreGhsas: { [ID_A]: true } }],
+    ["shrinks a base mapping into a list", { ignoreGhsas: { [ID_A]: true, [ID_B]: true } }, { ignoreGhsas: [ID_A] }],
+    ["shrinks a base list carrying a non-string member", { ignoreGhsas: [ID_A, ID_B, 7] }, { ignoreGhsas: [ID_A, ID_B] }],
+    ["replaces auditConfig with a bare list of kept ids", { ignoreGhsas: [ID_A, ID_B] }, [ID_A]],
     [
       "removes an id and changes another auditConfig key",
       { ...CVES, ignoreGhsas: [ID_A, ID_B] },
       { ignoreCves: ["CVE-2099-0001", MARKER], ignoreGhsas: [ID_A] },
     ],
+    ["removes an id and adds another auditConfig key", { ignoreGhsas: [ID_A, ID_B] }, { ignoreCves: [MARKER], ignoreGhsas: [ID_A] }],
+    ["removes an id and drops another auditConfig key", { ...CVES, ignoreGhsas: [ID_A, ID_B] }, { ignoreGhsas: [ID_A] }],
     ["removes an id and turns another key's 1 into true", { ignoreCves: 1, ignoreGhsas: [ID_A, ID_B] }, { ignoreCves: true, ignoreGhsas: [ID_A] }],
   ])("refuses a merge tree whose ignoreGhsas change %s", async (_label, base, merge) => {
     const fx = await fixture(listed(base), listed(merge));
