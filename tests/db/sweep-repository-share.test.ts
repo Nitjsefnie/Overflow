@@ -109,7 +109,7 @@ describe("per-repository share of a sponsor's sweep request budget", () => {
 
     for (const r of [a, b, late]) await new PostgresReconciliationJobStore(sql).enqueueReconciliationJob(r.id, "SWEEP");
     // Two due repositories (the inactive one is not counted): floor(11 / 2) = 5 each,
-    // and the one request neither floor reserves goes to whichever borrows it first.
+    // and the request left once both have their floors goes to whichever borrows first.
     const holds = await Promise.all([...Array.from({ length: 12 }, (_, i) => spend(a.id, i)), ...Array.from({ length: 12 }, (_, i) => spend(b.id, i))]);
     const admitted = [holds.slice(0, 12), holds.slice(12)].map((side) => side.filter((hold) => hold === null).length);
     expect([...admitted].sort()).toEqual([5, 6]);
@@ -125,12 +125,12 @@ describe("per-repository share of a sponsor's sweep request budget", () => {
     expect(await round()).toEqual({ spent: 0 });
     expect((await spent())[b.id]).toEqual({ window_start: at, spent: admitted[1] });
 
-    // The next window starts every count from zero: a's share of floor(11 / 3) = 3,
-    // plus the 2 its two due siblings' floors leave unreserved.
-    for (let i = 0; i < 5; i++) expect(await spend(a.id, i, next)).toBeNull();
-    expect(await spend(a.id, 5, next)).toEqual(new Date(next.getTime() + windowMs));
-    expect((await spent())[a.id]).toEqual({ window_start: next, spent: 5 });
-    expect(await round()).toEqual({ spent: 5 });
+    // The next window starts every count from zero: a's share is floor(11 / 3) = 3,
+    // and its due siblings, still under theirs, keep it from borrowing.
+    for (let i = 0; i < 3; i++) expect(await spend(a.id, i, next)).toBeNull();
+    expect(await spend(a.id, 3, next)).toEqual(new Date(next.getTime() + windowMs));
+    expect((await spent())[a.id]).toEqual({ window_start: next, spent: 3 });
+    expect(await round()).toEqual({ spent: 3 });
 
     // The row goes with its repository.
     await sql`delete from repository_reconciliation_jobs where repository_id = ${a.id}`;
@@ -149,31 +149,50 @@ describe("per-repository share of a sponsor's sweep request budget", () => {
       while ((hold = await rounds.spend(sponsorId, job.repositoryId, at, 100)) === null) admitted.set(job.repositoryId, (admitted.get(job.repositoryId) ?? 0) + 1);
       await jobs.deferReconciliationJob(job.id, job.leaseToken, hold);
     }
-    // The first to cap borrows the idle 30 while six due floors stay reserved.
-    expect([...admitted.values()]).toEqual([40, 10, 10, 10, 10, 10, 10]);
+    // Only the last to cap, with every other due floor spent, borrows the idle 30.
+    expect([...admitted.values()]).toEqual([10, 10, 10, 10, 10, 10, 40]);
     expect(await sql`select spent from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`).toEqual([{ spent: 100 }]);
   });
 
-  it("reserves each due sibling's unspent share from a borrowing repository", async () => {
-    const [sponsorId, otherSponsorId] = [await insertSponsor(), await insertSponsor()];
-    const [a, b, c, idle, later, failed, off, foreign] = await Promise.all(Array.from({ length: 8 }, (_, i) => insertRepository(i < 7 ? sponsorId : otherSponsorId)));
+  it("keeps a due sibling's floor when an idle repository's job becomes due after a capped one asked to borrow", async () => {
+    const sponsorId = await insertSponsor();
+    const [a, b, c] = await Promise.all(Array.from({ length: 4 }, () => insertRepository(sponsorId)));
     const jobs = new PostgresReconciliationJobStore(sql);
-    for (const r of [a!, c!, later!, failed!, off!, foreign!]) await jobs.enqueueReconciliationJob(r.id, "SWEEP");
-    await jobs.requestRepositoryRederivation(b!.id, at);
-    await jobs.enqueueReconciliationJob(idle!.id, "WEBHOOK");
-    await sql`update repository_reconciliation_jobs set run_after = ${new Date(at.getTime() + 1)} where repository_id = ${later!.id}`;
-    await sql`update repository_reconciliation_jobs set state = 'FAILED' where repository_id = ${failed!.id}`;
-    await sql`update registered_repositories set active = false where id = ${off!.id}`;
+    for (const r of [a!, b!]) await jobs.enqueueReconciliationJob(r.id, "SWEEP");
     const store = new PostgresSponsorSweepRoundStore(sql, windowMs);
-    const spend = async (id: string, most: number) => { let n = 0; while (n < most && await store.spend(sponsorId, id, at, 60) === null) n++; return n; };
-    // floor(60 / 6 active) = 10 each: b spends 4 of its share, c borrows to 12 while a and b are due.
-    expect([await spend(b!.id, 4), await spend(c!.id, 12)]).toEqual([4, 12]);
-    // a reserves b's unspent 6 alone: not c's overdraft, nor the share of a repository with
-    // no budget-bound job, a job not yet due, a failed job, an inactive repository or another sponsor's.
-    expect(await spend(a!.id, 100)).toBe(38);
-    // b still gets its whole floor, and the round ends at its budget.
-    expect(await spend(b!.id, 100)).toBe(6);
-    expect(await sql`select spent from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`).toEqual([{ spent: 60 }]);
+    const spend = async (id: string, most: number) => { let n = 0; while (n < most && await store.spend(sponsorId, id, at, 40) === null) n++; return n; };
+    // floor(40 / 4) = 10 each. a may not borrow while b is due and under its share; c's
+    // job becomes due late, and c takes its own share without eating b's floor.
+    const first = await spend(a!.id, 100);
+    await jobs.enqueueReconciliationJob(c!.id, "SWEEP");
+    expect({ a: first, c: await spend(c!.id, 100), b: await spend(b!.id, 9) }).toEqual({ a: 10, c: 10, b: 9 });
+    // One short of its floor, b still holds a back; at its floor, a borrows the idle share left.
+    expect([await spend(a!.id, 100), await spend(b!.id, 1), await spend(a!.id, 100)]).toEqual([0, 1, 10]);
+    expect(await sql`select spent from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`).toEqual([{ spent: 40 }]);
+  });
+
+  const due = (id: string) => new PostgresReconciliationJobStore(sql).enqueueReconciliationJob(id, "SWEEP");
+  const runAfter = (id: string, when: Date) => sql`update repository_reconciliation_jobs set run_after = ${when} where repository_id = ${id}`;
+  it.each<[string, (sibling: string, spend: (id: string) => Promise<unknown>) => Promise<unknown>, number]>([
+    ["a due re-derivation", (id) => new PostgresReconciliationJobStore(sql).requestRepositoryRederivation(id, at), 10],
+    ["a job due at exactly the request's time", async (id) => { await due(id); await runAfter(id, at); }, 10],
+    ["a due sibling one request short of its share", async (id, spend) => { await due(id); for (let i = 0; i < 9; i++) await spend(id); }, 10],
+    ["a due sibling at its share", async (id, spend) => { await due(id); for (let i = 0; i < 10; i++) await spend(id); }, 20],
+    ["a due sibling whose spend is from an earlier window", async (id) => { await due(id); await sql`insert into reconciliation_sweep_repository_spend values (${id}, ${new Date(0)}, 99)`; }, 10],
+    ["a repository with no budget-bound job", (id) => new PostgresReconciliationJobStore(sql).enqueueReconciliationJob(id, "WEBHOOK"), 30],
+    ["a job not yet due", async (id) => { await due(id); await runAfter(id, new Date(at.getTime() + 1)); }, 30],
+    ["a failed job", async (id) => { await due(id); await sql`update repository_reconciliation_jobs set state = 'FAILED' where repository_id = ${id}`; }, 30],
+    ["an inactive repository's due job", async (id) => { await due(id); await sql`update registered_repositories set active = false where id = ${id}`; }, 30],
+    ["another sponsor's due job", async (id) => { await due(id); await sql`update registered_repositories set sponsor_id = ${await insertSponsor()} where id = ${id}`; }, 30],
+  ])("lets a capped repository borrow beside %s only once that sibling holds no unspent due floor", async (_, setup, expected) => {
+    // Three active repositories, a share of 10 each; the third stays idle.
+    const sponsorId = await insertSponsor();
+    const [a, sibling] = await Promise.all(Array.from({ length: 3 }, () => insertRepository(sponsorId)));
+    const store = new PostgresSponsorSweepRoundStore(sql, windowMs);
+    await setup(sibling!.id, (id) => store.spend(sponsorId, id, at, 30));
+    let admitted = 0;
+    while (await store.spend(sponsorId, a!.id, at, 30) === null) admitted++;
+    expect(admitted).toBe(expected);
   });
 
   it("counts a repository's share against the round's window, not each request's instant", async () => {

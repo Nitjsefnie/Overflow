@@ -119,8 +119,8 @@ async function walk({ pass, listing, gateway, repository, onDiscard }: Reconcili
   // A held run restarts this listing from its first page, so a budget-bound pass
   // completes only while one run's verify, resumed walk listing and this whole listing
   // fit in what it can spend in one window (its share plus what it borrows); above
-  // that it walks every window and never completes. Even the walk needs a share above a run's verify and
-  // first listing page, which are spent before anything stages.
+  // that it walks every window and never completes. Even the walk needs a share
+  // above a run's verify and first listing page, which are spent before anything stages.
   const listed = new Map<string, WalkSubject>();
   await visitWalkListing(listing, {}, async (subject) => {
     const key = rowKey(subject.kind, subject.id), previous = listed.get(key);

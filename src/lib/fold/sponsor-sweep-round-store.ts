@@ -30,21 +30,20 @@ export class PostgresSponsorSweepRoundStore {
     return row!;
   }
 
-  /** Null admits; a date holds until the window resets. Past its even share, a repository borrows only what due siblings' unspent shares leave of the budget. */
+  /** Null admits; a date holds until the window resets. Past its even share, a repository borrows only while no due sibling is under its share. */
   public async spend(sponsorId: string, repositoryId: string, now: Date, limit: number): Promise<Date | null> {
     return this.sql.begin(async (transaction) => {
       // The round's row lock serializes every admission of this sponsor.
       const round = await this.round(transaction, sponsorId, now);
-      // shortcut: every due re-derivation reserves its share, even one run outside the budget; upgrade if that strands budget.
+      // shortcut: a due re-derivation holds borrowing until it spends its share, even one run outside the budget; upgrade if that strands budget.
       const rows = await transaction`with share as (
           select ${limit}::integer / greatest(count(*)::integer, 1) as share
           from registered_repositories where sponsor_id = ${sponsorId} and active
-        ), reserved as (
-          select coalesce(sum(greatest(share.share - coalesce(spend.spent, 0), 0)), 0) as reserved
-          from share, registered_repositories as sibling
+        ), under_share_due_sibling as (
+          select from share, registered_repositories as sibling
           left join reconciliation_sweep_repository_spend as spend
             on spend.repository_id = sibling.id and spend.window_start = ${round.window_start}
-          where sibling.sponsor_id = ${sponsorId} and sibling.active and exists (
+          where sibling.sponsor_id = ${sponsorId} and sibling.active and coalesce(spend.spent, 0) < share.share and exists (
             select from repository_reconciliation_jobs as job where job.repository_id = sibling.id
               and job.reason in ('SWEEP', 'REDERIVATION') and job.state <> 'FAILED' and job.run_after <= ${now})
         ), charged as (
@@ -54,7 +53,7 @@ export class PostgresSponsorSweepRoundStore {
           on conflict (repository_id) do update set window_start = excluded.window_start,
             spent = case when repository.window_start = excluded.window_start then repository.spent + 1 else 1 end
           where repository.window_start <> excluded.window_start or repository.spent < (select share from share)
-            or ${round.spent} + 1 + (select reserved from reserved) <= ${limit}
+            or not exists (select from under_share_due_sibling)
           returning repository_id
         )
         update reconciliation_sweep_rounds set spent = spent + 1
