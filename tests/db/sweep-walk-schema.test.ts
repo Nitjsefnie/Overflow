@@ -32,8 +32,7 @@ describe("sweep walk schema", () => {
 
   it("keeps anchors nullable jsonb for the previous release's pass writer", async () => {
     const passId = await insertPass();
-    expect(await sql`select walk_anchors from reconciliation_sweep_passes where pass_id = ${passId}`)
-      .toEqual([{ walk_anchors: null }]);
+    expect(await sql`select walk_anchors from reconciliation_sweep_passes where pass_id = ${passId}`).toEqual([{ walk_anchors: null }]);
     expect(await sql`select data_type, is_nullable from information_schema.columns
       where table_name = 'reconciliation_sweep_passes' and column_name = 'walk_anchors'`)
       .toEqual([{ data_type: "jsonb", is_nullable: "YES" }]);

@@ -44,8 +44,7 @@ describe("paused full-pass pages", () => {
       vi.stubEnv("RECONCILIATION_SWEEP_PAGE_CEILING", "3");
       vi.stubEnv(name, "2");
       const f = await materializeRepositoryFixture(sql);
-      const pass = await new PostgresSweepPassStore(sql).open({ repositoryId: f.repositoryId,
-        evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
+      const pass = await new PostgresSweepPassStore(sql).open({ repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
       await writePages(pass, ["first", "second", "third"]);
       expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
       expect(await pass.read("third")).toBeUndefined();
@@ -58,8 +57,7 @@ describe("paused full-pass pages", () => {
 
   it("keeps concurrent checkpoint writes within the ceiling and returns every fetched payload", async () => {
     const f = await materializeRepositoryFixture(sql);
-    const pass = await new PostgresSweepPassStore(sql, 2).open({ repositoryId: f.repositoryId,
-      evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
+    const pass = await new PostgresSweepPassStore(sql, 2).open({ repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
     const payloads = await withSweepPass(pass, () => Promise.all([1, 2, 3].map((page) =>
       checkpointSweepRequest({ page }, async () => ({ page })))));
     expect(payloads).toEqual([{ page: 1 }, { page: 2 }, { page: 3 }]);
@@ -68,8 +66,7 @@ describe("paused full-pass pages", () => {
 
   it("rejects a failed write without blocking later writes or spending their capacity", async () => {
     const f = await materializeRepositoryFixture(sql);
-    const pass = await new PostgresSweepPassStore(sql, 2).open({ repositoryId: f.repositoryId,
-      evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
+    const pass = await new PostgresSweepPassStore(sql, 2).open({ repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
     const results = await Promise.allSettled([
       pass.write("failed", { page: 0 }, "invalid\u0000cursor"),
       pass.write("first", { page: 1 }, "cursor-one"),
@@ -124,8 +121,7 @@ describe("paused full-pass pages", () => {
 
   it("does not spend ceiling capacity or advance the cursor on a duplicate write", async () => {
     const f = await materializeRepositoryFixture(sql);
-    const pass = await new PostgresSweepPassStore(sql, 2).open({ repositoryId: f.repositoryId,
-      evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
+    const pass = await new PostgresSweepPassStore(sql, 2).open({ repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
     await pass.write("first", { page: 1 }, "cursor-one");
     await pass.write("first", { page: 99 }, "duplicate-cursor");
     expect(await sql`select walk_cursor from reconciliation_sweep_passes where pass_id = ${pass.id}`).toEqual([{ walk_cursor: "cursor-one" }]);
@@ -136,8 +132,7 @@ describe("paused full-pass pages", () => {
 
   it("completes a capped pass by deleting the pass and its pages", async () => {
     const f = await materializeRepositoryFixture(sql);
-    const pass = await new PostgresSweepPassStore(sql, 2).open({ repositoryId: f.repositoryId,
-      evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
+    const pass = await new PostgresSweepPassStore(sql, 2).open({ repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
     await writePages(pass, ["first", "second", "third"]);
     expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
     await pass.complete();
@@ -316,8 +311,7 @@ describe("paused full-pass pages", () => {
 
   it("checkpoints PostgreSQL-safe forge strings before returning or replaying a page", async () => {
     const f = await materializeRepositoryFixture(sql);
-    const pass = await new PostgresSweepPassStore(sql).open({ repositoryId: f.repositoryId,
-      evidenceVersion: "text", scanStartedAt: at, dirtySubjects: [] });
+    const pass = await new PostgresSweepPassStore(sql).open({ repositoryId: f.repositoryId, evidenceVersion: "text", scanStartedAt: at, dirtySubjects: [] });
     const client = new GitHubGraphqlClient({ accessToken: randomBytes(24).toString("hex"),
       fetch: async () => Response.json({ data: { value: "before\u0000after" } }) });
     await withSweepPass(pass, async () => {
@@ -708,8 +702,7 @@ describe("durable sweep walk subjects", () => {
         return result;
       });
     } });
-    const pass = await new PostgresSweepPassStore(connection).open({ repositoryId: f.repositoryId,
-      evidenceVersion: "walk-v1", scanStartedAt: at, dirtySubjects: [] });
+    const pass = await new PostgresSweepPassStore(connection).open({ repositoryId: f.repositoryId, evidenceVersion: "walk-v1", scanStartedAt: at, dirtySubjects: [] });
     hold = true;
     const staged = pass.stage(subject);
     try {
