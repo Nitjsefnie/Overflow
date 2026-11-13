@@ -221,5 +221,4 @@ describe("moderation budget integration", () => {
     expect(within(panel).getByTestId("github-budget-owner")).toBeVisible();
     expect(loaders.moderators).toHaveBeenCalledTimes(1);
   });
-
 });

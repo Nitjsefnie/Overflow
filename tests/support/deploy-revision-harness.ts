@@ -13,7 +13,6 @@ import { createOwnedTempDirectoryRegistry } from "./owned-temp-directory";
 
 const fixtureDirectories = createOwnedTempDirectoryRegistry(path.join(tmpdir(), "overflow-deploy-revision-"));
 
-
 export const script = fileURLToPath(new URL("../../scripts/deploy-revision.sh", import.meta.url));
 // Copy the parser alongside the deploy script so their pinned formats travel together.
 export const parser = fileURLToPath(new URL("../../scripts/required-checks-parse.jq", import.meta.url));

@@ -11,7 +11,6 @@ import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-director
 
 const fixtureDirectories = createOwnedTempDirectoryRegistry(join(tmpdir(), "gate-ownership-test-"));
 
-
 const root = process.cwd();
 const directories: string[] = [];
 const groups = new Set<number>();

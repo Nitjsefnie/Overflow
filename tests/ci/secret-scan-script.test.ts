@@ -438,7 +438,6 @@ describe("the git reads that decide whether the deep check runs", () => {
     }
     expect(biting, "at least one redirector case must have run").toBeGreaterThan(0);
   });
-
 });
 
 describe("the committed baseline's provenance, where the history is present", () => {

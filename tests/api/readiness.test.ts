@@ -22,7 +22,6 @@ const readinessDirectories = createOwnedTempDirectoryRegistry([
   "overflow-1055-readiness-", "overflow-1055-readiness-order-", "overflow-1055-final-fix-",
 ].map(prefix => path.join(tmpdir(), prefix)));
 
-
 /**
  * The cap reason the handler renders when a probe outlives the structural
  * hard cap — spelled as a literal so a wording or number change fails here.

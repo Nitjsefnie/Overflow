@@ -204,7 +204,6 @@ describe("backup-restore runbook", () => {
         `section (i) in ${document} carries no bash fenced block`,
       ).toBeGreaterThan(0);
     });
-
   });
 
   describe("subsection (e.4), restoring the encrypted off-host copy", () => {

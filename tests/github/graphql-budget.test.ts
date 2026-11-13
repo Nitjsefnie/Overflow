@@ -473,7 +473,6 @@ describe("GitHubGraphqlClient budget recording", () => {
   });
 });
 
-
 describe("quota ownership", () => {
   it("isolates readings, reset-window merges, and transitions by account id", () => {
     const store = createGitHubGraphqlBudgetStore();

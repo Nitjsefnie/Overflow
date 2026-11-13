@@ -5,7 +5,6 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { parse } from "yaml";
 
-
 type Block = Record<string, unknown>;
 type Step = {
   name?: string;
@@ -589,7 +588,6 @@ describe("the workflows deferred to a later task of issue 1090", () => {
     ).toEqual([]);
   });
 });
-
 
 describe("the narrowly admitted workflow_run PR-data class", () => {
   const text = `on:

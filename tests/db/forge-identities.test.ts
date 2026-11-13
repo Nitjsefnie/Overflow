@@ -569,7 +569,6 @@ describe("migration 041: token re-verification marking", () => {
   });
 });
 
-
 describe("identity-scoped credentials", () => {
   let nextUserId = 940000;
 

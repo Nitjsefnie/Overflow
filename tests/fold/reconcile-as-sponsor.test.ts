@@ -362,7 +362,6 @@ describe("sponsor quota admission through transport, fold and worker", () => {
     });
     expect(informed).not.toHaveBeenCalled();
   });
-
 });
 
 function queueStore() {

@@ -245,7 +245,6 @@ export const migrationCompatibilityFixtures = [
   },
 ] as const;
 
-
 // These execute against a real PostgreSQL table as well as the status reader.
 export const finalFixMigrationFixtures = [
   { name: "098_generated_column_name.sql", shape: "add column not null without default", writerCode: "23502",

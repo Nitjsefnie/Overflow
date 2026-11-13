@@ -255,7 +255,6 @@ describe("reconcileRepository unreadable issue connections", () => {
       errorLog.mockRestore();
     }
   });
-
 });
 
 // A pull request's own connection the read could not parse — its closing

@@ -253,7 +253,6 @@ describe("abandoned reconciliation runs", () => {
       await Promise.all([observer.end(), coordination.end()]);
     }
   });
-
 });
 
 /**

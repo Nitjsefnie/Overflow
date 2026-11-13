@@ -896,7 +896,6 @@ describe("trigger recency and attempt attestation", () => {
   });
 });
 
-
 describe("complete App suite reader", () => {
   const root = `https://api.github.com/repos/${REPO}`;
   const suitesUrl = appSuitesUrl(root, HEAD_SHA);

@@ -6,7 +6,6 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { parse } from "yaml";
 
-
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const workflowsDir = resolve(root, ".github/workflows");
 const PIN_SHAPE = /^\.github\/workflows\/[^/]+\.ya?ml$/;

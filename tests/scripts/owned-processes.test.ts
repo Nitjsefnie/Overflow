@@ -10,7 +10,6 @@ import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-director
 
 const fixtureDirectories = createOwnedTempDirectoryRegistry(join(tmpdir(), "owned-processes-test-"));
 
-
 const modulePath = join(process.cwd(), "scripts/owned-processes.mjs");
 interface Owner {
   spawn(command: string, args: string[], options?: object): ChildProcess;

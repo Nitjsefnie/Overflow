@@ -387,5 +387,4 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     expect(again.status, `${again.stdout}${again.stderr}`).not.toBe(0);
     expect(`${again.stdout}${again.stderr}`).toContain("::error::");
   });
-
 });
