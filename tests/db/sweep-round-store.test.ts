@@ -248,8 +248,7 @@ describe("per-sponsor durable sweep rounds", () => {
       // first fold's spend admits at once, charging one. The sponsor row and
       // every statement here go through the upgrade pool, never the closed one.
       const githubUserId = 5_000_000 + (externalId += 1);
-      const [sponsor] = await upgradeSql<{ id: string }[]>`
-        insert into users (github_user_id, github_login)
+      const [sponsor] = await upgradeSql<{ id: string }[]>`insert into users (github_user_id, github_login)
         values (${githubUserId}, ${`sponsor-${githubUserId}`}) returning id`;
       const store = new PostgresSponsorSweepRoundStore(upgradeSql);
       expect(await store.spend(sponsor.id, await insertRepository(sponsor.id, upgradeSql), next, 3000)).toBeNull();

@@ -72,6 +72,10 @@ async function insertRepository(sponsorId: string, repositoryId?: string): Promi
   return row.id;
 }
 
+function catchupStates(repositoryId: string) {
+  return sql`select state from reconciliation_sweep_catchups where repository_id = ${repositoryId}`;
+}
+
 async function storeSize(repositoryId: string, totalCount: number): Promise<void> {
   await new PostgresRepositorySizeStore(sql).store(repositoryId, totalCount, at);
 }
@@ -174,8 +178,7 @@ describe("reconciliation sweep catch-ups", () => {
     await sql`delete from repository_reconciliation_jobs`;
     await sweepReconciliationCatchups(h.deps);
     expect(h.offered).toEqual([smallest, tieLow, tieHigh]);
-    expect(await sql`select state from reconciliation_sweep_catchups where repository_id = ${tieLow}`)
-      .toEqual([{ state: "completed" }]);
+    expect(await catchupStates(tieLow)).toEqual([{ state: "completed" }]);
   });
 
   it("never re-enqueues a completed or failed catch-up across a window rollover or a later measurement", async () => {
@@ -193,15 +196,13 @@ describe("reconciliation sweep catch-ups", () => {
     expect(h.offered).toEqual([done]);
     await sweepReconciliationCatchups(h.deps);
     expect(h.offered).toEqual([done, failing]);
-    expect(await sql`select state from reconciliation_sweep_catchups where repository_id = ${done}`)
-      .toEqual([{ state: "completed" }]);
+    expect(await catchupStates(done)).toEqual([{ state: "completed" }]);
 
     // The second catch-up was claimed by that tick; its fold then fails after retries.
     await sql`insert into repository_reconciliation_jobs (repository_id, reason, state)
       values (${failing}, 'SWEEP', 'FAILED')`;
     await sweepReconciliationCatchups(h.deps);
-    expect(await sql`select state from reconciliation_sweep_catchups where repository_id = ${failing}`)
-      .toEqual([{ state: "failed" }]);
+    expect(await catchupStates(failing)).toEqual([{ state: "failed" }]);
 
     // Rollovers and re-measurements never re-enqueue either terminal state.
     h.now.value = new Date(at.getTime() + 6 * 60 * 60_000 + 1);
@@ -222,15 +223,13 @@ describe("reconciliation sweep catch-ups", () => {
     await sweepReconciliationCatchups(h.deps);
     await sweepReconciliationCatchups(h.deps);
     expect(h.offered).toEqual([repositoryId]);
-    expect(await sql`select state from reconciliation_sweep_catchups where repository_id = ${repositoryId}`)
-      .toEqual([{ state: "completed" }]);
+    expect(await catchupStates(repositoryId)).toEqual([{ state: "completed" }]);
 
     // A later measurement with a format bump: the completed row rejoins the queue.
     h.evidence.value = safeEvidence({ formatVersion: RECONCILIATION_EVIDENCE_FORMAT + 1 });
     await sweepReconciliationCatchups(h.deps);
     expect(h.offered).toEqual([repositoryId, repositoryId]);
-    expect(await sql`select state from reconciliation_sweep_catchups where repository_id = ${repositoryId}`)
-      .toEqual([{ state: "in_flight" }]);
+    expect(await catchupStates(repositoryId)).toEqual([{ state: "in_flight" }]);
 
     // Complete again, then null evidence is unsafe the same way.
     h.evidence.value = safeEvidence();
@@ -246,8 +245,7 @@ describe("reconciliation sweep catch-ups", () => {
     h.evidence.value = safeEvidence({ omittedOversizedFacts: 2 });
     await sweepReconciliationCatchups(h.deps);
     expect(h.offered.length).toBe(3);
-    expect(await sql`select state from reconciliation_sweep_catchups where repository_id = ${repositoryId}`)
-      .toEqual([{ state: "completed" }]);
+    expect(await catchupStates(repositoryId)).toEqual([{ state: "completed" }]);
   });
 
   it("re-queues a completed catch-up when derived rows sit below the fold revision", async () => {
@@ -260,8 +258,7 @@ describe("reconciliation sweep catch-ups", () => {
     expect(h.offered).toEqual([repositoryId]);
     await sweepReconciliationCatchups(h.deps);
     expect(h.offered).toEqual([repositoryId]);
-    expect(await sql`select state from reconciliation_sweep_catchups where repository_id = ${repositoryId}`)
-      .toEqual([{ state: "completed" }]);
+    expect(await catchupStates(repositoryId)).toEqual([{ state: "completed" }]);
     h.evidence.belowRevision = true;
     await sweepReconciliationCatchups(h.deps);
     expect(h.offered.length).toBe(2);
@@ -290,8 +287,7 @@ describe("reconciliation sweep catch-ups", () => {
     expect(h.offered).toEqual([first]);
     expect(await sql`select id::text, state, reason, created_at from repository_reconciliation_jobs where repository_id = ${first}`)
       .toEqual([{ id: queued.id, state: "PENDING", reason: "SWEEP", created_at: queued.created_at }]);
-    expect(await sql`select state from reconciliation_sweep_catchups where repository_id = ${first}`)
-      .toEqual([{ state: "in_flight" }]);
+    expect(await catchupStates(first)).toEqual([{ state: "in_flight" }]);
 
     // The resumed pass finishes: the job row disappears and only then does the
     // next catch-up of the sponsor start.
@@ -321,8 +317,7 @@ describe("reconciliation sweep catch-ups", () => {
     failing = false;
     await sweepReconciliationCatchups(h.deps);
     expect(h.offered).toEqual([repositoryId]);
-    expect(await sql`select repository_id::text as repository_id, state from reconciliation_sweep_catchups`)
-      .toEqual([{ repository_id: repositoryId, state: "in_flight" }]);
+    expect(await sql`select repository_id::text as repository_id, state from reconciliation_sweep_catchups`).toEqual([{ repository_id: repositoryId, state: "in_flight" }]);
   });
 
   it("re-queues a failed catch-up when the evidence is unsafe, but rollovers alone leave it failed", async () => {
@@ -338,22 +333,19 @@ describe("reconciliation sweep catch-ups", () => {
       values (${repositoryId}, 'SWEEP', 'FAILED')`;
     await sweepReconciliationCatchups(h.deps);
     expect(h.offered).toEqual([repositoryId]);
-    expect(await sql`select state from reconciliation_sweep_catchups where repository_id = ${repositoryId}`)
-      .toEqual([{ state: "failed" }]);
+    expect(await catchupStates(repositoryId)).toEqual([{ state: "failed" }]);
 
     // A window rollover with safe evidence leaves the failed row alone.
     h.now.value = new Date(at.getTime() + 6 * 60 * 60_000 + 1);
     await sweepReconciliationCatchups(h.deps);
     expect(h.offered).toEqual([repositoryId]);
-    expect(await sql`select state from reconciliation_sweep_catchups where repository_id = ${repositoryId}`)
-      .toEqual([{ state: "failed" }]);
+    expect(await catchupStates(repositoryId)).toEqual([{ state: "failed" }]);
 
     // An evidence-format bump sends the failed row back into the ordered queue.
     h.evidence.value = safeEvidence({ formatVersion: RECONCILIATION_EVIDENCE_FORMAT + 1 });
     await sweepReconciliationCatchups(h.deps);
     expect(h.offered).toEqual([repositoryId, repositoryId]);
-    expect(await sql`select state from reconciliation_sweep_catchups where repository_id = ${repositoryId}`)
-      .toEqual([{ state: "in_flight" }]);
+    expect(await catchupStates(repositoryId)).toEqual([{ state: "in_flight" }]);
   });
 
   it("resolves the documented OVERFLOW_-prefixed threshold variable through the production path", async () => {
@@ -370,8 +362,7 @@ describe("reconciliation sweep catch-ups", () => {
       // The prefixed knob is the documented one: a backlog of 6 is over a
       // threshold of 5, so the row is created and the catch-up claimed.
       expect(offered).toEqual([repositoryId]);
-      expect(await sql`select state from reconciliation_sweep_catchups where repository_id = ${repositoryId}`)
-        .toEqual([{ state: "in_flight" }]);
+      expect(await catchupStates(repositoryId)).toEqual([{ state: "in_flight" }]);
     } finally {
       if (originalPrefixed === undefined) delete process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG = originalPrefixed;
       if (originalUnprefixed === undefined) delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.RECONCILIATION_DIFF_ONLY_BACKLOG = originalUnprefixed;
@@ -409,8 +400,7 @@ describe("reconciliation sweep catch-ups", () => {
       where repository_id = ${first}`;
     await sweepReconciliationCatchups(h.deps);
     expect(h.offered).toEqual([first, second]);
-    expect(await sql`select state from reconciliation_sweep_catchups where repository_id = ${first}`)
-      .toEqual([{ state: "completed" }]);
+    expect(await catchupStates(first)).toEqual([{ state: "completed" }]);
   });
 
   it("serializes two concurrent advances per sponsor: the second blocks on the sponsor's own row", async () => {
