@@ -462,11 +462,23 @@ describe("complete listing for mirror and orphan supersession", () => {
     ["changed total", { total_count: 102, workflow_runs: [history[100]] }, /total_count.*changed/],
     ["short page", { total_count: 101, workflow_runs: [] }, /short|expected/],
     ["duplicate id", { total_count: 101, workflow_runs: [history[0]] }, /duplicate/],
-    ["read failure", { httpStatus: 503 }, /suite.*failed/],
   ])("%s fails closed for both mirror and sweep", async (_label, second, message) => {
     for (const orphan of [false, true]) {
       const h = paged(orphan, second);
       await expect(h.run()).rejects.toThrow(message as RegExp);
+      expect(h.requests).toContain(runsUrl);
+      expect(h.posts).toEqual([]);
+      expect(h.requests.filter((url) => url === pageUrl(2))).toHaveLength(1);
+    }
+  });
+
+  it("read failure fails closed for the mirror and defers a sweep-only start (issue 1532)", async () => {
+    for (const orphan of [false, true]) {
+      const h = paged(orphan, { httpStatus: 503 });
+      // The page read is single-attempt, so its one 5xx answer is the final one.
+      const message = "the suite supersession listing failed after 1 attempts: HTTP 503: upstream unavailable";
+      if (orphan) expect((await h.run()).sweepDeferred).toBe(message);
+      else await expect(h.run()).rejects.toThrow(message);
       expect(h.requests).toContain(runsUrl);
       expect(h.posts).toEqual([]);
       expect(h.requests.filter((url) => url === pageUrl(2))).toHaveLength(1);

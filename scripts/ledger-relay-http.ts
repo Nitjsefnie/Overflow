@@ -26,6 +26,13 @@ export class RateLimitExceededError extends Error {
   }
 }
 
+export class ServerErrorExhaustedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ServerErrorExhaustedError";
+  }
+}
+
 export interface RelayHttpOptions {
   fetchFn: typeof fetch;
   delayFn: (ms: number) => Promise<void>;
@@ -56,13 +63,15 @@ interface ApiRequest {
  * Three attempts, 1s then 2s backoff; other 4xx responses fail immediately. A
  * rate-limited 403 or 429 (issue 1355) waits out its named reset only while
  * another attempt remains and the reset plus margin fits the deadline, and
- * otherwise throws RateLimitExceededError at once (issue 1363).
+ * otherwise throws RateLimitExceededError at once (issue 1363). A GET whose
+ * last attempt was 5xx throws ServerErrorExhaustedError (issue 1532).
  */
 export async function apiCall<T>(
   deps: RelayHttpDeps, request: ApiRequest, what: string, retryTransient = true,
   reconcile?: () => Promise<{ retry: true } | { retry: false; value: T }>,
 ): Promise<T> {
   let lastMessage = "";
+  let lastStatus: number | undefined;
   let rateLimitWaited = false;
   const retryCount = retryTransient ? BACKOFF_MS.length : 0;
   for (let attempt = 0; attempt <= retryCount; attempt += 1) {
@@ -86,6 +95,7 @@ export async function apiCall<T>(
       text = await response.text();
     } catch (error) {
       lastMessage = error instanceof Error ? error.message : String(error);
+      lastStatus = undefined;
       if (request.method === "POST" && reconcile !== undefined) {
         const outcome = await reconcile();
         if (!outcome.retry) return outcome.value;
@@ -102,6 +112,7 @@ export async function apiCall<T>(
       }
     }
     lastMessage = `HTTP ${response.status}: ${truncate(text)}`;
+    lastStatus = response.status;
     const nowMs = (deps.nowFn ?? Date.now)();
     const resetMs = rateLimitResetMs(response, text, nowMs);
     if (resetMs !== undefined) {
@@ -118,7 +129,11 @@ export async function apiCall<T>(
     }
     if (response.status < 500 && response.status !== 429) throw new Error(`${what} failed: ${lastMessage}`);
   }
-  throw new Error(`${what} failed after ${retryCount + 1} attempts: ${lastMessage}`);
+  const message = `${what} failed after ${retryCount + 1} attempts: ${lastMessage}`;
+  if (request.method === "GET" && lastStatus !== undefined && lastStatus >= 500) {
+    throw new ServerErrorExhaustedError(message);
+  }
+  throw new Error(message);
 }
 
 /** The reset a rate-limited 403/429 names (issue 1355), or undefined when none. */

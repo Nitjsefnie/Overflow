@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 
-import { renderRelayResult, runRelay } from "../../scripts/ledger-relay.ts";
+import { renderRelayResult, runRelay, type RelayResult } from "../../scripts/ledger-relay.ts";
 import { RUN_DEADLINE_MS } from "../../scripts/ledger-relay-http.ts";
 import { SWEEP_RUN_LIMIT } from "../../scripts/ledger-relay-producers.ts";
 import { MIRROR_TRIGGER_RESERVE_MS } from "../../scripts/ledger-relay-publication.ts";
@@ -155,6 +155,12 @@ function world(kind: "verify" | "pr-gates" = "verify") {
     fetchFn, delayFn: async () => {}, readPinMap: async () => pins,
   });
   return { state, blocked, released, fetchFn, relay };
+}
+
+/** A mirror start throws on a 5xx read; a sweep-only start defers it to the next scheduled sweep (issue 1532). */
+async function expectFailedRead(mode: "mirror" | "sweep", run: Promise<RelayResult>, message: RegExp) {
+  if (mode === "mirror") await expect(run).rejects.toThrow(message);
+  else expect((await run).sweepDeferred).toMatch(message);
 }
 
 describe("unsuccessful upstream suites cannot receive App success", () => {
@@ -496,10 +502,10 @@ describe("serialized supersession publication", () => {
     expect(w.state.requests).not.toContain(`${ROOT}/actions/runs/9002/jobs?filter=latest&per_page=100`);
   });
 
-  it.each(["sweep", "mirror"] as const)("throws when the %s pre-write supersession read fails", async (mode) => {
+  it.each(["sweep", "mirror"] as const)("fails closed when the %s pre-write supersession read fails", async (mode) => {
     const w = world();
     w.state.onJobs = () => { w.state.historyReadFails = true; };
-    await expect(w.relay(mode)).rejects.toThrow(/suite.*failed/);
+    await expectFailedRead(mode, w.relay(mode), /suite.*failed/);
     expect(w.state.checks).toEqual([]);
   });
 
@@ -589,10 +595,10 @@ describe("history-bound publication direction", () => {
     expect((w.state.checks.at(-1)?.output as Body).summary).toMatch(/1000 runs/);
   });
 
-  it.each(["mirror", "sweep"] as const)("transient history errors still throw before posting, %s", async (mode) => {
+  it.each(["mirror", "sweep"] as const)("transient history errors still fail closed before posting, %s", async (mode) => {
     const w = world();
     w.state.historyReadFails = true;
-    await expect(w.relay(mode)).rejects.toThrow(/suite.*failed/);
+    await expectFailedRead(mode, w.relay(mode), /suite.*failed/);
     expect(w.state.checks).toEqual([]);
   });
 });
@@ -602,7 +608,7 @@ describe("every-producer pre-write selection", () => {
     const w = world();
     w.state.oversized = true;
     w.state.listingReadFails = true;
-    await expect(w.relay(mode)).rejects.toThrow(/listing.*failed/);
+    await expectFailedRead(mode, w.relay(mode), /listing.*failed/);
     expect(w.state.checks).toEqual([]);
   });
 
@@ -659,10 +665,10 @@ describe("every-producer pre-write selection", () => {
       .toEqual(GATE_CONTEXTS.map(() => "9003:1=failure"));
   });
 
-  it.each(["mirror", "sweep"] as const)("throws on the pr-gates %s pre-write listing read failure", async (mode) => {
+  it.each(["mirror", "sweep"] as const)("fails closed on the pr-gates %s pre-write listing read failure", async (mode) => {
     const w = world("pr-gates");
     w.state.listingReadFails = true;
-    await expect(w.relay(mode)).rejects.toThrow(/listing.*failed/);
+    await expectFailedRead(mode, w.relay(mode), /listing.*failed/);
     expect(w.state.checks).toEqual([]);
   });
 });
@@ -709,7 +715,7 @@ describe("completed producer and bound selection", () => {
     if (mode === "mirror") expect(result.decisions[0]).toMatchObject({ context: "verify", conclusion: "failure", summary: expect.stringMatching(/1000 runs/) });
   });
 
-  it.each(["sweep", "mirror"] as const)("throws for transient history failure before the %s selected newer write", async (mode) => {
+  it.each(["sweep", "mirror"] as const)("fails closed for transient history failure before the %s selected newer write", async (mode) => {
     const w = world();
     await w.relay("mirror");
     const middleSuite = suite(8002, "success");
@@ -717,7 +723,7 @@ describe("completed producer and bound selection", () => {
     w.state.suites = [middleSuite, oldSuite];
     w.state.producers = [middleVerify, oldVerify];
     w.state.onJobs = () => { w.state.historyReadFails = true; };
-    await expect(w.relay(mode, middleVerify)).rejects.toThrow(/suite.*failed/);
+    await expectFailedRead(mode, w.relay(mode, middleVerify), /suite.*failed/);
     expect(w.state.checks.map((check) => `${check.external_id}=${check.conclusion}`))
       .toEqual(["9001:1=success"]);
   });

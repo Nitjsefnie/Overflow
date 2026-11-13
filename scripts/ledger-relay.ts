@@ -50,7 +50,7 @@ import {
   type SweepOutcome,
 } from "./ledger-relay-sweep.ts";
 import { API_ROOT, API_HEADERS, RUN_DEADLINE_MS, apiCall, sweepApi, assertRunDeadline,
-  RateLimitExceededError, type RelayHttpOptions } from "./ledger-relay-http.ts";
+  RateLimitExceededError, ServerErrorExhaustedError, type RelayHttpOptions } from "./ledger-relay-http.ts";
 import { publishProducerContexts } from "./ledger-relay-publication.ts";
 import { readEffectiveDeadline } from "./ledger-relay-job-budget.ts";
 import { type CheckRunSuppression, type SweepCandidate } from "./ledger-relay-producers.ts";
@@ -162,8 +162,8 @@ export interface RelayResult {
    */
   sweepOnly?: boolean;
   /**
-   * Issue 1355: a sweep-only start deferred its rate-limited sweep; undefined
-   * on every other path.
+   * Issues 1355/1532: a sweep-only start deferred its sweep; undefined on
+   * every other path.
    */
   sweepDeferred?: string;
 }
@@ -302,9 +302,10 @@ export async function runRelay(inputDeps: RelayDeps): Promise<RelayResult> {
       ];
       assertRunDeadline(deps, "completion of the relay run");
     } catch (sweepError) {
-      // Issue 1355: a rate-limited sweep defers a sweep-only start; triggered
-      // starts keep failing red, that is the design.
-      if (!failed && sweepOnlyStart && sweepError instanceof RateLimitExceededError) {
+      // Issues 1355/1532: a rate-limited or exhausted-5xx sweep defers a
+      // sweep-only start; triggered starts keep failing red, that is the design.
+      if (!failed && sweepOnlyStart && (sweepError instanceof RateLimitExceededError ||
+        sweepError instanceof ServerErrorExhaustedError)) {
         result.sweepDeferred = sweepError.message;
         return result;
       }
@@ -518,7 +519,7 @@ export function renderRelayResult(result: RelayResult): string[] {
     ...renderSweepLines(result.sweep),
   ];
   if (result.sweepOnly === true) {
-    // The sweep's summary is the whole output; the defer line is the rate-limit signal.
+    // The sweep's summary is the whole output; the defer line is the deferral signal.
     const deferred = result.sweepDeferred === undefined ? [] :
       [`[ledger-relay] orphan-sweep: deferred to the next scheduled sweep: ${result.sweepDeferred}`];
     return [...suppressed, ...deferred, ...renderSweepLines(result.sweep)];
