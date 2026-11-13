@@ -16,7 +16,7 @@ import { RECONCILIATION_EVIDENCE_FORMAT } from "@/lib/fold/reconciliation-eviden
 import { materializeRepositoryFixture } from "../support/materialized-repository";
 import { verifiedRepositoryAt } from "../support/verified-repository";
 import { startPostgresContainer } from "../support/postgres-container";
-import { issue, pullRequest } from "./reconciliation-walk-fixture";
+import { instant, issue, pullRequest, subject } from "./reconciliation-walk-fixture";
 
 let sql: Sql;
 let container: StartedTestContainer;
@@ -160,6 +160,37 @@ describe("a budget-bound reconciliation walk", () => {
     expect(await f.store.getDirtyReconciliationSubjects(f.repositoryId)).toHaveLength(1);
     expect(await sql`select * from reconciliation_sweep_passes where pass_id = ${pass!.pass_id}`).toEqual([]);
     expect(await sql`select * from reconciliation_sweep_walk_subjects where pass_id = ${pass!.pass_id}`).toEqual([]);
+  });
+
+  it("spends no request on an issue staged with a gathered payload no older than its listing, ahead of the anchor too", async () => {
+    const f = await fixture();
+    // Issue 11 lists before PR 12, issues 13-15 after it; gathering the PR stages all four through its repair path.
+    const facts = new Map([11, 13, 14, 15].map((id) => [id, issue(id)]));
+    const pages = [[subject(11), subject(12, "pull_request")], [subject(13), subject(14), subject(15)]];
+    const reads: number[] = []; let hold = true, missing = 14;
+    f.gateway.walkReconciliation = (_reference, input) => walkReconciliation({ ...input,
+      listing: { kind: "cursor", listPage: async ({ cursor }) => {
+        if (cursor !== null && hold) { hold = false; f.state.limit = 0; } await checkSweepRequestBudget();
+        return { subjects: structuredClone(pages[Number(cursor ?? 0)]!), nextCursor: cursor === null ? "1" : null };
+      } },
+      gateway: { getPullRequest: async () => null, getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",
+        getPullRequestClosingIssues: async () => [11, 13, 14, 15].map((id) => ({ id, number: id, repositoryGitHubId: f.repository.githubRepositoryId })),
+        gatherIssue: async ({ id }) => { await checkSweepRequestBudget(); reads.push(id); // a discarded gather stages a placeholder
+          if (id === missing) { missing = 0; throw new GitHubApiError(404); } return structuredClone(facts.get(id)!); } } });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try { expect(await f.run("SWEEP")).toMatchObject({ skipped: true }); } finally { log.mockRestore(); }
+    expect(await sql`select walk_anchors->'subjects' as anchor from reconciliation_sweep_passes where repository_id = ${f.repositoryId}`)
+      .toEqual([{ anchor: { updated_at: instant(12).toISOString(), key: 12 } }]);
+    expect(await sql`select subject_key, updated_at from reconciliation_sweep_walk_subjects join reconciliation_sweep_passes using (pass_id)
+      where repository_id = ${f.repositoryId} and kind = 'issue' order by subject_key`).toEqual(
+      [[11, instant(11)], [13, instant(13)], [14, at], [15, instant(15)]].map(([key, updatedAt]) => ({ subject_key: String(key), updated_at: updatedAt })));
+    pages[1]![2] = subject(15, "issue", 16); // updated after its repair gather staged it
+    facts.get(15)!.updatedAt = instant(16).toISOString(); f.state.limit = Infinity;
+    expect((await f.run("SWEEP")).skipped).toBe(false);
+    // 11 is re-gathered for its PR; 13 is skipped; the placeholder 14 and the older-staged 15 are gathered again.
+    expect(reads).toEqual([11, 11, 13, 14, 15, 14, 15]);
+    expect((await f.store.getReconciliationEvidence(f.repositoryId))?.issues.map(({ id, updatedAt }) => [id, updatedAt])).toEqual(
+      [11, 13, 14, 15].map((id) => [id, facts.get(id)!.updatedAt]));
   });
 
   it("runs the walk through the lazy sponsor gateway", async () => {

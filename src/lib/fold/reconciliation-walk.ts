@@ -51,8 +51,10 @@ export function walkReconciliation(input: ReconciliationWalkInput): Promise<Comp
 
 async function walk({ pass, listing, gateway, repository, onDiscard }: ReconciliationWalkInput): Promise<CompletedReconciliationWalk> {
   const staged = new Map((await readStagedRows(pass)).map((row) => [rowKey(row.kind, row.subjectKey), row]));
-  const issues = () => [...staged.values()].flatMap((row) => row.kind === "issue" && row.payload !== null
-    && typeof row.payload === "object" && "number" in row.payload ? [row.payload as GitHubIssue] : []);
+  // A discarded gather stages a bare identity placeholder, which is no gathered issue.
+  const gathered = (row: { kind: WalkSubject["kind"]; payload: unknown }) => row.kind === "issue" && row.payload !== null
+    && typeof row.payload === "object" && "number" in row.payload ? row.payload as GitHubIssue : null;
+  const issues = () => [...staged.values()].flatMap((row) => gathered(row) ?? []);
   const referenced = (facts: GitHubIssue[]) => facts.flatMap((issue) => issue.closingPullRequests).filter((pr) =>
     (pr.state === "CLOSED" || (pr.state === "MERGED" && pr.mergedAt !== null)) && belongsToRegisteredRepository(repository, pr));
   const discard = async (error: unknown, kind: WalkSubject["kind"], subject: GitHubSubject, disputed = false, closing = false) => {
@@ -105,8 +107,10 @@ async function walk({ pass, listing, gateway, repository, onDiscard }: Reconcili
     await stage(anchor, subject, { subject: { id: subject.id, number: subject.number }, evidence });
   };
   await visitWalkListing(listing, pass.walkAnchors(), async (subject, anchor) => {
-    const saved = pass.walkAnchors()[anchor];
-    if (saved !== undefined && compareSubject(subject, saved) <= 0 && staged.has(rowKey(subject.kind, subject.id))) return;
+    const saved = pass.walkAnchors()[anchor], row = staged.get(rowKey(subject.kind, subject.id));
+    // A related read may have staged an issue ahead of the anchor; its gathered fact serves unless the listing is newer.
+    if (row !== undefined && ((saved !== undefined && compareSubject(subject, saved) <= 0)
+      || (gathered(row) !== null && row.updatedAt >= subject.updatedAt))) return;
     await gather(subject, anchor);
   });
 
