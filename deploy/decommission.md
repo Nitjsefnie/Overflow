@@ -599,9 +599,7 @@ webhook sweep:
 # phase runs before phase 7 destroys it. The osc token is not in the file:
 # export DISCORD_TOKEN from the fleet's ~/.agent-bundle/discord/osc.token
 # before running this block.
-set -a
-. /etc/overflow/backup.env
-set +a
+. /srv/overflow/scripts/systemd-env-file.sh; export_env_file /etc/overflow/backup.env
 
 # The disposal needs the osc identity's connector, as the nightly job's was.
 python3 ~/.agent-bundle/scripts/discord_mb.py connector osc &

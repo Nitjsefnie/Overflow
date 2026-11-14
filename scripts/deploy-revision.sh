@@ -655,12 +655,7 @@ npm_config_package_import_method=copy pnpm install --frozen-lockfile
 env_file_assignments=()
 # shellcheck source=/dev/null
 . "$tree/scripts/systemd-env-file.sh"
-read_env_file "$env_file" || {
-  printf 'Could not read the environment file %s (missing, unreadable, or not read within %ss); refusing to deploy.\n' "$env_file" "${OVERFLOW_DEPLOY_ENV_READ_TIMEOUT:-5}" >&2
-  exit 1
-}
-# A bare export would print the whole environment.
-if ((${#env_file_assignments[@]})); then export -- "${env_file_assignments[@]}"; fi
+export_env_file "$env_file" || { printf 'Refusing to deploy.\n' >&2; exit 1; }
 migration_status=$(node scripts/deploy-migration-status.ts) || {
   printf 'Could not list the pending migrations (node scripts/deploy-migration-status.ts failed); refusing to deploy. Database connection details come from %s.\n' "$env_file" >&2
   exit 1

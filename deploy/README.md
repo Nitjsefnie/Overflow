@@ -173,11 +173,13 @@ Before a recovery or credential-maintenance block that uses the database,
 paste this block into the same shell. Repeat it after editing the environment
 file. It exports the canonical database URL for direct clients and derived
 restore URLs: a set canonical value wins, including an empty string; only an
-unset canonical variable falls back to the legacy value. The file itself is
-unchanged.
+unset canonical variable falls back to the legacy value. The file is read the
+way the service's `EnvironmentFile=` reads it, by the deploy script's own
+reader, so a value holding `$` or quotes loads exactly as the service sees it.
+The file itself is unchanged.
 
 ```bash
-set -a; . /etc/overflow/overflow.env; set +a
+. /srv/overflow/scripts/systemd-env-file.sh; export_env_file /etc/overflow/overflow.env
 export OVERFLOW_DATABASE_URL="${OVERFLOW_DATABASE_URL-${DATABASE_URL-}}"
 ```
 
@@ -278,7 +280,7 @@ set -e
 git clone https://github.com/Nitjsefnie/Overflow.git /srv/overflow
 cd /srv/overflow
 npm_config_package_import_method=copy pnpm install --frozen-lockfile
-set -a; . /etc/overflow/overflow.env; set +a
+. /srv/overflow/scripts/systemd-env-file.sh; export_env_file /etc/overflow/overflow.env
 pnpm db:migrate
 release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=7 HEAD)"
 mkdir "$release"
@@ -1314,7 +1316,7 @@ if [ "${serving_release}" != absent ] && [ -f "${serving_release}/REVISION" ]; t
   fi
 fi
 npm_config_package_import_method=copy pnpm install --frozen-lockfile
-set -a; . /etc/overflow/overflow.env; set +a
+. /srv/overflow/scripts/systemd-env-file.sh; export_env_file /etc/overflow/overflow.env
 pnpm db:migrate
 release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=7 HEAD)"
 mkdir "$release"
@@ -1516,14 +1518,14 @@ key, which seals every new write and opens what it sealed, and the optional
 `OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS` only opens. While both are configured, every
 row opens under whichever of the two sealed it.
 
-Run every block as root from a fresh shell. Sourcing the environment file sets
+Run every block as root from a fresh shell. Loading the environment file sets
 variables and never unsets them, so a shell that loaded the file before an edit
 keeps the values the edit removed. `pnpm` is on root's `PATH` and deliberately
 not on the service's (section 3).
 
 **Do not deploy (section 10) between step 3's edit and step 6's restart.** A
 deploy restarts the service and runs the webhook upgrade with whatever the
-environment file holds at that moment, or, from a shell sourced earlier, with
+environment file holds at that moment, or, from a shell loaded earlier, with
 keys the file no longer holds. Finish or roll back the rotation first.
 
 Before each database command block in this section, run the

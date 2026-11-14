@@ -99,7 +99,7 @@ async function makeFixture(options: { advanceRemote?: boolean } = {}): Promise<F
   const shimLog = path.join(dir, "shim-log");
   const checkRunsFile = path.join(dir, "check-runs.tsv");
   const upgradeStatusFile = path.join(dir, "upgrade-status");
-  await writeFile(envFile, "OVERFLOW_FIXTURE_ENV_MARKER=loaded\n");
+  await writeFile(envFile, "OVERFLOW_FIXTURE_ENV_MARKER=loaded\nOVERFLOW_FIXTURE_PRICE=5$HOME\n");
   await writeFile(checkRunsFile, "101\tbuild\tcompleted\tsuccess\n102\tdeploy-gate\tcompleted\tfailure\n103\tdeploy-gate\tcompleted\tsuccess\n");
   await writeFile(upgradeStatusFile, "0\n");
   await mkdir(logDir);
@@ -159,6 +159,7 @@ esac`,
     fixture,
     "pnpm",
     `if [ "$1" = "--silent" ]; then shift; fi
+if [ "$1" = "db:migrate" ]; then printf 'PRICE_AT_MIGRATE=%s\n' "\${OVERFLOW_FIXTURE_PRICE-}" >> "\${SHIM_LOG:?}"; fi
 if [ "$1" = "release:switch" ]; then printf '%s' "$3" > "\${SHIM_LOG:?}.release-name"; fi
 if [ "$1" = "webhooks:upgrade" ]; then
   release=$(cat "\${SHIM_LOG:?}.release-name")
@@ -181,6 +182,7 @@ exit 0`,
 
 async function runFallback(fixture: Fixture) {
   const block = (await standingBlock())
+    .replaceAll("/srv/overflow/scripts/systemd-env-file.sh", path.join(path.dirname(deployScript), "systemd-env-file.sh"))
     .replaceAll("/srv/overflow", fixture.tree)
     .replaceAll("/run/overflow-deploy.lock", fixture.lock)
     .replaceAll("/etc/overflow/overflow.env", fixture.envFile)
@@ -389,5 +391,6 @@ describe("deploy/README.md manual fallback", () => {
     const webhookAt = entries.indexOf("pnpm\t--silent\twebhooks:upgrade");
     expect(webhookAt).toBeGreaterThan(restartAt);
     expect(entries[webhookAt + 1]).toBe("REVISION_AT_WEBHOOK=absent");
+    expect(entries, "the env file's $-holding value, unexpanded").toContain("PRICE_AT_MIGRATE=5$HOME");
   });
 });

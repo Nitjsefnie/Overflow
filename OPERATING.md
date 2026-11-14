@@ -502,7 +502,7 @@ On the deployment host, with the deployment's `OVERFLOW_DATABASE_URL` loaded:
 
 ```bash
 cd /srv/overflow
-set -a; . /etc/overflow/overflow.env; set +a
+. /srv/overflow/scripts/systemd-env-file.sh; export_env_file /etc/overflow/overflow.env
 node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts export --github-user-id <github-user-id>
 node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts delete --github-user-id <github-user-id>
 node --experimental-transform-types --import ./scripts/register-path-aliases.ts scripts/account.ts delete --github-user-id <github-user-id> --confirm
