@@ -31,9 +31,7 @@ beforeAll(async () => {
   container = started.container; process.env.OVERFLOW_DATABASE_URL = started.databaseUrl;
   sql = getSql(); await runMigrations();
 });
-beforeEach(async () => {
-  await sql`delete from reconciliation_sweep_rounds`;
-});
+beforeEach(async () => { await sql`delete from reconciliation_sweep_rounds`; });
 afterAll(async () => {
   await closeSql(); await container?.stop();
   if (original === undefined) delete process.env.OVERFLOW_DATABASE_URL; else process.env.OVERFLOW_DATABASE_URL = original;
@@ -70,10 +68,7 @@ describe("paused full-pass pages", () => {
   it("rejects a failed write without blocking later writes or spending their capacity", async () => {
     const f = await materializeRepositoryFixture(sql);
     const pass = await new PostgresSweepPassStore(sql, 2).open({ repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
-    const results = await Promise.allSettled([
-      pass.write("failed", { page: 0 }, "invalid\u0000cursor"),
-      pass.write("first", { page: 1 }, "cursor-one"),
-    ]);
+    const results = await Promise.allSettled([pass.write("failed", { page: 0 }, "invalid\u0000cursor"), pass.write("first", { page: 1 }, "cursor-one")]);
     expect(results.map((result) => result.status)).toEqual(["rejected", "fulfilled"]);
     await pass.write("second", { page: 2 }, "cursor-two");
     expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
@@ -177,9 +172,7 @@ describe("paused full-pass pages", () => {
       expect((await new PostgresRepositoryStore(sql).unregisterRepository(f.registration)).kind).toBe("UNREGISTERED");
       expect(await stagedCounts(f.repositoryId, f.state.pass!.id)).toEqual({ passes: 1, pages: 2 });
       expect(await f.state.pass!.read("first")).toEqual({ text: "paused page" });
-    } finally {
-      release.resolve(); await settled; log.mockRestore();
-    }
+    } finally { release.resolve(); await settled; log.mockRestore(); }
     expect(await settled).toBe(true);
     expect(await stagedCounts(f.repositoryId, f.state.pass!.id)).toEqual({ passes: 0, pages: 0 });
   });
@@ -194,10 +187,7 @@ describe("paused full-pass pages", () => {
     const subjects = f.fold.issues.slice(0, 2).map(({ githubIssueId: id, number }) => ({ id, number, updated_at: at.toISOString() }));
     const github = new GitHubGateway({ accessToken: token, fetch: async (input, init) => {
       const url = new URL(String(input));
-      if (url.pathname.startsWith("/repositories/")) {
-        requests.push("verify");
-        return Response.json(verifiedRepositoryPayload(repository.githubRepositoryId, repository.ownerName));
-      }
+      if (url.pathname.startsWith("/repositories/")) { requests.push("verify"); return Response.json(verifiedRepositoryPayload(repository.githubRepositoryId, repository.ownerName)); }
       if (url.pathname.endsWith("/issues")) { requests.push("listing"); return Response.json(subjects); }
       if (/\/issues\/\d+\/(events|comments)$/.test(url.pathname)) return Response.json([]);
       const { query, variables } = JSON.parse(String(init?.body));
@@ -339,15 +329,7 @@ describe("unregistration racing a failed fold", () => {
   type Fixture = Awaited<ReturnType<typeof pausedFixture>>;
   function pausedUnregistration(f: Fixture) {
     const updated = signal(); const commit = signal();
-    const connection = new Proxy(sql, { get(target, property, receiver) {
-      if (property !== "begin") return Reflect.get(target, property, receiver);
-      return (work: (transaction: TransactionSql) => Promise<unknown>) => target.begin((transaction) =>
-        work(new Proxy(transaction, { apply(target, thisArg, args) {
-          const query = Reflect.apply(target, thisArg, args);
-          if (!String(args[0]).includes("pg_try_advisory_xact_lock")) return query;
-          return query.then(async (result: unknown) => { updated.resolve(); await commit.promise; return result; });
-        } })));
-    } });
+    const connection = pausingAfter("pg_try_advisory_xact_lock", async () => { updated.resolve(); await commit.promise; });
     return { updated, commit, done: new PostgresRepositoryStore(connection).unregisterRepository(f.registration) };
   }
   const failWith = (f: Fixture, before: () => Promise<void>) => {
@@ -397,12 +379,7 @@ describe("unregistration racing a failed fold", () => {
     try {
       await unregistration.updated.promise;
       release.resolve();
-      await vi.waitFor(async () => {
-        const [waiting] = await sql<{ count: number }[]>`select count(*)::int as count
-          from pg_stat_activity a join pg_locks l on l.pid = a.pid and not l.granted
-          where a.datname = current_database() and a.wait_event_type = 'Lock' and a.pid <> pg_backend_pid()`;
-        expect(finished || waiting.count > 0).toBe(true);
-      });
+      await lockWaitObserved(() => finished);
     } finally { unregistration.commit.resolve(); }
     expect((await unregistration.done).kind).toBe("UNREGISTERED");
     expect(await settled).toBe(true);
@@ -432,6 +409,7 @@ describe("unregistration racing a failed fold", () => {
     log.mockRestore();
     expect(await stagedCounts(f.repositoryId, f.state.pass!.id)).toEqual({ passes: 0, pages: 0 });
   });
+
 });
 
 describe("durable sweep walk subjects", () => {
@@ -522,12 +500,7 @@ describe("durable sweep walk subjects", () => {
       let writes = 0, stages = 0;
       const github: ReconciliationGateway = {
         walkReconciliation: async () => {
-          if (seen.length === 0) {
-            await pass!.write("first", { text: "paused page" });
-            writes++;
-            await pass!.stage(subject);
-            stages++;
-          }
+          if (seen.length === 0) { await pass!.write("first", { text: "paused page" }); writes++; await pass!.stage(subject); stages++; }
           seen.push({ id: pass!.id, generation: pass!.dirtySubjects[0]?.generation, page: await pass!.read("first"), staged: (await pass!.readStaged()).length });
           throw new SweepBudgetSpent(new Date("2030-01-01T06:00:00Z"));
         },
@@ -537,15 +510,11 @@ describe("durable sweep walk subjects", () => {
       };
       const sweep = { spend: async () => null, openPass: async (input: Parameters<PostgresSweepPassStore["open"]>[0]) => (pass = await passes.open(input)),
         discardPass: (id: string) => passes.discardByRepository(id), discardIfInactive: (id: string) => passes.discardIfInactive(id) };
-      for (let run = 0; run < 3; run++) {
-        await reconcileRepository({ store: f.store, github, sweep, now: () => at, onBudgetChange: () => {} }, f.repositoryId, { reason: "SWEEP" });
-      }
+      for (let run = 0; run < 3; run++) await reconcileRepository({ store: f.store, github, sweep, now: () => at, onBudgetChange: () => {} }, f.repositoryId, { reason: "SWEEP" });
       const held = { id: seen[0]!.id, generation: 2 ** 53, page: { text: "paused page" }, staged: 1 };
       expect(seen).toEqual([held, held, held]);
       expect({ writes, stages }).toEqual({ writes: 1, stages: 1 });
-    } finally {
-      await sql`select setval('repository_reconciliation_dirty_generation', ${before.last_value}, ${before.is_called})`;
-    }
+    } finally { await sql`select setval('repository_reconciliation_dirty_generation', ${before.last_value}, ${before.is_called})`; }
     expect(await readSequence()).toEqual(before);
   });
 
@@ -610,15 +579,7 @@ describe("durable sweep walk subjects", () => {
     const f = await materializeRepositoryFixture(sql);
     const input = { repositoryId: f.repositoryId, evidenceVersion: "walk-v1", scanStartedAt: at, dirtySubjects: [] };
     const entered = signal(); const release = signal();
-    const connection = new Proxy(sql, { get(target, property, receiver) {
-      if (property !== "begin") return Reflect.get(target, property, receiver);
-      return (work: (transaction: TransactionSql) => Promise<unknown>) => target.begin((transaction) =>
-        work(new Proxy(transaction, { apply(target, thisArg, args) {
-          const query = Reflect.apply(target, thisArg, args);
-          if (!String(args[0]).includes("select walk_anchors")) return query;
-          return query.then(async (result: unknown) => { entered.resolve(); await release.promise; return result; });
-        } })));
-    } });
+    const connection = pausingAfter("select walk_anchors", async () => { entered.resolve(); await release.promise; });
     const first = await new PostgresSweepPassStore(connection).open(input);
     const second = await new PostgresSweepPassStore(sql).open(input);
     const stagedFirst = first.stage({ ...subject, anchor: "issue" });
@@ -627,15 +588,7 @@ describe("durable sweep walk subjects", () => {
     const stagedSecond = second.stage({ ...subject, anchor: "pull_request", kind: "pull_request" })
       .finally(() => { finished = true; });
     try {
-      // Observe the second transaction waiting (or finishing on the unlocked mutant)
-      // before releasing the first reader; no wall-clock ordering assumption.
-      await vi.waitFor(async () => {
-        const [waiting] = await sql<{ count: number }[]>`select count(*)::int as count
-          from pg_stat_activity a join pg_locks l on l.pid = a.pid and not l.granted
-          where a.datname = current_database() and a.wait_event_type = 'Lock'
-            and a.pid <> pg_backend_pid()`;
-        expect(finished || waiting.count > 0).toBe(true);
-      });
+      await lockWaitObserved(() => finished);
     } finally { release.resolve(); await Promise.all([stagedFirst, stagedSecond]); }
     const resumed = await new PostgresSweepPassStore(sql).open(input);
     expect(resumed.walkAnchors()).toEqual({ issue: { updatedAt: at, key: subject.subjectKey },
@@ -647,26 +600,14 @@ describe("durable sweep walk subjects", () => {
     const { input, store } = await openWalk();
     const bothInserted = signal();
     let inserted = 0;
-    const connection = new Proxy(sql, { get(target, property, receiver) {
-      if (property !== "begin") return Reflect.get(target, property, receiver);
-      return (work: (transaction: TransactionSql) => Promise<unknown>) => target.begin((transaction) =>
-        work(new Proxy(transaction, { apply(target, thisArg, args) {
-          const query = Reflect.apply(target, thisArg, args);
-          if (!String(args[0]).includes("insert into reconciliation_sweep_walk_subjects")) return query;
-          return query.then(async (result: unknown) => {
-            // Both FK key-share locks exist before either parent-lock request.
-            if (++inserted === 2) bothInserted.resolve();
-            await bothInserted.promise;
-            return result;
-          });
-        } })));
-    } });
+    const connection = pausingAfter("insert into reconciliation_sweep_walk_subjects", async () => {
+      // Both FK key-share locks exist before either parent-lock request.
+      if (++inserted === 2) bothInserted.resolve();
+      await bothInserted.promise;
+    });
     const first = await new PostgresSweepPassStore(connection).open(input);
     const second = await new PostgresSweepPassStore(connection).open(input);
-    const outcomes = await Promise.allSettled([
-      first.stage({ ...subject, anchor: "issue" }),
-      second.stage({ ...subject, anchor: "pull_request", kind: "pull_request", subjectKey: 2 }),
-    ]);
+    const outcomes = await Promise.allSettled([first.stage({ ...subject, anchor: "issue" }), second.stage({ ...subject, anchor: "pull_request", kind: "pull_request", subjectKey: 2 })]);
     expect(inserted).toBe(2);
     expect(outcomes.map((outcome) => outcome.status === "fulfilled" ? { status: outcome.status }
       : { status: outcome.status, code: outcome.reason.code })).toEqual([{ status: "fulfilled" }, { status: "fulfilled" }]);
@@ -795,18 +736,34 @@ describe("a kept pass's failed-run and age bounds", () => {
   });
 });
 
-function signal() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
-  return { promise, resolve };
-}
+function signal() { let resolve!: () => void; return { promise: new Promise<void>((done) => { resolve = done; }), resolve }; }
 
 async function writePages(pass: SweepPass, keys: string[], first = 1, cursors: string[] = []) {
   for (const [index, key] of keys.entries()) await pass.write(key, { page: first + index }, cursors[index]);
 }
 
-function readPages(pass: SweepPass, keys: string[]) {
-  return Promise.all(keys.map((key) => pass.read(key)));
+function readPages(pass: SweepPass, keys: string[]) { return Promise.all(keys.map((key) => pass.read(key))); }
+
+// Each transaction pauses after every statement containing `text` returns.
+function pausingAfter(text: string, pause: () => Promise<void>): Sql {
+  return new Proxy(sql, { get(target, property, receiver) {
+    if (property !== "begin") return Reflect.get(target, property, receiver);
+    return (work: (transaction: TransactionSql) => Promise<unknown>) => target.begin((transaction) =>
+      work(new Proxy(transaction, { apply(target, thisArg, args) {
+        const query = Reflect.apply(target, thisArg, args);
+        return String(args[0]).includes(text) ? query.then(async (result: unknown) => { await pause(); return result; }) : query;
+      } })));
+  } });
+}
+
+// Another backend is waiting on a lock, or the waiter already finished (the unlocked mutant): no wall-clock ordering.
+function lockWaitObserved(finished: () => boolean) {
+  return vi.waitFor(async () => {
+    const [waiting] = await sql<{ count: number }[]>`select count(*)::int as count
+      from pg_stat_activity a join pg_locks l on l.pid = a.pid and not l.granted
+      where a.datname = current_database() and a.wait_event_type = 'Lock' and a.pid <> pg_backend_pid()`;
+    expect(finished() || waiting.count > 0).toBe(true);
+  });
 }
 
 async function stagedCounts(repositoryId: string, passId: string) {
