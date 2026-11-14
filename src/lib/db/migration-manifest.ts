@@ -124,6 +124,7 @@ export const bundledMigrationNames: readonly string[] = [
   "093_drop_retired_sweep_round.sql",
   "094_webhook_rederivation_owed.sql",
   "095_unwritable_closure_unlabelled_self_work.sql",
+  "096_drop_sweep_pass_walk_cursor.sql",
 ];
 
 /**
