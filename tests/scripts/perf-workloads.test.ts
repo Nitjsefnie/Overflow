@@ -128,8 +128,7 @@ it("refuses an effective-database mismatch before the operation can write", asyn
 it("proves the migration process uses the expected scratch database before migrations", () => {
   const preload = new URL("../../scripts/perf-node-setup.mjs", import.meta.url).href;
   const migration = spawnSync("pnpm", ["db:migrate"], {
-    cwd: root, encoding: "utf8", env: { ...process.env, OVERFLOW_DATABASE_URL: databaseUrl,
-      OVERFLOW_PERF_EXPECTED_DATABASE: "overflow_perf_other",
+    cwd: root, encoding: "utf8", env: { ...process.env, OVERFLOW_DATABASE_URL: databaseUrl, OVERFLOW_PERF_EXPECTED_DATABASE: "overflow_perf_other",
       NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${preload}` },
   });
   expect(migration.status, migration.stdout + migration.stderr).not.toBe(0);
