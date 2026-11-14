@@ -953,15 +953,13 @@ function resolveSettledDifficulty(
       ? ""
       : ` The earliest later application, \`${earliestLaterApplication.label}\` at ${new Date(earliestLaterApplication.createdAt).toISOString()}, came after that window.`;
     return {
-      kind: "rejected",
-      reach: windowReach,
+      kind: "rejected", reach: windowReach,
       reason: `No configured actual-catalog label was standing on the issue by fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.${laterApplication}`,
     };
   }
   if (activeLabels.size > 1) {
     return {
-      kind: "rejected",
-      reach: windowReach,
+      kind: "rejected", reach: windowReach,
       reason: `Several actual-catalog labels were standing on the issue by fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}: ${[...activeLabels.keys()].sort().map((label) => `\`${label}\``).join(", ")}. Exactly one is required.`,
     };
   }
@@ -972,8 +970,7 @@ function resolveSettledDifficulty(
     sourceTime > mergeTime + EVIDENCE_ORDERING_GRACE_MS
   ) {
     return {
-      kind: "rejected",
-      reach: windowReach,
+      kind: "rejected", reach: windowReach,
       reason: `The settled label \`${label}\` was applied at ${new Date(source.createdAt).toISOString()}, outside the window from fifteen minutes before the final commit at ${new Date(pullRequest.finalCommitAt).toISOString()} to fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.`,
     };
   }
@@ -1053,8 +1050,7 @@ function resolveSettledDifficulty(
   const duplicatedDatabaseId = findDuplicatedDatabaseId(tieGroup);
   if (missingDatabaseIdCount > 1 || duplicatedDatabaseId !== undefined) {
     return {
-      kind: "rejected",
-      reach: windowReach,
+      kind: "rejected", reach: windowReach,
       reason: duplicatedDatabaseId === undefined
         ? `Several qualifying rationale comments by ${repositorySponsorPhrase(raterLogin)} share the instant ${new Date(Date.parse(rationale.createdAt)).toISOString()} without GitHub database ids, so no evidence-backed rule can order them.`
         : `Several qualifying rationale comments by ${repositorySponsorPhrase(raterLogin)} share the instant ${new Date(Date.parse(rationale.createdAt)).toISOString()}, and more than one carries the GitHub database id ${duplicatedDatabaseId}, so the ids cannot order them.`,
