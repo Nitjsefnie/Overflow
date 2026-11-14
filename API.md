@@ -54,6 +54,9 @@ the security reason and the change.
 - 1.7.0: The registration response adds `openingLabels`, the repository's
   opening label names; an existing issue is listed once it carries one of
   them. The dashboard read's registered repositories carry the same names.
+- 1.6.0: `POST /api/account/export` adds `reconciliationSweepRounds` and
+  `reconciliationSweepCatchups`, the reconciliation sweep's rounds and
+  catch-ups recorded for the account as sponsor.
 - 1.5.0: Closed-PR dispute responses add `landedCommitAuthorId`; account
   exports include disputes that name the account as the landing commit author.
 - 1.4.0: `POST /api/account/export` adds closed-PR dispute requests and their
