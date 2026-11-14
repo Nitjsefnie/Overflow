@@ -276,8 +276,8 @@ describe("landing page", () => {
 //   - It cannot see line counts, so a copy change moves the fold silently.
 //   - It cannot see the type faces: the h1's wrap depends on the metrics behind
 //     var(--display), and pinning a font stack would be an equality, not a bound.
-//   - It covers the subtree's elements, the line under the lede only by its
-//     pinned narrow-screen rule, and the properties in the table below.
+//   - It covers the elements that stack above the button and no others, and the
+//     properties in the table below and no others.
 //   - A border shorthand carrying var(), the house idiom for every border in
 //     globals.css, is invisible under jsdom 30: it reads style `none` and
 //     width 0px like no border, as does a width-only edit on top of it, so it
@@ -383,6 +383,21 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["lede", "text-transform", "atMost", 0, 0],
   ["lede", "width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
   ["lede", "max-width", "atLeast", 728, 520],
+  // The points line under the lede: two lines at 1440. jsdom cannot apply the
+  // narrow-screen rule pinned below, so the 390 column is the line as measured
+  // without it (four lines of 16px type); with it the browser reads 14px, 0, 63px.
+  ["trade", "margin-top", "atMost", 0, 0],
+  ["trade", "margin-bottom", "atMost", 16, 16],
+  ["trade", "padding-top", "atMost", 0, 0], ["trade", "padding-bottom", "atMost", 0, 0],
+  ["trade", "border-top", "atMost", 0, 0], ["trade", "border-bottom", "atMost", 0, 0], ["trade", "border-left", "atMost", 0, 0], ["trade", "border-right", "atMost", 0, 0],
+  ["trade", "height", "atMost", 48, 96], ["trade", "min-height", "atMost", 48, 96],
+  ["trade", "font-size", "atMost", 16, 16],
+  ["trade", "line-height", "atMost", 24, 24],
+  ["trade", "letter-spacing", "atMost", 0, 0],
+  ["trade", "word-spacing", "atMost", 0, 0],
+  ["trade", "text-transform", "atMost", 0, 0],
+  ["trade", "width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
+  ["trade", "max-width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
   // The form wrapping the button contributes nothing of its own today. Its
   // padding-bottom and border-bottom are below the button, so they are absent.
   ["form", "margin-top", "atMost", 0, 0],
