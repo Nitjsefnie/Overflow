@@ -274,10 +274,9 @@ completes the pass), one sweep fold whose small request budget holds its pass,
 one sweep fold of a deactivated repository (it runs the pass discard in the
 fold and again after it), and one signature-verified webhook ingestion. Each
 sweep workload passes its request budget explicitly, so no host setting moves
-a count. The walk reads fresh, so the gateway's per-request page checkpoint is
-skipped in every sweep fold, as in production. The fixture is one open issue
-without pull requests, so the walk's pull-request reads, its timeline re-read
-and multi-page listings are not driven. Each workload starts from a fresh
+a count. The fixture is one open issue without pull requests, so the walk's
+pull-request reads, its timeline re-read and multi-page listings are not
+driven. Each workload starts from a fresh
 deterministic fixture and runs twice; unequal counts fail. Missing or
 unbudgeted workloads also fail. This measures statement counts, never elapsed
 time or rows returned. Fixture setup and verification queries are outside the
