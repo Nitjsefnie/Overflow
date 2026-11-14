@@ -352,7 +352,7 @@ type RejectionReach =
   | { kind: "WINDOW"; refusedEvidenceAt: string | null };
 type SettledDifficultyResolution =
   | { kind: "accepted"; evidence: SettledDifficultyEvidence }
-  | { kind: "rejected"; reason: string; reach: RejectionReach; violation?: SettlementEvidenceViolationCode; unlabelled?: boolean };
+  | { kind: "rejected"; reason: string; reach: RejectionReach; violation?: SettlementEvidenceViolationCode; unlabelled?: true };
 
 type AuthoritativeClosingPullRequest = RepositoryFoldPullRequest & {
   mergedAt: string;
@@ -957,7 +957,7 @@ function resolveSettledDifficulty(
       : ` The earliest later application, \`${earliestLaterApplication.label}\` at ${new Date(earliestLaterApplication.createdAt).toISOString()}, came after that window.`;
     return {
       kind: "rejected", reach: windowReach,
-      unlabelled: earliestLaterApplication === undefined,
+      ...(earliestLaterApplication === undefined && { unlabelled: true as const }),
       reason: `No configured actual-catalog label was standing on the issue by fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.${laterApplication}`,
     };
   }
