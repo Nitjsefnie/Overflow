@@ -71,20 +71,20 @@ describe("reconcileRepository", () => {
     const failGathering = (f: Run, id: number, failure: Error) => {
       const gather = f.gateway.gatherIssue;
       let failing = true;
-      f.gateway.gatherIssue = async (target) => {
-        if (failing && target.id === id) throw failure;
-        return gather(target);
-      };
+      f.gateway.gatherIssue = async (target) => { if (failing && target.id === id) throw failure; return gather(target); };
       return () => { failing = false; };
     };
     const failStaging = (f: Run, id: number, failure: Error) => {
       const stage = f.pass.stage;
       let failing = true;
-      f.pass.stage = vi.fn(async (input) => {
-        if (failing && input.subjectKey === id) throw failure;
-        return stage(input);
-      });
+      f.pass.stage = vi.fn(async (input) => { if (failing && input.subjectKey === id) throw failure; return stage(input); });
       return () => { failing = false; };
+    };
+
+    /** Stages a refreshed pull request row the walk reuses for a merged closing pull request of staged issue 9. */
+    const stageReused = async (f: Run, payload: unknown) => {
+      for (const anchor of ["subjects", "refresh"]) await f.pass.stage({ anchor, kind: "pull_request", subjectKey: 19, updatedAt: instant(19), payload });
+      await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: 9, updatedAt: instant(9), payload: { ...reconciliationIssue({ id: 9, number: 9 }), closingPullRequests: [reconciliationPullRequest({ id: 19, number: 19 })] } });
     };
 
     it.each<[string, (f: Run) => () => void, number]>([
@@ -116,13 +116,9 @@ describe("reconcileRepository", () => {
     const withoutField = (record: object, field: string) => Object.fromEntries(Object.entries(record).filter(([key]) => key !== field));
     const closing = (bad: unknown) => ({ ...issue(9), closingPullRequests: [pullRequest(5), bad, pullRequest(6)] });
     const historied = (history: unknown[]) => ({ ...issue(9), authorLogin: "author", history });
-    it("builds history rows for issue 9 under a non-blank author", () => {
-      expect(historied([])).toMatchObject({ id: 9, number: 9, authorLogin: "author" });
-    });
+    it("builds history rows for issue 9 under a non-blank author", () => { expect(historied([])).toMatchObject({ id: 9, number: 9, authorLogin: "author" }); });
     const commented = (comments: unknown[]) => ({ ...reconciliationIssue({ id: 9, number: 9 }), closingPullRequests: [], comments });
-    it("builds comment rows for issue 9 under a non-blank author", () => {
-      expect(commented([null])).toMatchObject({ id: 9, number: 9, authorLogin: "sponsor", closingPullRequests: [], comments: [null] });
-    });
+    it("builds comment rows for issue 9 under a non-blank author", () => { expect(commented([null])).toMatchObject({ id: 9, number: 9, authorLogin: "sponsor", closingPullRequests: [], comments: [null] }); });
     const wrongType: Record<string, unknown> = { id: "5", number: "5", state: 1, mergedAt: 1, repositoryGitHubId: "1" };
     const sponsorComment = { id: "comment-9", createdAt: "2026-09-01T08:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: null, body: "Done when it works." };
     const unreadableComments = [[null], [1], ["x"], [false], [sponsorComment, null], [null, sponsorComment], [sponsorComment, sponsorComment, null]];
@@ -186,10 +182,7 @@ describe("reconcileRepository", () => {
     })));
     const suppressing = (dependencies: ReconciliationDependencies) => {
       const materialize = dependencies.store.materialize;
-      dependencies.store.materialize = vi.fn(async (publication) => {
-        scrubPublicationForSuppressions(publication, [suppressed]);
-        return materialize(publication);
-      });
+      dependencies.store.materialize = vi.fn(async (publication) => { scrubPublicationForSuppressions(publication, [suppressed]); return materialize(publication); });
     };
     const settledEvent = (event: object) => ({ ...settled("sponsor"), history: [opening, assigned, event] });
     const settledLabel = (actorLogin: unknown, actorGitHubUserId: number | null = 1001) => settledEvent({ ...actual, actorLogin, actorGitHubUserId });
@@ -205,6 +198,7 @@ describe("reconcileRepository", () => {
       ["settled label event has an empty actor login on the sponsor's numeric id", settledLabel(""), [["opening-9", "sponsor", null], ["assigned-9", "sponsor", null], ["actual-9", "", 1001]], [201]],
       ["settled label event has a null actor login on another account's numeric id", settledLabel(null, 2001), [["opening-9", "sponsor", null], ["assigned-9", "sponsor", null], ["actual-9", null, 2001]], [201]],
     ];
+    const refreshed = (evidence: unknown) => ({ subject: identity, refreshed: true, missing: false, listed: true, evidence });
     const changesRequested = { id: 1, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T10:00:00.000Z", dismissal: null };
     const unreadableRows: Array<[string, "issue" | "pull_request", unknown]> = [
       ["an unavailable subject identity", "issue", null],
@@ -254,7 +248,7 @@ describe("reconcileRepository", () => {
       ["a refreshed pull request row without listed", "pull_request", { subject: identity, evidence: null, refreshed: true, missing: false }],
       ["a refreshed pull request row with a string listed", "pull_request", { subject: identity, evidence: null, refreshed: true, missing: false, listed: "yes" }],
       ...[["a null review", null], ["a review without a dismissal", withoutField(changesRequested, "dismissal")], ["a review with an unconvertible submittedAt", { ...changesRequested, submittedAt: { toString: 1 } }],
-        ["a review with an unconvertible dismissal time", { ...changesRequested, dismissal: { at: { toString: 1 }, previousState: null } }]].map(([label, review]): [string, "pull_request", unknown] => [`a refreshed pull request row with ${label}`, "pull_request", { subject: identity, refreshed: true, missing: false, listed: true, evidence: { reviews: [review], rawDiff: "" } }]),
+        ["a review with an unconvertible dismissal time", { ...changesRequested, dismissal: { at: { toString: 1 }, previousState: null } }]].map(([label, review]): [string, "pull_request", unknown] => [`a refreshed pull request row with ${label}`, "pull_request", refreshed({ reviews: [review], rawDiff: "" })]),
     ];
 
     it("stages each unreadable comments row in comments, beside a readable history", () => {
@@ -398,12 +392,8 @@ describe("reconcileRepository", () => {
       const { f, dependencies, walk } = sweepRun();
       suppressing(dependencies);
       await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: 8, updatedAt: instant(8), payload: stub(8) });
-      const key = kind === "issue" ? 9 : 19;
-      await f.pass.stage({ anchor: "subjects", kind, subjectKey: key, updatedAt: instant(key), payload });
-      if (kind === "pull_request") { // a refreshed row the walk reuses for a merged closing pull request of a staged issue
-        await f.pass.stage({ anchor: "refresh", kind, subjectKey: key, updatedAt: instant(key), payload });
-        await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: 9, updatedAt: instant(9), payload: { ...reconciliationIssue({ id: 9, number: 9 }), closingPullRequests: [reconciliationPullRequest({ id: 19, number: 19 })] } });
-      }
+      if (kind === "issue") await f.pass.stage({ anchor: "subjects", kind, subjectKey: 9, updatedAt: instant(9), payload });
+      else await stageReused(f, payload);
       await f.pass.stage({ anchor: "subjects", kind: "pull_request", subjectKey: 10, updatedAt: instant(10), payload: { ...stub(10), evidence: null } });
       const logged = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
@@ -437,6 +427,15 @@ describe("reconcileRepository", () => {
       expect((rows[0].payload as { comments: unknown[] }).comments).toEqual([{ ...sponsorComment, body: "" }, sponsorComment, { ...sponsorComment, authorLogin: null }, { ...sponsorComment, authorLogin: "" }, { ...sponsorComment, authorGitHubUserId: 1001 }]);
       for (const row of rows) await f.pass.stage({ anchor: "subjects", updatedAt: instant(row.subjectKey), ...row });
       await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
+    });
+
+    it("resumes a pass whose reused refreshed pull request holds the reviews its producers emit", async () => {
+      const { f, dependencies } = sweepRun();
+      const dismissal = { at: "2026-09-01T10:30:00.000Z", previousState: "CHANGES_REQUESTED" };
+      const reviews = [changesRequested, { id: 2, state: "COMMENTED", submittedAt: null, dismissal: null }, { id: 3, state: "DISMISSED", submittedAt: changesRequested.submittedAt, dismissal }, { ...changesRequested, id: 4, dismissal: { ...dismissal, previousState: null } }];
+      await stageReused(f, refreshed({ reviews, rawDiff: "diff" }));
+      await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
+      expect(f.requests).not.toContain("reviews:19");
     });
 
     it("resumes a pass whose staged sponsor comment has an empty body", async () => {
