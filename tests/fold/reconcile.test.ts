@@ -120,29 +120,20 @@ describe("reconcileRepository", () => {
     const commented = (comments: unknown[]) => ({ ...reconciliationIssue({ id: 9, number: 9 }), closingPullRequests: [], comments });
     it("builds comment rows for issue 9 under a non-blank author", () => { expect(commented([null])).toMatchObject({ id: 9, number: 9, authorLogin: "sponsor", closingPullRequests: [], comments: [null] }); });
     const wrongType: Record<string, unknown> = { id: "5", number: "5", state: 1, mergedAt: 1, repositoryGitHubId: "1" };
-    const sponsorComment = { id: "comment-9", createdAt: "2026-09-01T08:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: null, body: "Done when it works." };
+    const sponsorComment = { id: "comment-9", createdAt: "2026-09-01T08:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: null, body: "Done when it works.", lastEditedAt: null };
     const unreadableComments = [[null], [1], ["x"], [false], [sponsorComment, null], [null, sponsorComment], [sponsorComment, sponsorComment, null]];
     const bodyless = withoutField(sponsorComment, "body");
     const loginless = withoutField(sponsorComment, "authorLogin");
     const unreadableBodies: Array<[string, unknown[]]> = [
-      ["no body", [bodyless]],
-      ["a null body", [{ ...sponsorComment, body: null }]],
-      ["a numeric body", [{ ...sponsorComment, body: 1 }]],
-      ["a boolean body", [{ ...sponsorComment, body: false }]],
-      ["an object body", [{ ...sponsorComment, body: {} }]],
-      ["an array body", [{ ...sponsorComment, body: [] }]],
-      ["no body after a readable comment", [sponsorComment, bodyless]],
-      ["no body before a readable comment", [bodyless, sponsorComment]],
-      ["no body after two readable comments", [sponsorComment, sponsorComment, bodyless]],
-      ["no body, the sponsor's numeric id", [{ ...bodyless, authorGitHubUserId: 1001 }]],
+      ["no body", [bodyless]], ["a null body", [{ ...sponsorComment, body: null }]], ["a numeric body", [{ ...sponsorComment, body: 1 }]],
+      ["a boolean body", [{ ...sponsorComment, body: false }]], ["an object body", [{ ...sponsorComment, body: {} }]], ["an array body", [{ ...sponsorComment, body: [] }]],
+      ["no body after a readable comment", [sponsorComment, bodyless]], ["no body before a readable comment", [bodyless, sponsorComment]],
+      ["no body after two readable comments", [sponsorComment, sponsorComment, bodyless]], ["no body, the sponsor's numeric id", [{ ...bodyless, authorGitHubUserId: 1001 }]],
     ];
     const unreadableLogins: Array<[string, unknown[]]> = [
-      ["no author login", [loginless]],
-      ["a numeric author login", [{ ...sponsorComment, authorLogin: 1 }]],
-      ["a boolean author login", [{ ...sponsorComment, authorLogin: false }]],
-      ["an object author login", [{ ...sponsorComment, authorLogin: {} }]],
-      ["an array author login", [{ ...sponsorComment, authorLogin: [] }]],
-      ["no author login after a readable comment", [sponsorComment, loginless]],
+      ["no author login", [loginless]], ["a numeric author login", [{ ...sponsorComment, authorLogin: 1 }]],
+      ["a boolean author login", [{ ...sponsorComment, authorLogin: false }]], ["an object author login", [{ ...sponsorComment, authorLogin: {} }]],
+      ["an array author login", [{ ...sponsorComment, authorLogin: [] }]], ["no author login after a readable comment", [sponsorComment, loginless]],
       ["no author login before a readable comment", [loginless, sponsorComment]],
       ["no author login after two readable comments", [sponsorComment, sponsorComment, loginless]],
     ];
@@ -200,6 +191,20 @@ describe("reconcileRepository", () => {
     ];
     const refreshed = (evidence: unknown) => ({ subject: identity, refreshed: true, missing: false, listed: true, evidence });
     const changesRequested = { id: 1, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T10:00:00.000Z", dismissal: null };
+    const dismissed = { ...changesRequested, id: 4, dismissal: { at: "2026-09-01T10:30:00.000Z", previousState: null } };
+    // One row per field a staged-row consumer reads, each a readable row with only that field replaced by an unconvertible object.
+    const wrongTyped: Array<["issue" | "pull_request", Array<string | number>, string]> = [
+      ["issue", [], "title body url state createdAt updatedAt closedAt authorLogin authorGitHubUserId claimAssigneeGitHubLogin claimAssigneeGitHubUserId"],
+      ["issue", ["history", 2], "actorLogin actorGitHubUserId createdAt"], ["issue", ["comments", 0], "body authorLogin authorGitHubUserId createdAt lastEditedAt"],
+      ["issue", ["closingPullRequests", 0], "id number title url state mergedAt mergeCommitOid finalCommitAt authorLogin authorGitHubUserId repositoryGitHubId repositoryNameWithOwner"],
+      ["pull_request", [], "evidence missing listed"], ["pull_request", ["evidence"], "reviews rawDiff"],
+      ["pull_request", ["evidence", "reviews", 0], "id submittedAt dismissal"], ["pull_request", ["evidence", "reviews", 0, "dismissal"], "at"],
+    ];
+    const poisoned = (row: object, path: Array<string | number>) => {
+      const copy = structuredClone(row) as Record<string | number, unknown>;
+      path.slice(0, -1).reduce((node, key) => node[key] as Record<string | number, unknown>, copy)[path.at(-1)!] = { toString: 1 };
+      return copy;
+    };
     const unreadableRows: Array<[string, "issue" | "pull_request", unknown]> = [
       ["an unavailable subject identity", "issue", null],
       ["a string id", "issue", { ...issue(9), id: "9" }],
@@ -249,6 +254,8 @@ describe("reconcileRepository", () => {
       ["a refreshed pull request row with a string listed", "pull_request", { subject: identity, evidence: null, refreshed: true, missing: false, listed: "yes" }],
       ...[["a null review", null], ["a review without a dismissal", withoutField(changesRequested, "dismissal")], ["a review with an unconvertible submittedAt", { ...changesRequested, submittedAt: { toString: 1 } }],
         ["a review with an unconvertible dismissal time", { ...changesRequested, dismissal: { at: { toString: 1 }, previousState: null } }]].map(([label, review]): [string, "pull_request", unknown] => [`a refreshed pull request row with ${label}`, "pull_request", refreshed({ reviews: [review], rawDiff: "" })]),
+      ...wrongTyped.flatMap(([kind, at, fields]) => fields.split(" ").map((field): [string, "issue" | "pull_request", unknown] => [`a wrong-typed ${[...at, field].join(".")}`,
+        kind, poisoned(kind === "issue" ? settled("sponsor") : refreshed({ reviews: [dismissed], rawDiff: "" }), [...at, field])])),
     ];
 
     it("stages each unreadable comments row in comments, beside a readable history", () => {
@@ -261,8 +268,8 @@ describe("reconcileRepository", () => {
       expect(unreadableRows.filter(([label]) => label.startsWith("a sponsor comment with ")))
         .toStrictEqual(unreadableSponsorComments.map(([label, comments]) => [`a sponsor comment with ${label}`, "issue", commented(comments)]));
       const rows = unreadableRows.filter(([label]) => label.startsWith("a sponsor comment with ")).map(([, , payload]) => payload as { comments: Array<Record<string, unknown>>; history: unknown[] });
-      expect(bodyless).toEqual({ id: "comment-9", createdAt: "2026-09-01T08:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: null });
-      expect(loginless).toEqual({ id: "comment-9", createdAt: "2026-09-01T08:30:00.000Z", authorGitHubUserId: null, body: "Done when it works." });
+      expect(bodyless).toEqual({ id: "comment-9", createdAt: "2026-09-01T08:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: null, lastEditedAt: null });
+      expect(loginless).toEqual({ id: "comment-9", createdAt: "2026-09-01T08:30:00.000Z", authorGitHubUserId: null, body: "Done when it works.", lastEditedAt: null });
       expect(rows.map((payload) => payload.comments)).toEqual(unreadableSponsorComments.map(([, comments]) => comments));
       const plain = (comment: Record<string, unknown>) => withoutField(withoutField(withoutField(comment, "body"), "authorLogin"), "authorGitHubUserId");
       for (const { comments, history, ...row } of rows) {
@@ -292,7 +299,7 @@ describe("reconcileRepository", () => {
       expect(rows).toStrictEqual([["a settled issue whose sponsor rationale has a numeric author login on the sponsor's numeric id", "issue", settled(1)]]);
       expect(rows[0][2]).not.toHaveProperty("subject");
       const { comments, closingPullRequests } = rows[0][2] as { comments: unknown[]; closingPullRequests: Array<Record<string, unknown>> };
-      expect(comments).toEqual([{ id: "comment-9", createdAt: "2026-09-01T11:30:00.000Z", authorLogin: 1, authorGitHubUserId: 1001, body: "Done when it works." }]);
+      expect(comments).toEqual([{ id: "comment-9", createdAt: "2026-09-01T11:30:00.000Z", authorLogin: 1, authorGitHubUserId: 1001, body: "Done when it works.", lastEditedAt: null }]);
       expect(closingPullRequests.map(({ state, mergedAt }) => [state, mergedAt])).toEqual([["MERGED", "2026-09-01T12:00:00.000Z"]]);
     });
 
@@ -303,10 +310,8 @@ describe("reconcileRepository", () => {
         .toStrictEqual(unreadableActors.map(([label, history]) => [`${prefix}${label}`, "issue", labelled(history)]));
       const rows = unreadableRows.filter(([label]) => label.startsWith(prefix)).map(([, , payload]) => payload as { history: Array<Record<string, unknown>> });
       expect(sponsorHistory.map(({ id, kind, actorLogin, actorGitHubUserId, createdAt }) => [id, kind, actorLogin, actorGitHubUserId, createdAt])).toEqual([
-        ["opening-9", "LABELED", "sponsor", null, "2026-09-01T08:01:00.000Z"],
-        ["assigned-9", "ASSIGNED", "sponsor", null, "2026-09-01T09:00:00.000Z"],
-        ["actual-9", "LABELED", "sponsor", null, "2026-09-01T11:00:00.000Z"],
-      ]);
+        ["opening-9", "LABELED", "sponsor", null, "2026-09-01T08:01:00.000Z"], ["assigned-9", "ASSIGNED", "sponsor", null, "2026-09-01T09:00:00.000Z"],
+        ["actual-9", "LABELED", "sponsor", null, "2026-09-01T11:00:00.000Z"]]);
       const plain = (event: Record<string, unknown>) => withoutField(withoutField(event, "actorLogin"), "actorGitHubUserId");
       const wrong = (event: Record<string, unknown>) => event.actorLogin !== "sponsor";
       for (const { history, ...row } of rows) {
@@ -334,13 +339,9 @@ describe("reconcileRepository", () => {
         { kind: "UNASSIGNED", id: "unassigned-9", assigneeLogin: "contributor", ...late },
         { kind: "UNLABELED", id: "unlabeled-9", label: "delivered/6", ...late },
       ];
-      const wrongActors = [
-        { actorLogin: 1, actorGitHubUserId: 3001 }, { actorLogin: 1, actorGitHubUserId: null },
-        { actorLogin: false, actorGitHubUserId: 3001 }, { actorLogin: false, actorGitHubUserId: null },
-        { actorLogin: {}, actorGitHubUserId: 3001 }, { actorLogin: {}, actorGitHubUserId: null },
-        { actorLogin: [], actorGitHubUserId: 3001 }, { actorLogin: [], actorGitHubUserId: null },
-        { actorGitHubUserId: 3001 }, { actorGitHubUserId: null },
-      ];
+      const wrongActors = [{ actorLogin: 1, actorGitHubUserId: 3001 }, { actorLogin: 1, actorGitHubUserId: null }, { actorLogin: false, actorGitHubUserId: 3001 },
+        { actorLogin: false, actorGitHubUserId: null }, { actorLogin: {}, actorGitHubUserId: 3001 }, { actorLogin: {}, actorGitHubUserId: null },
+        { actorLogin: [], actorGitHubUserId: 3001 }, { actorLogin: [], actorGitHubUserId: null }, { actorGitHubUserId: 3001 }, { actorGitHubUserId: null }];
       expect(histories.map((history) => history.slice(3)))
         .toStrictEqual(lateEntryLiterals.flatMap((entry) => wrongActors.map((wrong) => [{ ...entry, ...wrong }])));
     });
@@ -383,7 +384,7 @@ describe("reconcileRepository", () => {
           { kind: "ASSIGNED", id: "assigned-9", actorLogin: "sponsor", actorGitHubUserId: null, createdAt: "2026-09-01T09:00:00.000Z", assigneeLogin: "contributor" },
           wrongEvents[index],
         ]);
-        expect(comments).toEqual([{ id: "comment-9", createdAt: "2026-09-01T11:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: 1001, body: "Done when it works." }]);
+        expect(comments).toEqual([{ id: "comment-9", createdAt: "2026-09-01T11:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: 1001, body: "Done when it works.", lastEditedAt: null }]);
         expect(closingPullRequests).toMatchObject([{ id: 201, number: 11, state: "MERGED", mergedAt: "2026-09-01T12:00:00.000Z", finalCommitAt: "2026-09-01T10:00:00.000Z", repositoryGitHubId: 5001 }]);
       }
     });
@@ -409,10 +410,11 @@ describe("reconcileRepository", () => {
 
     it("resumes a pass whose staged rows are all readable", async () => {
       const { f, dependencies } = sweepRun();
-      const open = { ...pullRequest(5), state: "OPEN" as const, mergedAt: null };
+      const open = { ...pullRequest(5), state: "OPEN" as const, mergedAt: null }, closed = { ...pullRequest(6), state: "CLOSED" as const, mergedAt: null };
       const readableHistory = [{ ...opening, actorLogin: null }, { ...assigned, actorLogin: "" }, { ...actual, actorLogin: "", actorGitHubUserId: 1001 }];
       const rows = [
-        { kind: "issue" as const, subjectKey: 9, payload: { ...commented([{ ...sponsorComment, body: "" }, sponsorComment, { ...sponsorComment, authorLogin: null }, { ...sponsorComment, authorLogin: "" }, { ...sponsorComment, authorGitHubUserId: 1001 }]), history: readableHistory, closingPullRequests: [open] } },
+        { kind: "issue" as const, subjectKey: 9, payload: { ...commented([{ ...sponsorComment, body: "" }, sponsorComment, { ...sponsorComment, authorLogin: null }, { ...sponsorComment, authorLogin: "" },
+          { ...sponsorComment, authorGitHubUserId: 1001 }, { ...sponsorComment, lastEditedAt: "2026-09-01T08:40:00.000Z" }]), authorGitHubUserId: 1001, claimAssigneeGitHubUserId: 2001, history: readableHistory, closingPullRequests: [open, closed] } },
         { kind: "issue" as const, subjectKey: 10, payload: { subject: { id: 10, number: 10 } } },
         { kind: "pull_request" as const, subjectKey: 11, payload: { subject: { id: 11, number: 11 }, evidence: null } },
         { kind: "pull_request" as const, subjectKey: 12, payload: { subject: { id: 12, number: 12 }, evidence: { reviews: [], rawDiff: "diff" } } },
@@ -424,15 +426,16 @@ describe("reconcileRepository", () => {
         { kind: "ASSIGNED", id: "assigned-9", actorLogin: "", actorGitHubUserId: null, createdAt: "2026-09-01T09:00:00.000Z", assigneeLogin: "contributor" },
         { kind: "LABELED", id: "actual-9", actorLogin: "", actorGitHubUserId: 1001, createdAt: "2026-09-01T11:00:00.000Z", label: "delivered/6" },
       ]);
-      expect((rows[0].payload as { comments: unknown[] }).comments).toEqual([{ ...sponsorComment, body: "" }, sponsorComment, { ...sponsorComment, authorLogin: null }, { ...sponsorComment, authorLogin: "" }, { ...sponsorComment, authorGitHubUserId: 1001 }]);
+      expect((rows[0].payload as { comments: unknown[] }).comments).toEqual([{ ...sponsorComment, body: "" }, sponsorComment, { ...sponsorComment, authorLogin: null }, { ...sponsorComment, authorLogin: "" },
+        { ...sponsorComment, authorGitHubUserId: 1001 }, { ...sponsorComment, lastEditedAt: "2026-09-01T08:40:00.000Z" }]);
       for (const row of rows) await f.pass.stage({ anchor: "subjects", updatedAt: instant(row.subjectKey), ...row });
       await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
     });
 
     it("resumes a pass whose reused refreshed pull request holds the reviews its producers emit", async () => {
       const { f, dependencies } = sweepRun();
-      const dismissal = { at: "2026-09-01T10:30:00.000Z", previousState: "CHANGES_REQUESTED" };
-      const reviews = [changesRequested, { id: 2, state: "COMMENTED", submittedAt: null, dismissal: null }, { id: 3, state: "DISMISSED", submittedAt: changesRequested.submittedAt, dismissal }, { ...changesRequested, id: 4, dismissal: { ...dismissal, previousState: null } }];
+      const dismissal = { ...dismissed.dismissal, previousState: "CHANGES_REQUESTED" };
+      const reviews = [changesRequested, { id: 2, state: "COMMENTED", submittedAt: null, dismissal: null }, { id: 3, state: "DISMISSED", submittedAt: changesRequested.submittedAt, dismissal }, dismissed];
       await stageReused(f, refreshed({ reviews, rawDiff: "diff" }));
       await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
       expect(f.requests).not.toContain("reviews:19");
@@ -449,7 +452,7 @@ describe("reconcileRepository", () => {
     it("resumes a pass whose settled issue has a string author login on the sponsor's numeric id", async () => {
       const { f, dependencies } = sweepRun();
       const payload = settled("sponsor");
-      expect(payload.comments).toEqual([{ id: "comment-9", createdAt: "2026-09-01T11:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: 1001, body: "Done when it works." }]);
+      expect(payload.comments).toEqual([{ id: "comment-9", createdAt: "2026-09-01T11:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: 1001, body: "Done when it works.", lastEditedAt: null }]);
       expect(payload.closingPullRequests.map(({ state, mergedAt }) => [state, mergedAt])).toEqual([["MERGED", "2026-09-01T12:00:00.000Z"]]);
       await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: 9, updatedAt: instant(9), payload });
       await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
