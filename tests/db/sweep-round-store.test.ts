@@ -23,7 +23,6 @@ beforeAll(async () => {
   await runMigrations();
 });
 beforeEach(async () => {
-  await sql`delete from reconciliation_sweep_round`;
   await sql`delete from reconciliation_sweep_rounds`;
 });
 afterAll(async () => {
@@ -75,7 +74,6 @@ describe("per-sponsor durable sweep rounds", () => {
     expect(await store.enqueueNext(sponsorA, ["a1", "a2"], next, 2, offer)).toBe("a1");
     expect(await store.enqueueNext(sponsorB, ["b1", "b2"], next, 2, offer)).toBe("b2");
     expect(offered).toEqual(["b1", "a1", "b2"]);
-    expect(await sql`select * from reconciliation_sweep_round`).toEqual([]);
   });
 
   it("holds, rolls over and spaces a sponsor's repositories on a configured window", async () => {
@@ -127,7 +125,7 @@ describe("per-sponsor durable sweep rounds", () => {
     expect(await store.spend(sponsorId, repositoryId, at, 2147483647)).toBeNull();
     await sql`update reconciliation_sweep_rounds set spent = 2147483647 where sponsor_id = ${sponsorId}`;
     expect(await store.spend(sponsorId, repositoryId, at, 2147483647)).toEqual(next);
-    await expect(store.spend(sponsorId, repositoryId, at, 2147483648)).rejects.toThrow();
+    await expect(store.spend(sponsorId, repositoryId, at, 2147483648)).rejects.toThrow(/out of range for type integer/);
   });
 
   it("offers every repository of a sponsor within six hours at the production 15-second poll cadence", async () => {
@@ -245,11 +243,11 @@ describe("per-sponsor durable sweep rounds", () => {
 
       await runMigrations();
 
-      // Nothing is carried: the per-sponsor table starts empty and the old
-      // table's row is untouched. Each sponsor's window anchors at its first
+      // Nothing is carried: the per-sponsor table starts empty and the singleton
+      // table, row and all, is dropped. Each sponsor's window anchors at its first
       // sweep, so the singleton's spent never becomes any sponsor's debt.
       expect(await upgradeSql`select * from reconciliation_sweep_rounds`).toEqual([]);
-      expect(await upgradeSql`select window_start, spent from reconciliation_sweep_round`).toEqual([{ window_start: at, spent: 3000 }]);
+      expect(await upgradeSql`select to_regclass('reconciliation_sweep_round')::text as name`).toEqual([{ name: null }]);
 
       // First touch after deploy: the sponsor's row starts from zero and the
       // first fold's spend admits at once, charging one. The sponsor row and

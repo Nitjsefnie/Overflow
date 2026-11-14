@@ -32,7 +32,6 @@ beforeAll(async () => {
   sql = getSql(); await runMigrations();
 });
 beforeEach(async () => {
-  await sql`delete from reconciliation_sweep_round`;
   await sql`delete from reconciliation_sweep_rounds`;
 });
 afterAll(async () => {
@@ -776,7 +775,7 @@ describe("a kept pass's failed-run and age bounds", () => {
     const outcomes = [];
     for (const now of inside) outcomes.push(await run(failed, now));
     const kept = (await passId())!;
-    await sql`insert into reconciliation_sweep_pages values (${kept}, 'absence-listing:0', ${sql.json([{ anchor: "subjects", kind: "issue", id: 1, number: 1, updatedAt: at.toISOString() }])})`;
+    await sql`insert into reconciliation_sweep_pages (pass_id, request_key, payload) values (${kept}, 'absence-listing:0', ${sql.json([{ anchor: "subjects", kind: "issue", id: 1, number: 1, updatedAt: at.toISOString() }])})`;
     expect([outcomes, f.counts.get(1), await rowsOf(kept)]).toEqual([inside.map(() => "failed"), 1, { pages: 1, staged: [1, 2] }]);
     f.listed.length = 0;
     expect([await run(failed, bound), await passId() === kept, f.counts.get(1), f.listed[0], await rowsOf(kept), (await rowsOf((await passId())!))!.staged])

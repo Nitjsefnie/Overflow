@@ -735,11 +735,7 @@ describe("account deletion as pseudonymisation", () => {
       .map((entry) => `${entry.table}.${entry.column}`)
       .sort();
     expect(declaredPairs).toEqual(catalogPairs);
-
-    // The one-row-per-sponsor section orders on its primary key, not on a column implying several rows.
-    const [{ columns }] = await sql<{ columns: string[] }[]>`select array_agg(a.attname::text) as columns from pg_index i
-      join pg_attribute a on a.attrelid = i.indrelid and a.attnum = any(i.indkey)
-      where i.indrelid = 'reconciliation_sweep_rounds'::regclass and i.indisprimary`;
+    const [{ columns }] = await sql<{ columns: string[] }[]>`select array_agg(a.attname::text) as columns from pg_index i join pg_attribute a on a.attrelid = i.indrelid and a.attnum = any(i.indkey) where i.indrelid = 'reconciliation_sweep_rounds'::regclass and i.indisprimary`;
     expect(userForeignKeyExports.find((entry) => entry.table === "reconciliation_sweep_rounds")).toMatchObject({ orderBy: columns });
 
     // Every seeded row appears in its declared section, complete and in order.
