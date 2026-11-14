@@ -762,7 +762,8 @@ the exact fetched SHA (below), and only after both gates pass the
 skip that compares the resolved SHA against the serving release's `REVISION`
 record and, on a match — the run that built the serving release migrated at that
 same commit — exits without installing, migrating or building, the copy-import
-install, the environment load, `db:migrate`, a grammar-named release directory
+install, the environment load (the file read as systemd's `EnvironmentFile=`
+reads it, never run; below), `db:migrate`, a grammar-named release directory
 created with a collision-aborting `mkdir`, generated-config preparation, the
 build, whose clean step wipes the release directory (everything outside
 `cache|dev|lock|trace`), the ownership reset excluding the serving cache, the
@@ -894,15 +895,16 @@ naming the skip and the SHA, and is reserved for rollback or recovery deploys
 when main's CI is red; unset or empty enforces the gate, and any other value
 refuses.
 
-The script takes no arguments and reads exactly seven environment overrides
+The script takes no arguments and reads exactly eight environment overrides
 for the test harness; production sets none of them and runs on the defaults:
 `OVERFLOW_DEPLOY_TREE` (default `/srv/overflow`),
 `OVERFLOW_DEPLOY_ENV_FILE` (default `/etc/overflow/overflow.env`),
 `OVERFLOW_DEPLOY_LOCK` (default `/run/overflow-deploy.lock`),
 `OVERFLOW_DEPLOY_UNIT` (default `overflow.service`),
 `OVERFLOW_DEPLOY_URL` (default `http://127.0.0.1:3000/api/readiness`),
-`OVERFLOW_DEPLOY_LOG_DIR` (default `/var/log/overflow`) and
-`OVERFLOW_DEPLOY_CI_TIMEOUT` (default `900`). The deployment URL must name the
+`OVERFLOW_DEPLOY_LOG_DIR` (default `/var/log/overflow`),
+`OVERFLOW_DEPLOY_CI_TIMEOUT` (default `900`) and
+`OVERFLOW_DEPLOY_ENV_READ_TIMEOUT` (default `5`, seconds). The deployment URL must name the
 readiness endpoint: the sign-in smoke derives its own URL from
 `OVERFLOW_DEPLOY_URL` by replacing the trailing `/api/readiness` with
 `/api/auth/providers`, so any other target derives a wrong smoke URL and
@@ -944,17 +946,25 @@ reconciliation running normally, but missed deliveries may remain unrecovered
 until a later reconciliation.
 
 `scripts/deploy-revision.sh` reads the environment file, not the deploy terminal,
-and says what it holds. Before the restart it prints one line: that the
-immediate startup sweep will be skipped when the file sets exactly `1`, or that
-it will run when the variable is unset or blank. Any other value, such as
-`true`, is named in that line as not exactly `1`, so an override that does not
-skip is visible before the restart. Once the service is active again, a file
-that still holds `1` is reported as still set, with a reminder that every later
-restart will skip the sweep until the line is removed. That reminder is the
-prompt for the removal below. If the file cannot be read when either line is
-printed (it is missing or unreadable, or ends the read with `exit`), that line
-says the value could not be read, rather than reporting the variable as unset or
-saying nothing, and the deploy carries on.
+and reads it the way systemd's `EnvironmentFile=` does, without running it:
+single and double quotes, backslash escapes, line continuations and `#` or `;`
+comment lines, with no `$` expansion and no commands, so the migration check,
+the migrations, the build and both lines below see exactly the values the
+service will see. Every name the file sets is exported to those steps over any
+value the deploy terminal exported; a name the file does not set keeps the
+terminal's value. If the file cannot be read at that first read (it is missing,
+unreadable, or not read within the deadline), the deploy refuses before the
+migration check. The script then says what the file holds. Before the restart
+it prints one line: that the immediate startup sweep will be skipped when the
+file sets exactly `1`, or that it will run when the variable is unset or blank.
+Any other value, such as `true`, is named in that line as not exactly `1`, so an
+override that does not skip is visible before the restart. Once the service is
+active again, a file that still holds `1` is reported as still set, with a
+reminder that every later restart will skip the sweep until the line is
+removed. That reminder is the prompt for the removal below. If the file cannot
+be read when either line is printed (it is missing or unreadable, or not read
+within the deadline), that line says the value could not be read, rather than
+reporting the variable as unset or saying nothing, and the deploy carries on.
 
 After restart, verify the warning naming `OVERFLOW_SKIP_STARTUP_RECONCILIATION`
 in the service journal. An authenticated moderator can also read

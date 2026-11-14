@@ -60,21 +60,14 @@ is_operational_ignored() {
   [[ "$1" != *$'\n'* ]] && printf '%s' "$1" | LC_ALL=C grep -Eq -- "$operational_ignored_re"
 }
 
-# The file's value in a subshell: a caller's export must not stand in for it
-# or be lost to later steps, nor set -u abort on it. A read that ends before
-# the value is printed fails, so an empty value means unset or blank.
+# Sets skip_value to the file's OVERFLOW_SKIP_STARTUP_RECONCILIATION, read
+# afresh so a caller's export never stands in ('' when unset or blank); fails
+# when the file cannot be read.
 env_file_skip_value() {
-  [ -f "$env_file" ] && [ -r "$env_file" ] || return
-  (
-    trap 'exit 1' EXIT
-    unset OVERFLOW_SKIP_STARTUP_RECONCILIATION
-    set +u
-    set -a
-    # shellcheck source=/dev/null
-    . "$env_file" >/dev/null
-    printf '%s' "${OVERFLOW_SKIP_STARTUP_RECONCILIATION-}"
-    trap - EXIT
-  )
+  read_env_file "$env_file" || return
+  local pair
+  skip_value=
+  for pair in "${env_file_assignments[@]}"; do [[ $pair != OVERFLOW_SKIP_STARTUP_RECONCILIATION=* ]] || skip_value=${pair#*=}; done
 }
 
 # The map-refusal message's shared prefix, up to the clause each refusal
@@ -654,15 +647,25 @@ if [ "$serving_release" != absent ] && [ -f "$serving_release/REVISION" ]; then
   fi
 fi
 npm_config_package_import_method=copy pnpm install --frozen-lockfile
-# The env file is operator input whose path is resolved at run time from
-# OVERFLOW_DEPLOY_ENV_FILE above, so there is no constant location for the
-# linter to follow it to; the directive below stops that chase rather than
-# naming a source. The variables the file exports are consumed — and their
-# absence fatal — in every step below that reads them.
-set -a
+# The steps below and the two reports read the file as the service does:
+# scripts/systemd-env-file.sh, beside this script in the tree being deployed,
+# ports systemd v257's EnvironmentFile= parser state for state (quotes,
+# escapes, continuations, #/; comments, no expansion), so the file never runs.
+# Each name it sets is exported over any caller's value, and every step below
+# fails without the variables it reads; a file that cannot be read within
+# OVERFLOW_DEPLOY_ENV_READ_TIMEOUT seconds (a test-only knob like
+# OVERFLOW_DEPLOY_CI_TIMEOUT, default 5) refuses here. The reader's path is
+# resolved at run time, so the directive stops the linter's chase; it is
+# linted on its own.
+env_file_assignments=() # read_env_file's result
 # shellcheck source=/dev/null
-. "$env_file"
-set +a
+. "$tree/scripts/systemd-env-file.sh"
+read_env_file "$env_file" || {
+  printf 'Could not read the environment file %s (missing, unreadable, or not read within %ss); refusing to deploy.\n' "$env_file" "${OVERFLOW_DEPLOY_ENV_READ_TIMEOUT:-5}" >&2
+  exit 1
+}
+# Guarded: export with no names would print the whole environment.
+if ((${#env_file_assignments[@]})); then export -- "${env_file_assignments[@]}"; fi
 migration_status=$(node scripts/deploy-migration-status.ts) || {
   printf 'Could not list the pending migrations (node scripts/deploy-migration-status.ts failed); refusing to deploy. Database connection details come from %s.\n' "$env_file" >&2
   exit 1
@@ -699,7 +702,7 @@ chown -R overflow:overflow "$release/cache"
 chmod -R u=rwX,g=rX,o= "$release/cache"
 printf 'Previous build: %s\nNew build: %s\n' "$previous_release" "$release"
 pnpm release:switch "$tree" "$release" --expect-current "$expected_serving"
-if ! skip_value=$(env_file_skip_value); then
+if ! env_file_skip_value; then
   printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION could not be read from %s; whether the immediate startup sweep is skipped on this restart is unknown.\n' "$env_file"
 else
   case "$skip_value" in
@@ -716,7 +719,7 @@ else
 fi
 systemctl restart "$unit"
 systemctl is-active "$unit"
-if ! skip_value=$(env_file_skip_value); then
+if ! env_file_skip_value; then
   printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION could not be read from %s; whether every later restart will skip the immediate startup sweep is unknown.\n' "$env_file"
 elif [ "$skip_value" = 1 ]; then
   printf 'OVERFLOW_SKIP_STARTUP_RECONCILIATION=1 is still set in %s; every later restart will also skip the immediate startup sweep until that line is removed.\n' "$env_file"
