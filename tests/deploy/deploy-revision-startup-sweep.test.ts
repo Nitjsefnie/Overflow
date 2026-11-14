@@ -33,14 +33,10 @@ const UNREADABLE = { run: `command -p chmod 000 ${ENV_FILE}` };
 const RESTORED = { run: `rm -rf ${ENV_FILE}; echo ${KEY}=1 > ${ENV_FILE}` };
 const STEP_KEYS = [KEY, "PRICE", "DSN", "OTHER"];
 
-const unreadableBefore = (envFile: string) =>
-  `${KEY} could not be read from ${envFile}; whether the immediate startup sweep is skipped on this restart is unknown.`;
-const unreadableAfter = (envFile: string) =>
-  `${KEY} could not be read from ${envFile}; whether every later restart will skip the immediate startup sweep is unknown.`;
-const skipBefore = (envFile: string) =>
-  `${KEY}=1 is set in ${envFile}; the immediate startup sweep will be skipped on this restart.`;
-const stillSet = (envFile: string) =>
-  `${KEY}=1 is still set in ${envFile}; every later restart will also skip the immediate startup sweep until that line is removed.`;
+const unreadableBefore = (envFile: string) => `${KEY} could not be read from ${envFile}; whether the immediate startup sweep is skipped on this restart is unknown.`;
+const unreadableAfter = (envFile: string) => `${KEY} could not be read from ${envFile}; whether every later restart will skip the immediate startup sweep is unknown.`;
+const skipBefore = (envFile: string) => `${KEY}=1 is set in ${envFile}; the immediate startup sweep will be skipped on this restart.`;
+const stillSet = (envFile: string) => `${KEY}=1 is still set in ${envFile}; every later restart will also skip the immediate startup sweep until that line is removed.`;
 const unsetBefore = (envFile: string) => `${KEY} is unset or blank in ${envFile}; the immediate startup sweep will run on this restart.`;
 const notOne = (quoted: string, envFile: string) =>
   `${KEY}=${quoted} in ${envFile} is not exactly 1, so the immediate startup sweep will run on this restart.`;
@@ -134,6 +130,13 @@ describe("scripts/deploy-revision.sh — the startup-sweep override", () => {
     ["a double quote left open at the end", "", `${KEY}="1\n`, "$'1\\n'"],
     ["CRLF line ends", "", `${KEY}=1\r\nOTHER=2\r\n`, "1"],
     ["the line inside another variable's double-quoted value", "", `OTHER="a\n${KEY}=1\n"\n`, ""],
+    ["a comment ended by a CR", "", `#c\r${KEY}=1\n`, "1"],
+    ["a line without = ended by a CR", "", `A\r${KEY}=1\n`, "1"],
+    ["a tab after =", "", `${KEY}=\t1\n`, "1"],
+    ["$ and ` escaped inside double quotes", "", `${KEY}="\\$\\\`1"\n`, "\\$\\`1"],
+    ["an escaped CR outside quotes", "", `${KEY}=1\\\r\n`, "1"],
+    ["an escaped CR inside double quotes", "", `${KEY}="1\\\r"\n`, "$'1\\\\\\r'"],
+    ["a space inside the name", "", `${KEY.slice(0, 10)} ${KEY.slice(10)}=1\n`, ""],
   ];
 
   it.each(FILES)("reports, before the restart and once active, what systemd's EnvironmentFile= takes from a file with %s", async (_label, initial, afterSwitch, quoted) => {
@@ -146,18 +149,15 @@ describe("scripts/deploy-revision.sh — the startup-sweep override", () => {
     expect(existsSync(`${fixture.envFile}.ran`), "the marker after a failing command").toBe(false);
   });
 
-  it("ignores a 1 exported by the caller when the file does not set it", async () => {
-    const { fixture, mentions } = await deployWith("", { [KEY]: "1" });
-    expect(mentions).toEqual([unsetBefore(fixture.envFile)]);
-  });
-
-  it("reports the file's value when the caller exports a different one", async () => {
-    const asZero = await deployWith(`${KEY}=0\n`, { [KEY]: "1" });
-    expect(asZero.mentions).toEqual([notOne("0", asZero.fixture.envFile)]);
-    await cleanupLiveFixture();
-    const asOne = await deployWith(`${KEY}=1\n`, { [KEY]: "0" });
-    expect(asOne.mentions).toHaveLength(2);
-    expect(asOne.mentions[0]).toContain("will be skipped on this restart");
+  it.each([
+    ["ignores a 1 exported by the caller when the file does not set it", "", { [KEY]: "1" }, ""],
+    ["reports the file's 0 when the caller exports 1", `${KEY}=0\n`, { [KEY]: "1" }, "0"],
+    ["reports the file's 1 when the caller exports 0", `${KEY}=1\n`, { [KEY]: "0" }, "1"],
+    ["deploys when the file names the variable the caller exported", `OTHER=$${KEY}\n`, { [KEY]: "1" }, ""],
+    ["reports the value of a file that also names the variable and later sets it", `OTHER=$${KEY}\n${KEY}=1\n`, { [KEY]: "0" }, "1"],
+  ])("%s", async (_label, fileLines, callerEnv, quoted) => {
+    const { fixture, mentions } = await deployWith(fileLines, callerEnv);
+    expect(mentions).toEqual(reported(quoted, fixture.envFile));
   });
 
   it("takes the reminder from the file as it is once the service is active, not from the announcement", async () => {
@@ -175,16 +175,6 @@ describe("scripts/deploy-revision.sh — the startup-sweep override", () => {
     expect(mentions).toEqual([unsetBefore(fixture.envFile)]);
   });
 
-  it("deploys when the file names the variable the caller exported", async () => {
-    const { fixture, mentions } = await deployWith(`OTHER=$${KEY}\n`, { [KEY]: "1" });
-    expect(mentions).toEqual([unsetBefore(fixture.envFile)]);
-  });
-
-  it("reports the value of a file that also names the variable and later sets it", async () => {
-    const { fixture, mentions } = await deployWith(`OTHER=$${KEY}\n${KEY}=1\n`, { [KEY]: "0" });
-    expect(mentions).toEqual(reported("1", fixture.envFile));
-  });
-
   it("never runs the file: what its lines would print reaches neither stream", async () => {
     const { fixture, lines, stderr, mentions } = await deployWith(`echo noisy-line\necho noisy-err >&2\n${KEY}=1\n`);
     expect(`${lines.join("\n")}\n${stderr}`).not.toMatch(/noisy-(line|err)/);
@@ -195,18 +185,30 @@ describe("scripts/deploy-revision.sh — the startup-sweep override", () => {
     ["no expansion of a set name", "PRICE=5$HOME\n", "PRICE", "5$HOME"],
     ["no abort on an unset name", "DSN=pa$OVERFLOW_FIXTURE_UNSET\n", "DSN", "pa$OVERFLOW_FIXTURE_UNSET"],
     ["the text after a closing quote", `OTHER="ab" #c\n`, "OTHER", "ab#c"],
+    ["the last of a name set twice", "PRICE=1\nPRICE=2\n", "PRICE", "2"],
   ])("hands the deploy's own steps the file's value as systemd reads it, over the caller's, with %s", async (_label, line, name, value) => {
     const { entries } = await deployWith(line, { [name]: "caller" });
     expect(steps(entries).map((entry) => entry.env[name])).toEqual([value, value, value]);
   });
 
-  it("refuses the deploy before the migration-status check when the first read cannot read the file", async () => {
+  it.each([
+    ["is removed", {}, true],
+    ["is not read within the deadline the knob sets (one timeout cannot use)", { OVERFLOW_DEPLOY_ENV_READ_TIMEOUT: "never" }, false],
+  ])("refuses the deploy before the migration-status check when the first read finds the file %s", async (_label, knob, remove) => {
     const fixture = await makeFixture();
-    await rm(fixture.envFile);
-    const result = await runDeploy(fixture);
+    if (remove) await rm(fixture.envFile);
+    const result = await runDeploy(fixture, knob);
     expect(result.status, result.stderr).toBe(1);
     expect(result.stderr).toContain(`Could not read the environment file ${fixture.envFile}`);
     expect(steps(await readLog(fixture.shimLog))).toEqual([]);
+  });
+
+  it("exports nothing, and prints no environment, from a file that sets nothing", async () => {
+    const fixture = await makeFixture();
+    await writeFile(fixture.envFile, "# sets nothing\n");
+    const result = await runDeploy(fixture, { OVERFLOW_FIXTURE_CALLER_SENTINEL: "exported-by-the-caller" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(`${result.stdout}${result.stderr}`).not.toContain("exported-by-the-caller");
   });
 
   const FAILED_READS: [string, Rewrite][] = [
@@ -225,7 +227,7 @@ describe("scripts/deploy-revision.sh — the startup-sweep override", () => {
   });
 
   it.each(FAILED_READS)("reports the file as unreadable after the restart when it %s once the service is active", async (_label, failure) => {
-    const { fixture, lines, activeAt, mentions } = await deployWith(`${KEY}=1\n`, FAST_DEADLINE, { afterActive: failure });
+    const { fixture, lines, activeAt, mentions } = await deployWith(`${KEY}=1\n`, {}, { afterActive: failure }); // the default deadline
     expect(mentions).toEqual([skipBefore(fixture.envFile), unreadableAfter(fixture.envFile)]);
     expect(lines.indexOf(mentions[1]!)).toBeGreaterThan(activeAt);
   });
