@@ -18,39 +18,38 @@ export function stagedIdentity(payload: unknown): GitHubSubject {
   return { id: value.id, number: value.number };
 }
 
-const isLogin = (value: unknown) => value === null || typeof value === "string";
+type Check = (value: unknown) => boolean;
+const isString: Check = (value) => typeof value === "string";
+const isBoolean: Check = (value) => typeof value === "boolean";
+const orNull = (check: Check): Check => (value) => value === null || check(value);
+const oneOf = (...values: string[]): Check => (value) => values.includes(value as string);
+const listOf = (check: Check): Check => (value) => Array.isArray(value) && value.every(check);
+const shape = (fields: Record<string, Check>): Check => (value) => isFields(value) && Object.entries(fields).every(([name, check]) => check(value[name]));
 
-function ensureClosingPullRequest(value: unknown): void {
-  ensure(isFields(value) && isId(value.id) && isId(value.number) && typeof value.state === "string" && isLogin(value.authorLogin)
-    && (value.mergedAt === null || typeof value.mergedAt === "string") && typeof value.repositoryGitHubId === "number");
-}
-
-function ensureIssue(issue: Fields): void {
-  ensure(Array.isArray(issue.labels) && Array.isArray(issue.history) && Array.isArray(issue.comments)
-    && Array.isArray(issue.closingPullRequests) && isLogin(issue.authorLogin) && isLogin(issue.claimAssigneeGitHubLogin));
-  ensure(issue.history.every((event) => isFields(event) && isLogin(event.actorLogin) && typeof event.createdAt === "string"));
-  ensure(issue.comments.every((comment) => typeof comment?.body === "string" && isLogin(comment.authorLogin)));
-  issue.closingPullRequests.forEach(ensureClosingPullRequest);
-}
-
-// The fields the review-round count reads: a wrong type there throws mid-fold instead of discarding the pass.
-const isReview = (review: unknown) => isFields(review) && (review.submittedAt === null || typeof review.submittedAt === "string")
-  && (review.dismissal === null || (isFields(review.dismissal) && typeof review.dismissal.at === "string"));
-
-function ensurePullRequestRow(row: Fields): void {
-  const evidence = row.evidence;
-  ensure(evidence === null || (isFields(evidence) && Array.isArray(evidence.reviews) && evidence.reviews.every(isReview) && typeof evidence.rawDiff === "string"));
-  if (row.refreshed === true) ensure(typeof row.missing === "boolean" && typeof row.listed === "boolean");
-}
+// The staged fields the walk, the fold, the suppression scrub or a materialized row parse, call a method on, bind in SQL or match an
+// account by, typed as their producers emit them. A field every reader takes in any type stays out, so a forge's new value there
+// cannot discard every pass that stages it.
+const login = orNull(isString), account = orNull(isId), timeOrNull = orNull(isString);
+const isClosingPullRequest = shape({ id: isId, number: isId, title: isString, url: isString, state: oneOf("OPEN", "CLOSED", "MERGED"),
+  mergedAt: timeOrNull, mergeCommitOid: orNull(isString), finalCommitAt: timeOrNull, authorLogin: login, authorGitHubUserId: account,
+  repositoryGitHubId: isId, repositoryNameWithOwner: isString });
+const isIssue = shape({ title: isString, body: isString, url: isString, state: oneOf("OPEN", "CLOSED"), createdAt: isString,
+  updatedAt: isString, closedAt: timeOrNull, authorLogin: login, authorGitHubUserId: account, labels: Array.isArray,
+  claimAssigneeGitHubLogin: login, claimAssigneeGitHubUserId: account,
+  history: listOf(shape({ actorLogin: login, actorGitHubUserId: account, createdAt: isString })),
+  comments: listOf(shape({ body: isString, authorLogin: login, authorGitHubUserId: account, createdAt: isString, lastEditedAt: timeOrNull })),
+  closingPullRequests: listOf(isClosingPullRequest) });
+const isReview = shape({ id: isId, submittedAt: timeOrNull, dismissal: orNull(shape({ at: isString })) });
+const isPullRequestRow: Check = (row) => shape({ evidence: orNull(shape({ reviews: listOf(isReview), rawDiff: isString })) })(row)
+  && ((row as Fields).refreshed !== true || shape({ missing: isBoolean, listed: isBoolean })(row));
 
 /** Rows a pass staged itself that no longer have the shape they were staged in cannot resume the pass. */
 export async function readStagedRows(pass: SweepPass): Promise<StagedRow[]> {
   const rows = await pass.readStaged();
   for (const { kind, payload } of rows) {
     stagedIdentity(payload);
-    const fields = payload as Fields;
-    if (kind === "pull_request") ensurePullRequestRow(fields);
-    else if ("number" in fields) ensureIssue(fields);
+    if (kind === "pull_request") ensure(isPullRequestRow(payload));
+    else if ("number" in (payload as Fields)) ensure(isIssue(payload));
   }
   return rows;
 }
