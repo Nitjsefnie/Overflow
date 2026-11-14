@@ -279,19 +279,16 @@ describe("landing page", () => {
 //     var(--display), and pinning a font stack would be an equality, not a bound.
 //   - It covers the elements that stack above the button and no others, and the
 //     properties in the table below and no others.
-//   - Under jsdom 30 a border shorthand carrying var() is invisible on any
-//     element. This is the house idiom for every border in globals.css: jsdom
-//     30 collapses it to style `none` and width 0px, exactly like no border,
-//     and a width-only edit on top of it reads 0px too, so it can add any
-//     width per edge to the stack without failing a bound. jsdom 31
-//     substitutes var() and reads the border as declared, so there the
-//     effective bounds see it. On a budgeted edge, a border without var() is
-//     caught by both: `border-top: 3rem solid #8a8479` and the currentColor
-//     spelling resolve to solid and 48px. A width without a style occupies no
-//     browser space (border-top-width: 3rem alone on the hero leaves the
-//     clearing height at 572px). The button already has a browser-visible
-//     style through var(), so its width-only edits move it
-//     (border-bottom-width: 1rem takes it from 49px to 63px tall).
+//   - A border shorthand carrying var(), the house idiom for every border in
+//     globals.css, is invisible under jsdom 30: it reads style `none` and
+//     width 0px like no border, as does a width-only edit on top of it, so it
+//     can add any width per edge without failing a bound. jsdom 31 substitutes
+//     var() and the effective bounds see it. On a budgeted edge both catch a
+//     border without var(): `border-top: 3rem solid #8a8479` and the
+//     currentColor spelling resolve to solid and 48px. A width without a style
+//     occupies no browser space (border-top-width: 3rem alone on the hero
+//     leaves the clearing height at 572px), but the button's var() border is
+//     styled (border-bottom-width: 1rem takes it from 49px to 63px tall).
 //   - font-weight and word-spacing are not bounded and were measured not to
 //     move the button here -
 //     Georgia has no 900 weight and the headline's wrap is measure-bound - so
@@ -314,8 +311,8 @@ describe("landing page", () => {
 //     placement or wrapping without violating the table; re-measure in a
 //     browser when changing them.
 //   - It cannot evaluate a media, supports or container condition at the width
-//     under test (jsdom 30 applies none, jsdom 31 evaluates them against its
-//     own fixed 1024x768 viewport); those are pinned as declarations instead.
+//     under test (jsdom 30 applies none, 31 evaluates them at a fixed
+//     1024x768); those are pinned as declarations instead.
 //     A @layer block is exempt, because an unlayered declaration always beats
 //     a layered one and nothing here is layered - which stops holding the day
 //     anything is.
@@ -408,10 +405,9 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["form", "border-top", "atMost", 0, 0],
   ["form", "font-size", "atMost", 16, 16],
   ["form", "line-height", "atMost", 24, 24],
-  // The button's own box: 49px tall, 24px below the lede, with the 2px solid
-  // top and bottom borders Chrome measured at both widths. The raw widths are
-  // bounded as well as the effective borders. The shipped shorthand carries
-  // var(), so under jsdom 30 both read 0px and see no change to this border.
+  // The button's own box: 49px tall, 24px below the lede, its top and bottom
+  // borders the 2px solid Chrome measured at both widths. Its raw widths are
+  // bounded too; under jsdom 30 its var() shorthand reads 0px in both.
   ["button", "margin-top", "atMost", 24, 24],
   ["button", "padding-top", "atMost", 10.4, 10.4],
   ["button", "padding-bottom", "atMost", 10.4, 10.4],
@@ -467,10 +463,9 @@ function landingSubtree(): Array<[SubtreeElement, Element]> {
   ];
 }
 
-// The viewport lengths jsdom would resolve against a viewport of its own: jsdom
-// 31 reads a fixed 1024x768 whatever window.innerWidth says. The physical ones
-// are rewritten to px at the width under test; anything left - the logical vi/vb
-// and the container units that fall back to the viewport - is refused.
+// jsdom 31 resolves viewport lengths at a fixed 1024x768 whatever innerWidth
+// says, so the physical ones become px at the width under test and the rest
+// (vi/vb, container units falling back to the viewport) are refused.
 const VIEWPORT_LENGTH = /(?<![\w.-])(-?(?:\d+\.?\d*|\.\d+))[sld]?(vw|vh|vmin|vmax)(?![\w-])/gi;
 const UNRESOLVED_LENGTH = /[\d.]+(?:[sld]?(?:vw|vh|vi|vb|vmin|vmax)|cq(?:w|h|i|b|min|max))(?![\w-])/i;
 
@@ -482,10 +477,9 @@ function atViewport(css: string, width: number): string {
   return resolved;
 }
 
-// A fresh mount and stylesheet per width: the sheet carries that width's
-// viewport lengths, and jsdom 30 memoises the computed declaration per element
-// (document._styleCache), so re-reading an element already read at another
-// width returns the earlier answer.
+// A fresh mount and stylesheet per width: jsdom 30 memoises the computed
+// declaration per element (document._styleCache), so re-reading an element
+// already read at another width returns the earlier answer.
 function withLandingPageAt<T>(width: number, read: (sheet: CSSStyleSheet) => T): T {
   const style = document.createElement("style");
   style.textContent = atViewport(readFileSync("src/app/globals.css", "utf8") + "\n" + readFileSync("src/app/landing.css", "utf8"), width);
