@@ -737,12 +737,13 @@ script excludes them:
 - `reconciliation_sweep_pages`
 - `reconciliation_sweep_walk_subjects`
 
-`reconciliation_sweep_pages` holds a held sweep pass's absence-listing
+`reconciliation_sweep_pages` stores a held sweep pass's absence-listing
 records; the forge is the source of truth. A pass restored without them lists
 those subjects again on its next run, so their rows are left out of the copy
-whose encrypted size the size guard bounds. `reconciliation_sweep_walk_subjects` holds the
-open pass's staged evidence and is also excluded; completing or discarding
-the pass deletes those rows by cascade.
+whose encrypted size the size guard bounds.
+`reconciliation_sweep_walk_subjects` holds the open pass's staged evidence
+and is also excluded; completing or discarding the pass deletes those rows by
+cascade.
 
 Every other table keeps its data, for two reasons: authoritative rows refer
 to the forge-derived projections by id — `settlement_override_requests`
