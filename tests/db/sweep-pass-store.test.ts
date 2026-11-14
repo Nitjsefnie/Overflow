@@ -5,15 +5,14 @@ import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresSweepPassStore } from "@/lib/fold/sweep-pass-store";
-import { checkpointSweepRequest, SWEEP_PASS_MAX_AGE_MS, withSweepPass, type SweepPass } from "@/lib/fold/sweep-pass";
+import { SWEEP_PASS_MAX_AGE_MS, type SweepPass } from "@/lib/fold/sweep-pass";
 import { walkReconciliation } from "@/lib/fold/reconciliation-walk";
 import { GitHubApiError } from "@/lib/github/errors";
 import { GraphqlBudgetHeld } from "@/lib/github/graphql-request-budget";
 import { reconciliationDependencies } from "../support/reconciliation-fixtures";
 import { fixture, subject as walkSubject } from "../fold/reconciliation-walk-fixture";
-import { withSweepRequestBudget, SweepBudgetSpent } from "@/lib/fold/sweep-request-budget";
+import { SweepBudgetSpent } from "@/lib/fold/sweep-request-budget";
 import { PostgresSponsorSweepRoundStore } from "@/lib/fold/sponsor-sweep-round-store";
-import { GitHubGraphqlClient, collectCursorPages } from "@/lib/github/graphql";
 import { GitHubGateway } from "@/lib/github/client";
 import { materializeRepositoryFixture } from "../support/materialized-repository";
 import { RECONCILIATION_RETRY_DELAYS_MS, runNextReconciliationJob } from "@/lib/fold/reconciliation-worker";
@@ -56,34 +55,30 @@ describe("paused full-pass pages", () => {
     }
   });
 
-  it("keeps concurrent checkpoint writes within the ceiling and returns every fetched payload", async () => {
+  it("keeps concurrent writes within the ceiling", async () => {
     const f = await materializeRepositoryFixture(sql);
     const pass = await new PostgresSweepPassStore(sql, 2).open({ repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
-    const payloads = await withSweepPass(pass, () => Promise.all([1, 2, 3].map((page) =>
-      checkpointSweepRequest({ page }, async () => ({ page })))));
-    expect(payloads).toEqual([{ page: 1 }, { page: 2 }, { page: 3 }]);
+    await Promise.all([1, 2, 3].map((page) => pass.write(`page-${page}`, { page })));
     expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
   });
 
   it("rejects a failed write without blocking later writes or spending their capacity", async () => {
     const f = await materializeRepositoryFixture(sql);
     const pass = await new PostgresSweepPassStore(sql, 2).open({ repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
-    const results = await Promise.allSettled([pass.write("failed", { page: 0 }, "invalid\u0000cursor"), pass.write("first", { page: 1 }, "cursor-one")]);
+    const results = await Promise.allSettled([pass.write("failed", { text: "invalid\u0000payload" }), pass.write("first", { page: 1 })]);
     expect(results.map((result) => result.status)).toEqual(["rejected", "fulfilled"]);
-    await pass.write("second", { page: 2 }, "cursor-two");
+    await pass.write("second", { page: 2 });
     expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
     expect(await readPages(pass, ["failed", "first", "second"])).toEqual([undefined, { page: 1 }, { page: 2 }]);
-    expect(await sql`select walk_cursor from reconciliation_sweep_passes where pass_id = ${pass.id}`).toEqual([{ walk_cursor: "cursor-two" }]);
   });
 
-  it("stops storing at the ceiling and replays the stored pair on reopen", async () => {
+  it("stops storing at the ceiling and reads the stored pair on reopen", async () => {
     const f = await materializeRepositoryFixture(sql);
     const input = { repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] };
     const pass = await new PostgresSweepPassStore(sql, 2).open(input);
-    await writePages(pass, ["first", "second", "third"], 1, ["cursor-one", "cursor-two", "cursor-three"]);
+    await writePages(pass, ["first", "second", "third"]);
     expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
     expect(await readPages(pass, ["first", "second", "third"])).toEqual([{ page: 1 }, { page: 2 }, undefined]);
-    expect(await sql`select walk_cursor from reconciliation_sweep_passes where pass_id = ${pass.id}`).toEqual([{ walk_cursor: "cursor-two" }]);
     const reopened = await new PostgresSweepPassStore(sql, 2).open(input);
     expect(reopened.id).toBe(pass.id);
     expect(await readPages(reopened, ["first", "second"])).toEqual([{ page: 1 }, { page: 2 }]);
@@ -117,13 +112,12 @@ describe("paused full-pass pages", () => {
     }
   });
 
-  it("does not spend ceiling capacity or advance the cursor on a duplicate write", async () => {
+  it("does not spend ceiling capacity on a duplicate write", async () => {
     const f = await materializeRepositoryFixture(sql);
     const pass = await new PostgresSweepPassStore(sql, 2).open({ repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] });
-    await pass.write("first", { page: 1 }, "cursor-one");
-    await pass.write("first", { page: 99 }, "duplicate-cursor");
-    expect(await sql`select walk_cursor from reconciliation_sweep_passes where pass_id = ${pass.id}`).toEqual([{ walk_cursor: "cursor-one" }]);
-    await writePages(pass, ["second", "third"], 2, ["cursor-two", "cursor-three"]);
+    await pass.write("first", { page: 1 });
+    await pass.write("first", { page: 99 });
+    await writePages(pass, ["second", "third"], 2);
     expect(await stagedCounts(f.repositoryId, pass.id)).toEqual({ passes: 1, pages: 2 });
     expect(await readPages(pass, ["first", "second", "third"])).toEqual([{ page: 1 }, { page: 2 }, undefined]);
   });
@@ -261,54 +255,6 @@ describe("paused full-pass pages", () => {
     expect(await runNextReconciliationJob({ store: f.store, now: () => at, scheduleLeaseRenewal: () => () => {},
       reconcile: (id, options) => reconcileRepository(dependencies, id, options) })).toBe("BUDGET_HELD");
     expect(await sql`select spent from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`).toEqual([{ spent: 3 }]);
-  });
-
-  it("continues unread REST and GraphQL pages after budget exhaustion and a process restart", async () => {
-    const f = await materializeRepositoryFixture(sql);
-    const input = { repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: [] };
-    const rounds = new PostgresSponsorSweepRoundStore(sql);
-    const cursors: unknown[] = [];
-    const graphql = new GitHubGraphqlClient({ accessToken: randomBytes(24).toString("hex"), fetch: async (_url, init) => {
-      const cursor = JSON.parse(String(init?.body)).variables.cursor;
-      cursors.push(cursor);
-      return Response.json({ data: { nodes: [cursor === null ? 1 : 2], pageInfo: { hasNextPage: cursor === null, endCursor: cursor === null ? "page-two" : null } } });
-    } });
-    let restReads = 0;
-    const rest = new GitHubGateway({ accessToken: randomBytes(24).toString("hex"), fetch: async () => {
-      restReads++; return new Response("diff", { headers: { "content-type": "text/plain" } });
-    } });
-    const first = await new PostgresSweepPassStore(sql).open(input);
-    const walk = () => collectCursorPages<number>("issues.nodes", (cursor) => graphql.query("query { issues { nodes } }", { cursor }));
-    const sponsorId = (await f.store.getRepository(f.repositoryId))!.sponsor.id;
-    await expect(withSweepRequestBudget(() => rounds.spend(sponsorId, f.repositoryId, at, 2), () => withSweepPass(first, async () => {
-      await rest.request("/repos/owner/repo/pulls/1");
-      await walk();
-    }))).rejects.toBeInstanceOf(SweepBudgetSpent);
-    const restarted = await new PostgresSweepPassStore(sql).open({ ...input, scanStartedAt: new Date("2030-01-01T06:00:00Z") });
-    expect(restarted.id).toBe(first.id);
-    expect(restarted.scanStartedAt).toEqual(at);
-    await withSweepRequestBudget(() => rounds.spend(sponsorId, f.repositoryId, new Date("2030-01-01T06:00:00Z"), 2), () => withSweepPass(restarted, async () => {
-      const response = await rest.request("/repos/owner/repo/pulls/1");
-      expect(response.body).toBe("diff");
-      expect(response.headers.get("content-type")).toBe("text/plain");
-      expect(await walk()).toEqual([1, 2]);
-    }));
-    expect(cursors).toEqual([null, "page-two"]);
-    expect(restReads).toBe(1);
-    await restarted.complete();
-    expect(await sql`select * from reconciliation_sweep_pages where pass_id = ${restarted.id}`).toHaveLength(0);
-  });
-
-  it("checkpoints PostgreSQL-safe forge strings before returning or replaying a page", async () => {
-    const f = await materializeRepositoryFixture(sql);
-    const pass = await new PostgresSweepPassStore(sql).open({ repositoryId: f.repositoryId, evidenceVersion: "text", scanStartedAt: at, dirtySubjects: [] });
-    const client = new GitHubGraphqlClient({ accessToken: randomBytes(24).toString("hex"),
-      fetch: async () => Response.json({ data: { value: "before\u0000after" } }) });
-    await withSweepPass(pass, async () => {
-      expect(await client.query("query { value }", {})).toEqual({ value: "before\uFFFDafter" });
-      expect(await client.query("query { value }", {})).toEqual({ value: "before\uFFFDafter" });
-    });
-    await pass.complete();
   });
 
   it("invalidates pages after an intervening evidence publication and keeps newer dirty generations", async () => {
@@ -775,8 +721,8 @@ describe("a kept pass's failed-run and age bounds", () => {
 
 function signal() { let resolve!: () => void; return { promise: new Promise<void>((done) => { resolve = done; }), resolve }; }
 
-async function writePages(pass: SweepPass, keys: string[], first = 1, cursors: string[] = []) {
-  for (const [index, key] of keys.entries()) await pass.write(key, { page: first + index }, cursors[index]);
+async function writePages(pass: SweepPass, keys: string[], first = 1) {
+  for (const [index, key] of keys.entries()) await pass.write(key, { page: first + index });
 }
 
 function readPages(pass: SweepPass, keys: string[]) { return Promise.all(keys.map((key) => pass.read(key))); }
@@ -823,7 +769,7 @@ async function pausedFixture() {
     },
     getRepositoryById: verifiedRepositoryAt(repository.ownerName),
     listIssues: async () => {
-      await state.pass!.write("first", { text: "paused page" }, "next-page");
+      await state.pass!.write("first", { text: "paused page" });
       throw new SweepBudgetSpent(new Date("2030-01-01T06:00:00Z"));
     },
     getIssue: async () => null, getPullRequestClosingIssues: async () => [],

@@ -94,19 +94,13 @@ export class PostgresSweepPassStore {
           where pass_id = ${row.pass_id} and request_key = ${key}`;
         return page?.payload;
       },
-      write: (key, payload, cursor) => {
+      write: (key, payload) => {
         const write = writes.then(async () => {
           if (pageCount >= this.pageCeiling) return;
-          const stored = await this.sql.begin(async (transaction) => {
-            const inserted = await transaction`insert into reconciliation_sweep_pages (pass_id, request_key, payload)
-              values (${row.pass_id}, ${key}, ${transaction.json(payload as Parameters<SqlClient["json"]>[0])})
-              on conflict do nothing returning request_key`;
-            if (inserted.length === 0) return false;
-            if (cursor !== undefined) await transaction`update reconciliation_sweep_passes
-              set walk_cursor = ${cursor} where pass_id = ${row.pass_id}`;
-            return true;
-          });
-          if (stored) pageCount++;
+          const inserted = await this.sql`insert into reconciliation_sweep_pages (pass_id, request_key, payload)
+            values (${row.pass_id}, ${key}, ${this.sql.json(payload as Parameters<SqlClient["json"]>[0])})
+            on conflict do nothing returning request_key`;
+          if (inserted.length > 0) pageCount++;
         });
         writes = write.catch(() => {});
         return write;

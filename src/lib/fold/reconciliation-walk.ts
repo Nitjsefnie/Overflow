@@ -1,4 +1,4 @@
-import { withFreshSweepReads, type SweepPass } from "@/lib/fold/sweep-pass";
+import type { SweepPass } from "@/lib/fold/sweep-pass";
 import { readListedSubjects, readStagedRows, recordListedSubjects, stagedIdentity, type ListedSubject } from "@/lib/fold/staged-pass-data";
 import type { WalkSubject } from "@/lib/forge/subject-listing";
 import { sanitizeForgeStrings } from "@/lib/forge/sanitize-forge-strings";
@@ -45,11 +45,7 @@ export type CompletedReconciliationWalk = {
 };
 
 /** A hold rejects with SweepBudgetSpent; staging remains durable and no fold is returned. */
-export function walkReconciliation(input: ReconciliationWalkInput): Promise<CompletedReconciliationWalk> {
-  return withFreshSweepReads(() => walk(input));
-}
-
-async function walk({ pass, listing, gateway, repository, onDiscard }: ReconciliationWalkInput): Promise<CompletedReconciliationWalk> {
+export async function walkReconciliation({ pass, listing, gateway, repository, onDiscard }: ReconciliationWalkInput): Promise<CompletedReconciliationWalk> {
   const staged = new Map((await readStagedRows(pass)).map((row) => [rowKey(row.kind, row.subjectKey), row]));
   // A discarded gather stages a bare identity placeholder, which is no gathered issue.
   const gathered = (row: { kind: WalkSubject["kind"]; payload: unknown }) => row.kind === "issue" && row.payload !== null
