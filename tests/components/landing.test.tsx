@@ -321,8 +321,10 @@ describe("landing page", () => {
 //     follow it.
 type SubtreeElement = "page" | "hero" | "eyebrow" | "h1" | "lede" | "trade" | "form" | "button";
 
-// element, property, direction, and the bound at 1440px and at 390px - the
-// values the browser measurement above was taken over. Infinity is `none` or
+// element, property, direction, and the bound at 1440px and at 390px, from the
+// browser measurement above, except the h1 and lede max-width: jsdom's 0.5em
+// reading of their ch measures, faithful only to a ch declaration (any other is
+// refused); the geometry check measures the wrap. Infinity is `none` or
 // `auto`: an unconstrained measure cannot wrap the text into another line.
 type BudgetRow = [SubtreeElement, string, "atMost" | "atLeast", number, number];
 
@@ -436,6 +438,7 @@ const KEYWORD_RANKS: Record<string, Record<string, number>> = {
 // The synthetic terms above, and the border styles that occupy no space.
 const EFFECTIVE_BORDERS: Record<string, string> = { "border-top": "border-top", "border-bottom": "border-bottom", "border-left": "border-left", "border-right": "border-right" };
 const NO_BORDER = new Set(["none", "hidden", ""]);
+const CH_MEASURED = new Set<SubtreeElement>(["h1", "lede"]);
 
 const BASE_WIDTH = 1440;
 const NARROW_WIDTH = 390;
@@ -578,9 +581,15 @@ describe("landing hero fold budget", () => {
     (width) => {
       // Read inside the mount: a CSSStyleDeclaration is live, and re-resolves to
       // the defaults once the stylesheet and the element are gone.
-      const resolved = withLandingPageAt(width, () => {
+      const resolved = withLandingPageAt(width, (sheet) => {
         const values = new Map<SubtreeElement, Record<string, string>>();
+        const { rules } = styleRules(sheet);
         for (const [label, element] of landingSubtree()) {
+          for (const rule of CH_MEASURED.has(label) ? rules : []) {
+            const measure = rule.style.getPropertyValue("max-width");
+            if (measure && !/^(none|[\d.]+ch)$/.test(measure) && appliesTo(element, rule))
+              throw new Error(`${label} max-width is "${measure}" in ${rule.selectorText}, not a ch measure; measure the fold in a browser and re-derive its bound`);
+          }
           const computed = getComputedStyle(element);
           const read: Record<string, string> = { "font-size": computed.fontSize };
           for (const [owner, property] of FOLD_BUDGET) {
