@@ -139,7 +139,7 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
     }) as Promise<boolean>;
   }
 
-  /** Owes the credential's repository a re-derivation; answers whether one was owed already, or null once the row moved on. */
+  /** Answers whether a re-derivation was owed already; null once the row moved on. */
   public async markWebhookRederivationOwed(credential: WebhookCredentialRecord): Promise<boolean | null> {
     const [row] = await this.sql<{ owed: boolean }[]>`
       with previous as (select id, webhook_rederivation_owed_at as owed_at from registered_repositories where ${this.webhookRow(credential)} for update)
@@ -160,7 +160,7 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
     }) as Promise<T>;
   }
 
-  /** The staged hook's own registration, still active (and holding the credential, given one): every webhook-credential write is held to it. */
+  /** The identity every webhook-credential write is held to. */
   private webhookRow(target: WebhookCredentialTarget & { credentialId?: string }) {
     return this.sql`id = ${target.repositoryId} and provider = ${target.provider} and instance_url is not distinct from ${target.instanceUrl}
       and (case when provider = 'github' then github_repository_id else forge_project_id end) = ${target.projectId}
