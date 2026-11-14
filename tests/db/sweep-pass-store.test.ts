@@ -257,6 +257,12 @@ describe("paused full-pass pages", () => {
     expect(await sql`select spent from reconciliation_sweep_rounds where sponsor_id = ${sponsorId}`).toEqual([{ spent: 3 }]);
   });
 
+  it("keeps no walk cursor on the pass row", async () => {
+    expect((await sql<{ column_name: string }[]>`select column_name from information_schema.columns
+      where table_schema = 'public' and table_name = 'reconciliation_sweep_passes' order by column_name`).map(({ column_name }) => column_name))
+      .toEqual(["dirty_subjects", "evidence_version", "failed_runs", "pass_id", "repository_id", "scan_started_at", "walk_anchors"]);
+  });
+
   it("invalidates pages after an intervening evidence publication and keeps newer dirty generations", async () => {
     const f = await materializeRepositoryFixture(sql);
     const store = new PostgresSweepPassStore(sql);
