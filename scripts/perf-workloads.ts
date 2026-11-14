@@ -64,9 +64,8 @@ const gateway: ReconciliationGateway = {
   getPullRequestReviews: failRemoteRead, getPullRequestDiff: failRemoteRead,
 };
 // Sweep folds drive the production GitHubGateway, whose transport charges each
-// request to the sweep budget; the walk reads fresh, so the transport's page
-// checkpoint is skipped as in production. This fetch answers only the reads of
-// one open issue without pull requests (and one since deleted), throwing on any other.
+// request to the sweep budget. This fetch answers only the reads of one open
+// issue without pull requests (and one since deleted), throwing on any other.
 const deletedIssue = { id: issue.id + 1, number: issue.number + 1 };
 const page = (nodes: unknown[]) => ({ nodes, pageInfo: { hasNextPage: false, endCursor: null } });
 const account = (user: { login: string; githubUserId: number }) => ({ login: user.login, databaseId: user.githubUserId });

@@ -1,7 +1,6 @@
 import { vi } from "vitest";
 import type { WalkSubject } from "@/lib/forge/subject-listing";
 import type { SweepPass } from "@/lib/fold/sweep-pass";
-import { checkpointSweepRequest, withSweepPass } from "@/lib/fold/sweep-pass";
 import { checkSweepRequestBudget, withSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import { walkReconciliation, type ReconciliationWalkInput, type WalkGateway, type WalkListingDriver } from "@/lib/fold/reconciliation-walk";
 import type { GitHubIssue, GitHubPullRequest, GitHubSubject } from "@/lib/github/types";
@@ -26,8 +25,8 @@ export function memoryPass() {
   const rows = new Map<string, Awaited<ReturnType<SweepPass["readStaged"]>>[number]>(), pages = new Map<string, unknown>();
   const pass: SweepPass = {
     id: "pass", scanStartedAt: instant(0), dirtySubjects: [],
-    read: vi.fn(async (key) => { if (key.startsWith("absence-listing:")) return structuredClone(pages.get(key)); throw new Error("Page cache read: a replayed request"); }),
-    write: vi.fn(async (key, payload) => { if (key.startsWith("absence-listing:")) pages.set(key, structuredClone(payload)); else throw new Error("Page cache write: a replayed request"); }),
+    read: vi.fn(async (key) => { if (key.startsWith("absence-listing:")) return structuredClone(pages.get(key)); throw new Error(`Unmodelled pass read: ${key}`); }),
+    write: vi.fn(async (key, payload) => { if (key.startsWith("absence-listing:")) pages.set(key, structuredClone(payload)); else throw new Error(`Unmodelled pass write: ${key}`); }),
     walkAnchors: () => structuredClone(anchors),
     stage: vi.fn(async ({ anchor, kind, subjectKey, updatedAt, payload }) => {
       rows.set(`${kind}:${subjectKey}`, { kind, subjectKey, updatedAt, payload: structuredClone(payload) });
@@ -54,11 +53,11 @@ export function fixture(subjects: WalkSubject[], pageSize = 100) {
   const requests: string[] = [];
   const discarded: Parameters<NonNullable<ReconciliationWalkInput["onDiscard"]>>[0][] = [];
   let afterGather: (id: number) => void = () => {};
-  const read = async <T>(key: string, work: () => T) => checkpointSweepRequest(key, async () => {
+  const read = async <T>(key: string, work: () => T) => {
     await checkSweepRequestBudget();
     requests.push(key);
     return structuredClone(work());
-  });
+  };
   const listing: WalkListingDriver = { kind: "cursor", listPage: async (options) => read(`list:${JSON.stringify(options)}`, () => {
     listed.push(options);
     const available = [...live.values()].filter((row) => options.since === undefined || +row.updatedAt >= Date.parse(options.since))
@@ -85,8 +84,8 @@ export function fixture(subjects: WalkSubject[], pageSize = 100) {
   const repository = { githubRepositoryId: 42, disputePullRequests: [] as Array<{ id: number; number: number }> };
   const window = async (budget: number, driver: WalkListingDriver = listing) => {
     let spent = 0;
-    return withSweepPass(pass, () => withSweepRequestBudget(async () => spent++ < budget ? null : instant(10000),
-      () => walkReconciliation({ pass, listing: driver, gateway, repository, onDiscard: async (entry) => { discarded.push(entry); } })));
+    return withSweepRequestBudget(async () => spent++ < budget ? null : instant(10000),
+      () => walkReconciliation({ pass, listing: driver, gateway, repository, onDiscard: async (entry) => { discarded.push(entry); } }));
   };
   return { pass, live, issues, pullRequests, lookups, counts, listed, listing, gateway, repository, requests, discarded, window,
     onGather: (callback: (id: number) => void) => { afterGather = callback; }, read };

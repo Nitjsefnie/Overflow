@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { GitLabGateway } from "@/lib/gitlab/client";
 import { listGitLabSubjectsPage } from "@/lib/gitlab/subject-listing";
 import { SweepBudgetSpent, withSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
-import { withSweepPass, type SweepPass } from "@/lib/fold/sweep-pass";
 
 const repository = { owner: "group/subgroup", name: "project" };
 const older = "2026-10-25T08:00:00.000Z";
@@ -178,22 +177,16 @@ describe("GitLab subject pages", () => {
     ]);
   });
 
-  it("reads fresh slice pages without touching the pass cache and holds before sending when the shared budget is spent", async () => {
+  it("spends the shared budget once per slice page and holds before sending when it is spent", async () => {
     let sent = 0;
     let spent = 0;
-    let reads = 0;
-    let writes = 0;
-    const pass = {
-      read: async () => { reads++; return { status: 200, headers: {}, body: "[]" }; },
-      write: async () => { writes++; },
-    } as unknown as SweepPass;
     const client = gateway(async () => { sent++; return Response.json(Array.from({ length: 100 }, (_, index) => row(index + 1, boundary))); });
-    await withSweepPass(pass, () => withSweepRequestBudget(async () => ++spent <= 2 ? null : new Date(later), async () => {
+    await withSweepRequestBudget(async () => ++spent <= 2 ? null : new Date(later), async () => {
       expect((await client.listSubjectsPage(repository, { collection: "issue", updatedAfter: null })).subjects).toHaveLength(100);
       expect((await client.listSubjectsPage(repository, { collection: "issue", updatedAfter: boundary, updatedBefore: boundary, page: 2 })).subjects).toHaveLength(100);
       await expect(client.listSubjectsPage(repository, { collection: "issue", updatedAfter: boundary, page: 3 })).rejects.toBeInstanceOf(SweepBudgetSpent);
-    }));
-    expect({ sent, spent, reads, writes }).toEqual({ sent: 2, spent: 3, reads: 0, writes: 0 });
+    });
+    expect({ sent, spent }).toEqual({ sent: 2, spent: 3 });
   });
 
   it("exports the page surface for a budget-checked request dependency", async () => {

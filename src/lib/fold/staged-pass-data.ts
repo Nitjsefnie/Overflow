@@ -64,7 +64,7 @@ export function isDirtySubjects(value: unknown): boolean {
 
 export type ListedSubject = WalkSubject & { anchor: string };
 const listedKey = (record: number) => `absence-listing:${record}`;
-/** The subjects earlier runs of this pass saw in the absence listing, one record per run, kept beside the pass's cached pages. */
+/** The subjects earlier runs of this pass saw in the absence listing, one record per run, stored through the pass's read and write. */
 export async function readListedSubjects(pass: SweepPass): Promise<{ records: number; subjects: ListedSubject[] }> {
   const subjects: ListedSubject[] = [];
   let records = 0;

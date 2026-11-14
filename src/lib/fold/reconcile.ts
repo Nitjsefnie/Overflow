@@ -1,4 +1,4 @@
-import { discardInactivePassAfterRun, discardSweepPass, holdSweepPass, StagedPassDataUnreadable, withSweepPass, type ReconciliationSweepControl, type SweepPass } from "@/lib/fold/sweep-pass";
+import { discardInactivePassAfterRun, discardSweepPass, holdSweepPass, StagedPassDataUnreadable, type ReconciliationSweepControl, type SweepPass } from "@/lib/fold/sweep-pass";
 import type { ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
 import { readEnv } from "@/lib/env";
 import { readDiffOnlyBacklogThreshold } from "@/lib/fold/repository-size";
@@ -379,185 +379,183 @@ async function reconcileRepositoryAfterRepositoryRead(
           ownerName: verified.fullName,
           visibility: verified.visibility,
         });
-        return await withSweepPass(pass, async () => {
-          const reference: GitHubRepositoryReference = { owner: verified.owner, name: verified.name };
-          const { githubIssues, pullRequestEvidence } = await withGraphqlRequestBudget(
-            () => reconciliationBudgetHoldUntil(dependencies, repository.sponsor.id, now),
-            async () => {
-              if (pass !== undefined) {
-                const walked = await dependencies.github.walkReconciliation!(reference, {
-                  pass, repository,
-                  onDiscard: async ({ kind, subject, reason, fieldPath }) => {
-                    const dirtyKind = kind === "issue" ? "ISSUE" : "PULL_REQUEST";
-                    const dirty = pass!.dirtySubjects.find((row) => row.kind === dirtyKind && row.id === subject.id);
-                    await discardUnresolvableSubject(null, dirtyKind, subject, dirty, () => reason, fieldPath);
-                  },
-                }, {
-                  timelineCriticalLabels: new Set(repository.difficultyScheme.actualLabels.map(({ label }) => label)),
-                  timelineWatchedLabels: new Set(repository.difficultyScheme.openingLabels.map(({ label }) => label)),
-                });
-                return { githubIssues: walked.issues.map((issue) => ({ ...issue,
-                  closingPullRequests: issue.closingPullRequests.map(({ reviews, rawDiff, ...pr }) => {
-                    void reviews; void rawDiff;
-                    return pr;
-                  }),
-                })),
-                  pullRequestEvidence: new Map(walked.pullRequests.map(({ id, reviews, rawDiff }) => [id, { reviews, rawDiff }])) };
-              }
-              const changed = new Map((await dependencies.github.listIssues(reference, {
-                ...(full ? {} : { since: new Date(cached!.checkpoint.getTime() - reconciliationOverlapMs).toISOString() }),
+        const reference: GitHubRepositoryReference = { owner: verified.owner, name: verified.name };
+        const { githubIssues, pullRequestEvidence } = await withGraphqlRequestBudget(
+          () => reconciliationBudgetHoldUntil(dependencies, repository.sponsor.id, now),
+          async () => {
+            if (pass !== undefined) {
+              const walked = await dependencies.github.walkReconciliation!(reference, {
+                pass, repository,
+                onDiscard: async ({ kind, subject, reason, fieldPath }) => {
+                  const dirtyKind = kind === "issue" ? "ISSUE" : "PULL_REQUEST";
+                  const dirty = pass!.dirtySubjects.find((row) => row.kind === dirtyKind && row.id === subject.id);
+                  await discardUnresolvableSubject(null, dirtyKind, subject, dirty, () => reason, fieldPath);
+                },
+              }, {
                 timelineCriticalLabels: new Set(repository.difficultyScheme.actualLabels.map(({ label }) => label)),
                 timelineWatchedLabels: new Set(repository.difficultyScheme.openingLabels.map(({ label }) => label)),
-              })).map((issue) => [issue.id, issue]));
-              const retained = new Map((full ? [] : cached!.issues).map((issue) => [issue.id, issue]));
-              // Either marker: the per-subject discard a getIssue rejection takes.
-              const dirtyIssueSubjects = new Map(dirtySubjects
-                .filter(({ kind }) => kind === "ISSUE")
-                .map((subject) => [subject.id, subject]));
-              for (const issue of changed.values()) {
-                if (issue.closingPullRequestsUnreadable !== true && issue.openingEvidenceUnreadable !== true) continue;
-                await discardUnresolvableSubject(null, "ISSUE", issue, dirtyIssueSubjects.get(issue.id), () => "UNREADABLE_FIELD");
-              }
-              if (!full) {
-                const affected = new Map<number, GitHubSubject>();
-                for (const subject of dirtySubjects) {
-                  if (subject.kind === "ISSUE") {
-                    affected.set(subject.id, subject);
-                  } else {
-                    // Both sides matter when a PR edits away an old closing reference.
-                    for (const issue of [...retained.values(), ...changed.values()]) {
-                      if (issue.closingPullRequests.some((pr) => pr.id === subject.id && belongsToRegisteredRepository(repository, pr))) {
-                        affected.set(issue.id, issue);
-                      }
-                    }
-                    try {
-                      const references = await dependencies.github.getPullRequestClosingIssues(reference, subject);
-                      for (const issue of references) {
-                        if (belongsToRegisteredRepository(repository, issue)) affected.set(issue.id, issue);
-                      }
-                    } catch (error) {
-                      if (!(await discardUnresolvableSubject(error, subject.kind, subject, subject))) throw error;
-                    }
-                  }
-                }
-                for (const subject of affected.values()) {
-                  if (changed.has(subject.id)) continue;
-                  let issue: GitHubIssue | null;
-                  try {
-                    issue = await dependencies.github.getIssue(reference, subject);
-                  } catch (error) {
-                    if (!(await discardUnresolvableSubject(error, "ISSUE", subject, dirtyIssueSubjects.get(subject.id), issueDiscardReason))) {
-                      throw error;
-                    }
-                    continue;
-                  }
-                  if (issue !== null) changed.set(issue.id, issue);
-                }
-              }
-              // A marked issue folds its cached shape when one exists.
-              for (const issue of changed.values()) {
-                const marked = issue.closingPullRequestsUnreadable === true || issue.openingEvidenceUnreadable === true;
-                if (marked && retained.has(issue.id)) continue;
-                retained.set(issue.id, issue);
-              }
-              const githubIssues = [...retained.values()];
-              const pullRequestEvidence = new Map((full ? [] : cached!.pullRequests)
-                .map(({ id, reviews, rawDiff }) => [id, { reviews, rawDiff }]));
-              // Closing references must meet the fold's repository and state checks.
-              const referencedPullRequests = githubIssues.flatMap(({ closingPullRequests }) => closingPullRequests)
-                .filter(pr => (pr.state === "CLOSED" || (pr.state === "MERGED" && pr.mergedAt !== null))
-                  && belongsToRegisteredRepository(repository, pr));
-              const disputePullRequests = repository.disputePullRequests;
-              const changedPullRequestIds = new Set([...changed.values()].flatMap(({ closingPullRequests }) => closingPullRequests.map(pr => pr.id)));
-              const dirtyPullRequestSubjects = new Map(dirtySubjects
-                .filter(({ kind }) => kind === "PULL_REQUEST")
-                .map((subject) => [subject.id, subject]));
-              const refreshedEvidence = await collectPullRequestEvidence(
-                dependencies.github,
-                reference,
-                [
-                  ...referencedPullRequests.filter(({ id }) => full || changedPullRequestIds.has(id)
-                    || dirtyPullRequestSubjects.has(id) || !pullRequestEvidence.has(id)),
-                  ...disputePullRequests,
-                ],
-                discardUnresolvableSubject,
-                dirtyPullRequestSubjects,
-                new Set(disputePullRequests.map(pr => pr.id)),
-              );
-              for (const [id, evidence] of refreshedEvidence.evidence) pullRequestEvidence.set(id, evidence);
-              const retainedPrIds = new Set([...referencedPullRequests, ...disputePullRequests]
-                .filter(pr => !refreshedEvidence.missingDisputePrIds.has(pr.id)).map(({ id }) => id));
-              for (const id of pullRequestEvidence.keys()) if (!retainedPrIds.has(id)) pullRequestEvidence.delete(id);
-              return { githubIssues, pullRequestEvidence };
-            },
-          );
-          // The same boundary the evidence fetch draws: an author is looked up
-          // because their pull request might be credited here, and a pull request in
-          // another repository never can be.
-          const authorGitHubUserIds = [...new Set(
-            githubIssues
-              .flatMap(({ closingPullRequests }) => closingPullRequests)
-              .filter((pullRequest) => belongsToRegisteredRepository(repository, pullRequest))
-              .map((pullRequest) => pullRequest.authorGitHubUserId)
-              .filter((githubUserId): githubUserId is number => githubUserId !== null),
-          )];
-          // GitLab authors resolve through linked identities on this repository's
-          // provider and instance, not through the users table's GitHub ids.
-          const forgeIdentities = repository.provider === "gitlab"
-            ? await dependencies.store.findForgeIdentitiesByForgeUserIds?.(
-                repositoryId,
-                authorGitHubUserIds,
-              )
-            : undefined;
-          const users = repository.provider === "gitlab"
-            ? []
-            : await dependencies.store.findUsersByGitHubUserIds(authorGitHubUserIds);
-          const snapshot: RepositoryFoldSnapshot = {
-            // The stored path can still carry the pre-rename name on the run that
-            // first observes the rename — recordVerifiedRepositoryIdentity above
-            // refreshes the database, not this in-memory value — so the fresh
-            // verify rides along and the fold can name the current path beside the
-            // stale one in a cross-repository reason.
-            repository: {
-              ...repository,
-              observedOwnerName: verified.fullName,
-            },
-            users,
-            forgeIdentities,
-            // Opening-unreadable issues are never priced; their rows stay.
-            issues: githubIssues.filter((issue) => issue.openingEvidenceUnreadable !== true).map((issue) => ({
-              ...issue,
-              claimAssigneeGitHubLogin: issue.claimAssigneeGitHubLogin,
-              claimAssigneeGitHubUserId: issue.claimAssigneeGitHubUserId,
-              closingPullRequests: issue.closingPullRequests.map((pullRequest) => ({
-                ...pullRequest,
-                reviews: pullRequestEvidence.get(pullRequest.id)?.reviews ?? [],
-                rawDiff: pullRequestEvidence.get(pullRequest.id)?.rawDiff ?? "",
+              });
+              return { githubIssues: walked.issues.map((issue) => ({ ...issue,
+                closingPullRequests: issue.closingPullRequests.map(({ reviews, rawDiff, ...pr }) => {
+                  void reviews; void rawDiff;
+                  return pr;
+                }),
               })),
+                pullRequestEvidence: new Map(walked.pullRequests.map(({ id, reviews, rawDiff }) => [id, { reviews, rawDiff }])) };
+            }
+            const changed = new Map((await dependencies.github.listIssues(reference, {
+              ...(full ? {} : { since: new Date(cached!.checkpoint.getTime() - reconciliationOverlapMs).toISOString() }),
+              timelineCriticalLabels: new Set(repository.difficultyScheme.actualLabels.map(({ label }) => label)),
+              timelineWatchedLabels: new Set(repository.difficultyScheme.openingLabels.map(({ label }) => label)),
+            })).map((issue) => [issue.id, issue]));
+            const retained = new Map((full ? [] : cached!.issues).map((issue) => [issue.id, issue]));
+            // Either marker: the per-subject discard a getIssue rejection takes.
+            const dirtyIssueSubjects = new Map(dirtySubjects
+              .filter(({ kind }) => kind === "ISSUE")
+              .map((subject) => [subject.id, subject]));
+            for (const issue of changed.values()) {
+              if (issue.closingPullRequestsUnreadable !== true && issue.openingEvidenceUnreadable !== true) continue;
+              await discardUnresolvableSubject(null, "ISSUE", issue, dirtyIssueSubjects.get(issue.id), () => "UNREADABLE_FIELD");
+            }
+            if (!full) {
+              const affected = new Map<number, GitHubSubject>();
+              for (const subject of dirtySubjects) {
+                if (subject.kind === "ISSUE") {
+                  affected.set(subject.id, subject);
+                } else {
+                  // Both sides matter when a PR edits away an old closing reference.
+                  for (const issue of [...retained.values(), ...changed.values()]) {
+                    if (issue.closingPullRequests.some((pr) => pr.id === subject.id && belongsToRegisteredRepository(repository, pr))) {
+                      affected.set(issue.id, issue);
+                    }
+                  }
+                  try {
+                    const references = await dependencies.github.getPullRequestClosingIssues(reference, subject);
+                    for (const issue of references) {
+                      if (belongsToRegisteredRepository(repository, issue)) affected.set(issue.id, issue);
+                    }
+                  } catch (error) {
+                    if (!(await discardUnresolvableSubject(error, subject.kind, subject, subject))) throw error;
+                  }
+                }
+              }
+              for (const subject of affected.values()) {
+                if (changed.has(subject.id)) continue;
+                let issue: GitHubIssue | null;
+                try {
+                  issue = await dependencies.github.getIssue(reference, subject);
+                } catch (error) {
+                  if (!(await discardUnresolvableSubject(error, "ISSUE", subject, dirtyIssueSubjects.get(subject.id), issueDiscardReason))) {
+                    throw error;
+                  }
+                  continue;
+                }
+                if (issue !== null) changed.set(issue.id, issue);
+              }
+            }
+            // A marked issue folds its cached shape when one exists.
+            for (const issue of changed.values()) {
+              const marked = issue.closingPullRequestsUnreadable === true || issue.openingEvidenceUnreadable === true;
+              if (marked && retained.has(issue.id)) continue;
+              retained.set(issue.id, issue);
+            }
+            const githubIssues = [...retained.values()];
+            const pullRequestEvidence = new Map((full ? [] : cached!.pullRequests)
+              .map(({ id, reviews, rawDiff }) => [id, { reviews, rawDiff }]));
+            // Closing references must meet the fold's repository and state checks.
+            const referencedPullRequests = githubIssues.flatMap(({ closingPullRequests }) => closingPullRequests)
+              .filter(pr => (pr.state === "CLOSED" || (pr.state === "MERGED" && pr.mergedAt !== null))
+                && belongsToRegisteredRepository(repository, pr));
+            const disputePullRequests = repository.disputePullRequests;
+            const changedPullRequestIds = new Set([...changed.values()].flatMap(({ closingPullRequests }) => closingPullRequests.map(pr => pr.id)));
+            const dirtyPullRequestSubjects = new Map(dirtySubjects
+              .filter(({ kind }) => kind === "PULL_REQUEST")
+              .map((subject) => [subject.id, subject]));
+            const refreshedEvidence = await collectPullRequestEvidence(
+              dependencies.github,
+              reference,
+              [
+                ...referencedPullRequests.filter(({ id }) => full || changedPullRequestIds.has(id)
+                  || dirtyPullRequestSubjects.has(id) || !pullRequestEvidence.has(id)),
+                ...disputePullRequests,
+              ],
+              discardUnresolvableSubject,
+              dirtyPullRequestSubjects,
+              new Set(disputePullRequests.map(pr => pr.id)),
+            );
+            for (const [id, evidence] of refreshedEvidence.evidence) pullRequestEvidence.set(id, evidence);
+            const retainedPrIds = new Set([...referencedPullRequests, ...disputePullRequests]
+              .filter(pr => !refreshedEvidence.missingDisputePrIds.has(pr.id)).map(({ id }) => id));
+            for (const id of pullRequestEvidence.keys()) if (!retainedPrIds.has(id)) pullRequestEvidence.delete(id);
+            return { githubIssues, pullRequestEvidence };
+          },
+        );
+        // The same boundary the evidence fetch draws: an author is looked up
+        // because their pull request might be credited here, and a pull request in
+        // another repository never can be.
+        const authorGitHubUserIds = [...new Set(
+          githubIssues
+            .flatMap(({ closingPullRequests }) => closingPullRequests)
+            .filter((pullRequest) => belongsToRegisteredRepository(repository, pullRequest))
+            .map((pullRequest) => pullRequest.authorGitHubUserId)
+            .filter((githubUserId): githubUserId is number => githubUserId !== null),
+        )];
+        // GitLab authors resolve through linked identities on this repository's
+        // provider and instance, not through the users table's GitHub ids.
+        const forgeIdentities = repository.provider === "gitlab"
+          ? await dependencies.store.findForgeIdentitiesByForgeUserIds?.(
+              repositoryId,
+              authorGitHubUserIds,
+            )
+          : undefined;
+        const users = repository.provider === "gitlab"
+          ? []
+          : await dependencies.store.findUsersByGitHubUserIds(authorGitHubUserIds);
+        const snapshot: RepositoryFoldSnapshot = {
+          // The stored path can still carry the pre-rename name on the run that
+          // first observes the rename — recordVerifiedRepositoryIdentity above
+          // refreshes the database, not this in-memory value — so the fresh
+          // verify rides along and the fold can name the current path beside the
+          // stale one in a cross-repository reason.
+          repository: {
+            ...repository,
+            observedOwnerName: verified.fullName,
+          },
+          users,
+          forgeIdentities,
+          // Opening-unreadable issues are never priced; their rows stay.
+          issues: githubIssues.filter((issue) => issue.openingEvidenceUnreadable !== true).map((issue) => ({
+            ...issue,
+            claimAssigneeGitHubLogin: issue.claimAssigneeGitHubLogin,
+            claimAssigneeGitHubUserId: issue.claimAssigneeGitHubUserId,
+            closingPullRequests: issue.closingPullRequests.map((pullRequest) => ({
+              ...pullRequest,
+              reviews: pullRequestEvidence.get(pullRequest.id)?.reviews ?? [],
+              rawDiff: pullRequestEvidence.get(pullRequest.id)?.rawDiff ?? "",
             })),
-          };
-          const fold = attachDonationMarks(foldRepository(snapshot), githubIssues);
-          attachDoneWhen(fold, githubIssues, repository.sponsor);
-          const cost: ReconciliationCostCharge = { ...readCost(), sponsorId: repository.sponsor.id, completedAt: now() };
-          const expectedVersion = pass === undefined ? cached?.version ?? null
-            : (await dependencies.store.getReconciliationEvidence(repositoryId))?.version ?? null;
-          const deltas = await dependencies.store.materialize({ repositoryId, runId, fold, cost, synchronization: {
-            expectedVersion, scanStartedAt, full, issues: githubIssues,
-            keptIssueGitHubIds: githubIssues.filter((issue) => issue.openingEvidenceUnreadable === true).map((issue) => issue.id),
-            pullRequests: [...pullRequestEvidence].map(([id, evidence]) => ({ id, ...evidence })), dirtySubjects,
-          } });
+          })),
+        };
+        const fold = attachDonationMarks(foldRepository(snapshot), githubIssues);
+        attachDoneWhen(fold, githubIssues, repository.sponsor);
+        const cost: ReconciliationCostCharge = { ...readCost(), sponsorId: repository.sponsor.id, completedAt: now() };
+        const expectedVersion = pass === undefined ? cached?.version ?? null
+          : (await dependencies.store.getReconciliationEvidence(repositoryId))?.version ?? null;
+        const deltas = await dependencies.store.materialize({ repositoryId, runId, fold, cost, synchronization: {
+          expectedVersion, scanStartedAt, full, issues: githubIssues,
+          keptIssueGitHubIds: githubIssues.filter((issue) => issue.openingEvidenceUnreadable === true).map((issue) => issue.id),
+          pullRequests: [...pullRequestEvidence].map(([id, evidence]) => ({ id, ...evidence })), dirtySubjects,
+        } });
 
-          await discardSweepPass(pass);
-          return {
-            repositoryId,
-            runId,
-            skipped: false,
-            ...deltas,
-            added: deltas.adds,
-            changed: deltas.changes,
-            removed: deltas.removals,
-          };
-        });
+        await discardSweepPass(pass);
+        return {
+          repositoryId,
+          runId,
+          skipped: false,
+          ...deltas,
+          added: deltas.adds,
+          changed: deltas.changes,
+          removed: deltas.removals,
+        };
       } catch (error) {
         // Capture before the scope rejects; the outer handlers persist only the run outcome.
         const observation = readCost();
