@@ -7,7 +7,9 @@ export type StagedRow = Awaited<ReturnType<SweepPass["readStaged"]>>[number];
 type Fields = Record<string, unknown>;
 const isFields = (value: unknown): value is Fields => value !== null && typeof value === "object";
 const isId = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value);
-const isBigint = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && Math.abs(value) < 2 ** 63;
+// A generation is its decimal text, or the number a pass stored by an earlier release holds.
+const isGeneration = (value: unknown) => (typeof value === "string" ? /^-?\d{1,19}$/.test(value) : Number.isInteger(value))
+  && BigInt(value as string | number) === BigInt.asIntN(64, BigInt(value as string | number));
 function ensure(readable: boolean): asserts readable { if (!readable) throw new StagedPassDataUnreadable(); }
 
 export function stagedIdentity(payload: unknown): GitHubSubject {
@@ -56,7 +58,7 @@ export async function readStagedRows(pass: SweepPass): Promise<StagedRow[]> {
 export function isDirtySubjects(value: unknown): boolean {
   return Array.isArray(value) && value.every((subject) => isFields(subject)
     && (subject.kind === "ISSUE" || subject.kind === "PULL_REQUEST")
-    && isId(subject.id) && isId(subject.number) && isBigint(subject.generation));
+    && isId(subject.id) && isId(subject.number) && isGeneration(subject.generation));
 }
 
 export type ListedSubject = WalkSubject & { anchor: string };

@@ -116,7 +116,7 @@ export type ReconciliationStore = {
     repositoryId: string;
     kind: DirtyReconciliationSubject["kind"];
     githubSubjectId: number;
-    generation: number;
+    generation: string;
   }): Promise<void>;
   getReconciliationCooldown(repositoryId: string): Promise<Date | null>;
   setReconciliationCooldown(repositoryId: string, notBefore: Date | null): Promise<void>;

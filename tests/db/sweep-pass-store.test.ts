@@ -314,9 +314,9 @@ describe("paused full-pass pages", () => {
   it("invalidates pages after an intervening evidence publication and keeps newer dirty generations", async () => {
     const f = await materializeRepositoryFixture(sql);
     const store = new PostgresSweepPassStore(sql);
-    const dirty = [{ kind: "ISSUE" as const, id: 1, number: 1, generation: 1 }];
+    const dirty = [{ kind: "ISSUE" as const, id: 1, number: 1, generation: "1" }];
     const first = await store.open({ repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: at, dirtySubjects: dirty });
-    const same = await store.open({ repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: new Date("2030-01-01T06:00:00Z"), dirtySubjects: [{ ...dirty[0]!, generation: 2 }] });
+    const same = await store.open({ repositoryId: f.repositoryId, evidenceVersion: "v1", scanStartedAt: new Date("2030-01-01T06:00:00Z"), dirtySubjects: [{ ...dirty[0]!, generation: "2" }] });
     expect(same.dirtySubjects).toEqual(dirty);
     const fresh = await store.open({ repositoryId: f.repositoryId, evidenceVersion: "v2", scanStartedAt: at, dirtySubjects: [] });
     expect(fresh.id).not.toBe(first.id);
@@ -494,24 +494,25 @@ describe("durable sweep walk subjects", () => {
     ["an unknown kind", [good, { ...good, kind: "COMMENT" }, good]],
     ...["id", "number", "generation"].map((field): [string, unknown] =>
       [`no ${field}`, [good, Object.fromEntries(Object.entries(good).filter(([key]) => key !== field)), good]]),
-    ["a string generation", [good, { ...good, generation: "1" }, good]],
+    ...["1.5", "9223372036854775808", " 1", "1e3", ""].map((generation): [string, unknown] => [`the generation text "${generation}"`, [good, { ...good, generation }, good]]),
     ["an unsafe id", [good, { ...good, id: 2 ** 53 }, good]],
     ["an unsafe number", [good, { ...good, number: 2 ** 53 }, good]],
     ...unpublishableGenerations.map(([label, generation]): [string, unknown] => [label, [good, { ...good, generation }, good]]),
   ];
 
-  it("keeps a pass whose dirty subjects are readable", async () => {
+  it("keeps a pass whose dirty subjects are readable, carrying an earlier release's numeric generations as text", async () => {
     const f = await materializeRepositoryFixture(sql);
-    const dirtySubjects = [{ kind: "ISSUE" as const, id: 1, number: 1, generation: 3 }, { kind: "PULL_REQUEST" as const, id: 2, number: 2, generation: 0 },
-      { kind: "ISSUE" as const, id: 3, number: 3, generation: 2 ** 63 - 1024 },
-      { kind: "ISSUE" as const, id: 4, number: 4, generation: -(2 ** 63 - 1024) }];
+    const dirtySubjects = [{ kind: "ISSUE" as const, id: 1, number: 1, generation: "9223372036854775807" }, { kind: "PULL_REQUEST" as const, id: 2, number: 2, generation: "-9223372036854775808" }];
     const input = { repositoryId: f.repositoryId, evidenceVersion: "walk-v1", scanStartedAt: at, dirtySubjects };
     const store = new PostgresSweepPassStore(sql);
     const pass = await store.open(input);
     await pass.stage(subject);
+    expect((await store.open(input)).dirtySubjects).toEqual(dirtySubjects);
+    const numeric = [{ ...good, generation: 3 }, { ...good, generation: 0 }, { ...good, generation: 2 ** 63 - 1024 }, { ...good, generation: -(2 ** 63 - 1024) }];
+    await sql`update reconciliation_sweep_passes set dirty_subjects = ${sql.json(numeric)} where pass_id = ${pass.id}`;
     const reopened = await store.open(input);
     expect(reopened.id).toBe(pass.id);
-    expect(reopened.dirtySubjects).toEqual(dirtySubjects);
+    expect(reopened.dirtySubjects.map(({ generation }) => generation)).toEqual(["3", "0", "9223372036854774784", "-9223372036854774784"]);
     expect(await reopened.readStaged()).toHaveLength(1);
   });
 
@@ -531,7 +532,7 @@ describe("durable sweep walk subjects", () => {
       await sql`insert into repository_reconciliation_dirty_subjects (repository_id, kind, github_subject_id, subject_number)
         values (${f.repositoryId}, 'ISSUE', ${issue.githubIssueId}, ${issue.number})`;
       const passes = new PostgresSweepPassStore(sql);
-      const seen: Array<{ id: string; generation: number | undefined; page: unknown; staged: number }> = [];
+      const seen: Array<{ id: string; generation: string | undefined; page: unknown; staged: number }> = [];
       let pass: SweepPass | undefined;
       let writes = 0, stages = 0;
       const github: ReconciliationGateway = {
@@ -547,7 +548,7 @@ describe("durable sweep walk subjects", () => {
       const sweep = { spend: async () => null, openPass: async (input: Parameters<PostgresSweepPassStore["open"]>[0]) => (pass = await passes.open(input)),
         discardPass: (id: string) => passes.discardByRepository(id), discardIfInactive: (id: string) => passes.discardIfInactive(id) };
       for (let run = 0; run < 3; run++) await reconcileRepository({ store: f.store, github, sweep, now: () => at, onBudgetChange: () => {} }, f.repositoryId, { reason: "SWEEP" });
-      const held = { id: seen[0]!.id, generation: 2 ** 53, page: { text: "paused page" }, staged: 1 };
+      const held = { id: seen[0]!.id, generation: "9007199254740992", page: { text: "paused page" }, staged: 1 };
       expect(seen).toEqual([held, held, held]);
       expect({ writes, stages }).toEqual({ writes: 1, stages: 1 });
     } finally { await sql`select setval('repository_reconciliation_dirty_generation', ${before.last_value}, ${before.is_called})`; }

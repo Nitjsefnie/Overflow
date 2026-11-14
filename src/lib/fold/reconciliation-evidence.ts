@@ -97,7 +97,7 @@ export type ReconciliationPullRequestEvidence = {
 
 export type DirtyReconciliationSubject = GitHubSubject & {
   kind: "ISSUE" | "PULL_REQUEST";
-  generation: number;
+  generation: string;
 };
 
 /** Only upstream evidence is retained. Repository configuration and users are read afresh. */

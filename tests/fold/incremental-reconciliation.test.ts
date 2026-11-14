@@ -559,7 +559,7 @@ describe("incremental reconciliation", () => {
     // The fixture's genuine-issue delivery still enqueues.
     await f.dirty("ISSUE", f.issues[0]!);
     expect(await f.store.getDirtyReconciliationSubjects(f.id)).toEqual([
-      { kind: "ISSUE", id: f.issues[0]!.id, number: f.issues[0]!.number, generation: expect.any(Number) },
+      { kind: "ISSUE", id: f.issues[0]!.id, number: f.issues[0]!.number, generation: expect.any(String) },
     ]);
   });
 
@@ -575,7 +575,7 @@ describe("incremental reconciliation", () => {
     await f.dirty("ISSUE", f.issues[0]!);
     const [fresh] = await f.store.getDirtyReconciliationSubjects(f.id);
     expect(fresh).toMatchObject({ kind: "ISSUE", id: subject!.id, number: subject!.number });
-    expect(fresh!.generation).toBeGreaterThan(subject!.generation);
+    expect(BigInt(fresh!.generation)).toBeGreaterThan(BigInt(subject!.generation));
     // A stale generation must not delete a row a webhook re-enqueued meanwhile.
     await f.store.discardDirtyReconciliationSubject({
       repositoryId: f.id, kind: subject!.kind, githubSubjectId: subject!.id, generation: subject!.generation,
