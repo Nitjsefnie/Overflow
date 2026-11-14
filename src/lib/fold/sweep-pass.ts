@@ -3,7 +3,7 @@ import { SweepBudgetSpent } from "@/lib/fold/sweep-request-budget";
 import { findGitHubRateLimitError } from "@/lib/github/errors";
 import { GraphqlBudgetHeld } from "@/lib/github/graphql-request-budget";
 
-/** Bounds a held pass's absence-listing records; a record past it only makes a later run list those subjects again. */
+/** Caps a pass's absence-listing records; past it, a later run lists those subjects again. */
 export const DEFAULT_SWEEP_PASS_PAGE_CEILING = 1000;
 export function readSweepPassPageCeiling(environment: Partial<Record<string, string>>): number {
   const raw = environment.RECONCILIATION_SWEEP_PAGE_CEILING ?? "";
