@@ -201,9 +201,7 @@ describe("existing registration webhook upgrade", () => {
     const f = fixture({ provider, instanceUrl: "https://gitlab.example.com", lookupStatus: 404 });
     expect.soft(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 0, failed: 0, gone: 1 });
     expect(f.queued).toEqual([]);
-    expect(f.requests.map((request) => `${request.method} ${new URL(request.url).pathname}`)).toEqual([
-      provider === "github" ? "GET /repositories/42" : "GET /api/v4/projects/42",
-    ]);
+    expect(f.requests.map((request) => `${request.method} ${new URL(request.url).pathname}`)).toEqual([provider === "github" ? "GET /repositories/42" : "GET /api/v4/projects/42"]);
     expect(f.outcomes).toEqual([outcome("SKIPPED", "NOT_ATTEMPTED", "REPOSITORY_GONE")]);
   });
 
@@ -262,6 +260,13 @@ describe("existing registration webhook upgrade", () => {
         outcome("VERIFIED", "QUEUED", null), outcome("VERIFIED", "NOT_NEEDED", null)]);
     });
 
+  it("reports a finalized hook whose debt was not cleared as unpaid, so the next run queues it again", async () => {
+    const f = fixture({ configuredAt: new Date("2026-01-01T00:00:00Z") }), { clearWebhookRederivationOwed: clear } = f.dependencies.store;
+    f.dependencies.store.clearWebhookRederivationOwed = async () => { f.dependencies.store.clearWebhookRederivationOwed = clear; throw new Error("synthetic clear failure"); };
+    expect([await upgradeRepositoryWebhooks(f.dependencies), await upgradeRepositoryWebhooks(f.dependencies)]).toEqual([{ succeeded: 0, failed: 1, gone: 0 }, { succeeded: 1, failed: 0, gone: 0 }]);
+    expect([f.queued.length, f.outcomes]).toEqual([2, [outcome("VERIFIED", "FAILED", "QUEUE_FAILED"), outcome("VERIFIED", "QUEUED", null)]]);
+  });
+
   it("does not queue repair when the hook update or verification fails", async () => {
     const f = fixture();
     const createGateway = f.dependencies.createGateway;
@@ -318,14 +323,11 @@ describe("existing registration webhook upgrade", () => {
             namespace: { name: "gl-group", path: "gl-group", kind: "group" },
           }),
         });
-        return {
-          getRepositoryById: gateway.getRepositoryById.bind(gateway),
-          configureWebhook: async () => { throw new Error("the hook must not be read for a refused project"); },
-        };
+        return { getRepositoryById: gateway.getRepositoryById.bind(gateway),
+          configureWebhook: async () => { throw new Error("the hook must not be read for a refused project"); } };
       };
       expect(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 0, failed: 1, gone: 0 });
-      expect(f.requests.filter((request) => request.method === "PUT")).toEqual([]);
-      expect(f.queued).toEqual([]);
+      expect([f.requests.filter((request) => request.method === "PUT"), f.queued]).toEqual([[], []]);
       expect(f.outcomes).toEqual([outcome("FAILED", "NOT_ATTEMPTED", "REPOSITORY_FAILED")]);
     }
   });
