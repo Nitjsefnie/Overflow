@@ -430,12 +430,10 @@ const PAGE_CONTRACTS = [
     renderRoot: "#main-content",
     viewports: [
       [1440, 800],
-      // At 1280x700, the action ends at 690.4px on this box, leaving
-      // 9.6px above the fold. The pin remains 700px.
-      // This measurement does not establish cross-environment spread;
-      // fonts and layout may differ on the GitHub runner.
-      // Re-measure when changing the copy or threshold: either can
-      // exhaust the remaining headroom.
+      // The action ends at 589.6px on this box at 1366 and 1280 wide: 35.4px
+      // above the 1366x625 target fold, 110.4px above 700. Fonts and layout
+      // may differ on the GitHub runner; re-measure when changing the copy.
+      [1366, 625],
       [1280, 700],
       // issue 1067 @320: RED ran with scrollWidth 330px vs 320 (the hero h1's
       // clamp floor pushed .landing-hero's grid-item min-content past the

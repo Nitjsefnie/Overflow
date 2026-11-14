@@ -248,19 +248,16 @@ describe("landing page", () => {
 
 // Issue 39: the sign-in button, the only control on the signed-out landing page,
 // sat below the fold. The hero h1 held its clamp ceiling at every desktop width
-// and wrapped to four lines, so the button's bottom edge landed at 897px (that
-// figure from about 1333px wide up; 891px at 1280) and the page needed a
-// viewport that tall to show the button at all. Measured in headless Chromium,
-// the shipped stylesheet brings the minimum clearing viewport height to 572px,
-// bisected at 1920, 1440, 1366 and 1280 and constant from 1037 up (571px at
-// 1024, 553px at 800). A 1366x768 laptop panel gives Chrome roughly 625px of
-// viewport once its chrome and a taskbar are subtracted.
+// and wrapped to four lines, so the button's bottom edge landed at 897px; the
+// site header and the line under the lede later held it at 690px under a 6rem
+// ceiling. Measured in headless Chromium, the shipped 4rem ceiling brings the
+// minimum clearing viewport height to 590px, constant from 1245px wide up
+// (635px from 1024 to 1240, where the site header wraps to two rows). A
+// 1366x768 laptop panel gives Chrome roughly 625px of viewport once its chrome
+// and a taskbar are subtracted, so the button clears 1366x625 by 35px.
 //
-// The 96px hero ceiling is a design decision, not a layout constraint. The wrap
-// stays at three lines all the way down to the 2.5rem floor, because the h1's
-// measure is 13ch and scales with the type wherever the ceiling binds (at 800px
-// wide and up; below that the container binds instead). A 4rem ceiling measures
-// a 472px clearing height. 96px buys the hero its presence.
+// The headline wraps to three lines at every width measured, 320 to 1920. At
+// 390x600 the button ends at 621px, 21px below that fold.
 //
 // WHAT THIS GUARD IS. A proxy. jsdom does no layout, so nothing here can measure
 // where the button lands - the browser measurement above is the evidence, and
@@ -277,7 +274,7 @@ describe("landing page", () => {
 //   - It cannot see line counts, so a copy change moves the fold silently.
 //   - It cannot see the type faces: the h1's wrap depends on the metrics behind
 //     var(--display), and pinning a font stack would be an equality, not a bound.
-//   - It covers the elements that stack above the button and no others, and the
+//   - It covers the subtree's elements, not the line under the lede, and the
 //     properties in the table below and no others.
 //   - A border shorthand carrying var(), the house idiom for every border in
 //     globals.css, is invisible under jsdom 30: it reads style `none` and
@@ -287,7 +284,7 @@ describe("landing page", () => {
 //     border without var(): `border-top: 3rem solid #8a8479` and the
 //     currentColor spelling resolve to solid and 48px. A width without a style
 //     occupies no browser space (border-top-width: 3rem alone on the hero
-//     leaves the clearing height at 572px), but the button's var() border is
+//     leaves the clearing height at 590px), but the button's var() border is
 //     styled (border-bottom-width: 1rem takes it from 49px to 63px tall).
 //   - font-weight and word-spacing are not bounded and were measured not to
 //     move the button here -
@@ -369,19 +366,17 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["h1", "border-bottom", "atMost", 0, 0],
   ["h1", "border-left", "atMost", 0, 0],
   ["h1", "border-right", "atMost", 0, 0],
-  ["h1", "height", "atMost", 302.4, 176.4],
-  ["h1", "min-height", "atMost", 302.4, 176.4],
-  ["h1", "font-size", "atMost", 96, 56],
-  ["h1", "line-height", "atMost", 100.8, 58.8],
-  // The 390px values were re-measured after the issue-1067 clamp floor
-  // change: the floor no longer holds the 390px font at 56px (12vw = 46.8px
-  // there), and the button sat at 569px against the 600px fold when measured
-  // in a browser at 390x600 — higher than before, never lower.
-  ["h1", "letter-spacing", "atMost", -4.32, -2.106],
+  ["h1", "height", "atMost", 201.6, 176.4],
+  ["h1", "min-height", "atMost", 201.6, 176.4],
+  ["h1", "font-size", "atMost", 64, 56],
+  ["h1", "line-height", "atMost", 67.2, 58.8],
+  // The 390px font-size, line-height and height predate the issue-1067 floor
+  // change, which left 12vw = 46.8px there; letter-spacing and max-width follow it.
+  ["h1", "letter-spacing", "atMost", -2.88, -2.106],
   ["h1", "text-transform", "atMost", 0, 0],
   ["h1", "width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
-  ["h1", "max-width", "atLeast", 624, 304.2],
-  // The lede: two lines at 1440, four at 390.
+  ["h1", "max-width", "atLeast", 416, 304.2],
+  // The lede: one line at 1440, two at 390.
   ["lede", "margin-top", "atMost", 0, 0],
   ["lede", "margin-bottom", "atMost", 28.8, 28.8],
   ["lede", "padding-top", "atMost", 0, 0],
@@ -405,7 +400,7 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["form", "border-top", "atMost", 0, 0],
   ["form", "font-size", "atMost", 16, 16],
   ["form", "line-height", "atMost", 24, 24],
-  // The button's own box: 49px tall, 24px below the lede, its top and bottom
+  // The button's own box: 49px tall under a 24px margin, its top and bottom
   // borders the 2px solid Chrome measured at both widths. Its raw widths are
   // bounded too; under jsdom 30 its var() shorthand reads 0px in both.
   ["button", "margin-top", "atMost", 24, 24],
