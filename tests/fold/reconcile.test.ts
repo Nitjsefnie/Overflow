@@ -192,17 +192,22 @@ describe("reconcileRepository", () => {
     const refreshed = (evidence: unknown) => ({ subject: identity, refreshed: true, missing: false, listed: true, evidence });
     const changesRequested = { id: 1, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T10:00:00.000Z", dismissal: null };
     const dismissed = { ...changesRequested, id: 4, dismissal: { at: "2026-09-01T10:30:00.000Z", previousState: null } };
-    // One row per field a staged-row consumer reads, each a readable row with only that field replaced by an unconvertible object.
-    const wrongTyped: Array<["issue" | "pull_request", Array<string | number>, string]> = [
-      ["issue", [], "title body url state createdAt updatedAt closedAt authorLogin authorGitHubUserId claimAssigneeGitHubLogin claimAssigneeGitHubUserId"],
-      ["issue", ["history", 2], "actorLogin actorGitHubUserId createdAt"], ["issue", ["comments", 0], "body authorLogin authorGitHubUserId createdAt lastEditedAt"],
-      ["issue", ["closingPullRequests", 0], "id number title url state mergedAt mergeCommitOid finalCommitAt authorLogin authorGitHubUserId repositoryGitHubId repositoryNameWithOwner"],
-      ["pull_request", [], "evidence missing listed"], ["pull_request", ["evidence"], "reviews rawDiff"],
-      ["pull_request", ["evidence", "reviews", 0], "id submittedAt dismissal"], ["pull_request", ["evidence", "reviews", 0, "dismissal"], "at"],
+    // One row per field a staged-row consumer reads, each a readable row with only that field replaced: by an unconvertible
+    // object, and for each time and each stored enum also by a string no reader can parse or the enum does not hold.
+    const wrongTyped: Array<["issue" | "pull_request", string, string]> = [
+      ["issue", "", "title body url state createdAt updatedAt closedAt authorLogin authorGitHubUserId claimAssigneeGitHubLogin claimAssigneeGitHubUserId"],
+      ["issue", "history.2.", "actorLogin actorGitHubUserId createdAt"], ["issue", "comments.0.", "body authorLogin authorGitHubUserId createdAt lastEditedAt"],
+      ["issue", "closingPullRequests.0.", "id number title url state mergedAt mergeCommitOid finalCommitAt authorLogin authorGitHubUserId repositoryGitHubId repositoryNameWithOwner"],
+      ["pull_request", "", "evidence missing listed"], ["pull_request", "evidence.", "reviews rawDiff"],
+      ["pull_request", "evidence.reviews.0.", "id submittedAt dismissal"], ["pull_request", "evidence.reviews.0.dismissal.", "at"],
     ];
-    const poisoned = (row: object, path: Array<string | number>) => {
-      const copy = structuredClone(row) as Record<string | number, unknown>;
-      path.slice(0, -1).reduce((node, key) => node[key] as Record<string | number, unknown>, copy)[path.at(-1)!] = { toString: 1 };
+    const wrongValued: Array<["issue" | "pull_request", string, string]> = [["issue", "state", "LOCKED"], ["issue", "closingPullRequests.0.state", "DRAFT"],
+      ...["createdAt", "updatedAt", "closedAt", "history.2.createdAt", "comments.0.createdAt", "comments.0.lastEditedAt", "closingPullRequests.0.mergedAt",
+        "closingPullRequests.0.finalCommitAt"].map((path): ["issue", string, string] => ["issue", path, "garbage"]),
+      ["pull_request", "evidence.reviews.0.submittedAt", "garbage"], ["pull_request", "evidence.reviews.0.dismissal.at", "garbage"]];
+    const poisoned = (row: object, path: string, value: unknown) => {
+      const copy = structuredClone(row) as Record<string, unknown>, keys = path.split(".");
+      keys.slice(0, -1).reduce((node, key) => node[key] as Record<string, unknown>, copy)[keys.at(-1)!] = value;
       return copy;
     };
     const unreadableRows: Array<[string, "issue" | "pull_request", unknown]> = [
@@ -254,8 +259,9 @@ describe("reconcileRepository", () => {
       ["a refreshed pull request row with a string listed", "pull_request", { subject: identity, evidence: null, refreshed: true, missing: false, listed: "yes" }],
       ...[["a null review", null], ["a review without a dismissal", withoutField(changesRequested, "dismissal")], ["a review with an unconvertible submittedAt", { ...changesRequested, submittedAt: { toString: 1 } }],
         ["a review with an unconvertible dismissal time", { ...changesRequested, dismissal: { at: { toString: 1 }, previousState: null } }]].map(([label, review]): [string, "pull_request", unknown] => [`a refreshed pull request row with ${label}`, "pull_request", refreshed({ reviews: [review], rawDiff: "" })]),
-      ...wrongTyped.flatMap(([kind, at, fields]) => fields.split(" ").map((field): [string, "issue" | "pull_request", unknown] => [`a wrong-typed ${[...at, field].join(".")}`,
-        kind, poisoned(kind === "issue" ? settled("sponsor") : refreshed({ reviews: [dismissed], rawDiff: "" }), [...at, field])])),
+      ...[...wrongTyped.flatMap(([kind, at, fields]) => fields.split(" ").map((field) => [kind, `${at}${field}`, { toString: 1 }] as const)), ...wrongValued]
+        .map(([kind, path, value]): [string, "issue" | "pull_request", unknown] => [typeof value === "string" ? `"${value}" as ${path}` : `a wrong-typed ${path}`, kind,
+          poisoned(kind === "issue" ? settled("sponsor") : refreshed({ reviews: [dismissed], rawDiff: "" }), path, value)]),
     ];
 
     it("stages each unreadable comments row in comments, beside a readable history", () => {
@@ -279,13 +285,11 @@ describe("reconcileRepository", () => {
         expect(history.every((entry) => entry !== null && typeof entry === "object")).toBe(true);
       }
       expect(rows.map(({ comments }) => comments.map((comment) => ["body" in comment ? comment.body : "absent", "authorLogin" in comment ? comment.authorLogin : "absent"])
-        .filter(([body, login]) => body !== "Done when it works." || login !== "sponsor")))
-        .toEqual([
+        .filter(([body, login]) => body !== "Done when it works." || login !== "sponsor"))).toEqual([
           [["absent", "sponsor"]], [[null, "sponsor"]], [[1, "sponsor"]], [[false, "sponsor"]], [[{}, "sponsor"]], [[[], "sponsor"]],
           [["absent", "sponsor"]], [["absent", "sponsor"]], [["absent", "sponsor"]], [["absent", "sponsor"]],
           [["Done when it works.", "absent"]], [["Done when it works.", 1]], [["Done when it works.", false]], [["Done when it works.", {}]], [["Done when it works.", []]],
-          [["Done when it works.", "absent"]], [["Done when it works.", "absent"]], [["Done when it works.", "absent"]],
-        ]);
+          [["Done when it works.", "absent"]], [["Done when it works.", "absent"]], [["Done when it works.", "absent"]]]);
       expect(rows.map(({ comments }) => comments.filter((comment) => comment.body === "Done when it works." && comment.authorLogin === "sponsor").length))
         .toEqual([0, 0, 0, 0, 0, 0, 1, 1, 2, 0, 0, 0, 0, 0, 0, 1, 1, 2]);
       expect(rows.map(({ comments }) => comments.findIndex((comment) => comment.body !== "Done when it works." || comment.authorLogin !== "sponsor")))
@@ -359,8 +363,7 @@ describe("reconcileRepository", () => {
         ["a settled label event with no actor login, no actor id", "issue", unlogged(null)],
       ]);
       const settledAt = { createdAt: "2026-09-01T11:00:00.000Z", label: "delivered/6" };
-      const wrongEvents = [
-        { kind: "LABELED", id: "actual-9", actorLogin: 1, actorGitHubUserId: 1001, ...settledAt },
+      const wrongEvents = [{ kind: "LABELED", id: "actual-9", actorLogin: 1, actorGitHubUserId: 1001, ...settledAt },
         { kind: "LABELED", id: "actual-9", actorLogin: 1, actorGitHubUserId: null, ...settledAt },
         { kind: "LABELED", id: "actual-9", actorLogin: false, actorGitHubUserId: 2001, ...settledAt },
         { kind: "LABELED", id: "actual-9", actorLogin: false, actorGitHubUserId: null, ...settledAt },
@@ -370,8 +373,7 @@ describe("reconcileRepository", () => {
         { kind: "LABELED", id: "actual-9", actorLogin: [], actorGitHubUserId: null, ...settledAt },
         { kind: "LABELED", id: "actual-9", actorGitHubUserId: 1001, ...settledAt },
         { kind: "LABELED", id: "actual-9", actorGitHubUserId: 2001, ...settledAt },
-        { kind: "LABELED", id: "actual-9", actorGitHubUserId: null, ...settledAt },
-      ];
+        { kind: "LABELED", id: "actual-9", actorGitHubUserId: null, ...settledAt }];
       for (const [index, [, , payload]] of rows.entries()) {
         expect(payload).not.toHaveProperty("subject");
         expect(payload).toMatchObject({ id: 9, number: 9, state: "CLOSED", createdAt: "2026-09-01T08:00:00.000Z", closedAt: "2026-09-01T12:05:00.000Z", authorLogin: "sponsor", labels: ["M", "delivered/6"] });
@@ -483,8 +485,7 @@ describe("reconcileRepository", () => {
       expect(f.counts.has(9)).toBe(false);
       const { issues } = published.mock.calls[0][0].synchronization as { issues: Array<{ id: number; history: Array<Record<string, unknown>> }> };
       expect(issues.find(({ id }) => id === 9)!.history.map(({ id, actorLogin, actorGitHubUserId }) => [id, actorLogin, actorGitHubUserId])).toEqual([
-        ["opening-9", "sponsor", null], ["assigned-9", "sponsor", null], ["actual-9", "sponsor", null], [entry.id, DATA_SUBJECT_TOMBSTONE_LOGIN, null],
-      ]);
+        ["opening-9", "sponsor", null], ["assigned-9", "sponsor", null], ["actual-9", "sponsor", null], [entry.id, DATA_SUBJECT_TOMBSTONE_LOGIN, null]]);
     });
 
     it("settles an unregistered repository's pass only after the failed run released coordination", async () => {

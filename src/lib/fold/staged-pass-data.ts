@@ -29,17 +29,19 @@ const shape = (fields: Record<string, Check>): Check => (value) => isFields(valu
 // The staged fields the walk, the fold, the suppression scrub or a materialized row parse, call a method on, bind in SQL or match an
 // account by, typed as their producers emit them. A field every reader takes in any type stays out, so a forge's new value there
 // cannot discard every pass that stages it.
-const login = orNull(isString), account = orNull(isId), timeOrNull = orNull(isString);
+// A time parses as the fold's validTimestamp reads it: no producer emits another, and a time column refuses one at the bind.
+const isTime: Check = (value) => typeof value === "string" && Number.isFinite(Date.parse(value));
+const login = orNull(isString), account = orNull(isId), timeOrNull = orNull(isTime);
 const isClosingPullRequest = shape({ id: isId, number: isId, title: isString, url: isString, state: oneOf("OPEN", "CLOSED", "MERGED"),
   mergedAt: timeOrNull, mergeCommitOid: orNull(isString), finalCommitAt: timeOrNull, authorLogin: login, authorGitHubUserId: account,
   repositoryGitHubId: isId, repositoryNameWithOwner: isString });
-const isIssue = shape({ title: isString, body: isString, url: isString, state: oneOf("OPEN", "CLOSED"), createdAt: isString,
-  updatedAt: isString, closedAt: timeOrNull, authorLogin: login, authorGitHubUserId: account, labels: Array.isArray,
+const isIssue = shape({ title: isString, body: isString, url: isString, state: oneOf("OPEN", "CLOSED"), createdAt: isTime,
+  updatedAt: isTime, closedAt: timeOrNull, authorLogin: login, authorGitHubUserId: account, labels: Array.isArray,
   claimAssigneeGitHubLogin: login, claimAssigneeGitHubUserId: account,
-  history: listOf(shape({ actorLogin: login, actorGitHubUserId: account, createdAt: isString })),
-  comments: listOf(shape({ body: isString, authorLogin: login, authorGitHubUserId: account, createdAt: isString, lastEditedAt: timeOrNull })),
+  history: listOf(shape({ actorLogin: login, actorGitHubUserId: account, createdAt: isTime })),
+  comments: listOf(shape({ body: isString, authorLogin: login, authorGitHubUserId: account, createdAt: isTime, lastEditedAt: timeOrNull })),
   closingPullRequests: listOf(isClosingPullRequest) });
-const isReview = shape({ id: isId, submittedAt: timeOrNull, dismissal: orNull(shape({ at: isString })) });
+const isReview = shape({ id: isId, submittedAt: timeOrNull, dismissal: orNull(shape({ at: isTime })) });
 const isPullRequestRow: Check = (row) => shape({ evidence: orNull(shape({ reviews: listOf(isReview), rawDiff: isString })) })(row)
   && ((row as Fields).refreshed !== true || shape({ missing: isBoolean, listed: isBoolean })(row));
 
