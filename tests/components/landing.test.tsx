@@ -276,8 +276,8 @@ describe("landing page", () => {
 //   - It cannot see line counts, so a copy change moves the fold silently.
 //   - It cannot see the type faces: the h1's wrap depends on the metrics behind
 //     var(--display), and pinning a font stack would be an equality, not a bound.
-//   - It covers the elements that stack above the button and no others, and the
-//     properties in the table below and no others.
+//   - It covers the elements in main that stack above the button (the site
+//     header above main is the geometry check's) and the properties below.
 //   - A border shorthand carrying var(), the house idiom for every border in
 //     globals.css, is invisible under jsdom 30: it reads style `none` and
 //     width 0px like no border, as does a width-only edit on top of it, so it
@@ -288,8 +288,9 @@ describe("landing page", () => {
 //     occupies no browser space (border-top-width: 3rem alone on the hero
 //     leaves the clearing height at 590px), but the button's var() border is
 //     styled (border-bottom-width: 1rem takes it from 49px to 63px tall).
-//   - font-weight is not bounded: 900 on the whole page measured no move at
-//     1440x600 or 390x600, so a bound would only manufacture a red. word-spacing
+//   - font-weight is bounded on the page, hero and points line: 900 on any of
+//     them wraps the 390px points line to four lines (572 to 593px); on another
+//     element it measured no move at 1440x600 or 390x600. word-spacing
 //     is bounded wherever 0.3em-3em measured a move; the form's is not, as the
 //     button resets it. white-space and text-wrap have values that could matter and
 //     an ordering this guard cannot establish by measurement. display and
@@ -336,12 +337,14 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["page", "font-size", "atMost", 16, 16],
   ["page", "line-height", "atMost", 24, 24],
   ["page", "word-spacing", "atMost", 0, 0],
+  ["page", "font-weight", "atMost", 400, 400],
   // The hero, whose max-width is the headline's wrap measure above ~102px of type.
   ["hero", "margin-top", "atMost", 0, 0],
   ["hero", "padding-top", "atMost", 0, 0],
   ["hero", "border-top", "atMost", 0, 0],
   ["hero", "line-height", "atMost", 24, 24],
   ["hero", "word-spacing", "atMost", 0, 0],
+  ["hero", "font-weight", "atMost", 400, 400],
   ["hero", "max-width", "atLeast", 928, 928],
   // The eyebrow: one line of type, the box around it, and the space between it
   // and the headline.
@@ -395,6 +398,7 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["trade", "line-height", "atMost", 24, 24],
   ["trade", "letter-spacing", "atMost", 0, 0],
   ["trade", "word-spacing", "atMost", 0, 0],
+  ["trade", "font-weight", "atMost", 400, 400],
   ["trade", "text-transform", "atMost", 0, 0],
   ["trade", "width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
   ["trade", "max-width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
@@ -406,15 +410,12 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["form", "font-size", "atMost", 16, 16],
   ["form", "line-height", "atMost", 24, 24],
   // The button's own box: 49px tall under a 24px margin, its top and bottom
-  // borders the 2px solid Chrome measured at both widths. Both jsdom versions
-  // read an unstyled edge as 0px wide, so the raw widths add nothing to that.
+  // borders the 2px solid Chrome measured at both widths.
   ["button", "margin-top", "atMost", 24, 24],
   ["button", "padding-top", "atMost", 10.4, 10.4],
   ["button", "padding-bottom", "atMost", 10.4, 10.4],
   ["button", "border-top", "atMost", 2, 2],
   ["button", "border-bottom", "atMost", 2, 2],
-  ["button", "border-top-width", "atMost", 16, 16],
-  ["button", "border-bottom-width", "atMost", 16, 16],
   ["button", "min-height", "atMost", 44.8, 44.8],
   ["button", "box-sizing", "atMost", 0, 0],
   ["button", "font-size", "atMost", 16, 16],
@@ -446,7 +447,8 @@ const NO_BORDER = new Set(["none", "hidden", ""]);
 
 const BASE_WIDTH = 1440;
 const NARROW_WIDTH = 390;
-// The 1366x625 target, no shorter than the x600 measurements the bounds come from.
+// Both columns were measured at x600; the rewrite reads vh at the 625px target.
+const MEASURED_HEIGHT = 600;
 const VIEWPORT_HEIGHT = 625;
 const ROOT_FONT_SIZE = 16;
 
@@ -519,6 +521,8 @@ function toPixels(value: string, fontSize: number, property: string, direction: 
   }
   // `normal` is zero spacing; for anything else it is a value this cannot bound.
   if (trimmed === "normal" && property.endsWith("-spacing")) return 0;
+  // A weight is compared as itself; a weight keyword other than normal or bold is refused.
+  if (property === "font-weight" && /^(normal|bold|\d+(\.\d+)?)$/.test(trimmed)) return trimmed === "normal" ? 400 : trimmed === "bold" ? 700 : Number(trimmed);
   const number = Number.parseFloat(trimmed);
   if (!Number.isNaN(number)) {
     if (trimmed.endsWith("px")) return number;
@@ -614,7 +618,7 @@ describe("landing hero fold budget", () => {
         // thousandth of a pixel above its own bound in binary floating point.
         const pixels =
           Math.round(toPixels(raw, Number.parseFloat(computed["font-size"]), property, direction, term) * 1000) / 1000;
-        const hint = `${term}: raising this lowers the sign-in button, so measure the fold in a browser at ${width}x${VIEWPORT_HEIGHT} before changing the bound`;
+        const hint = `${term}: raising this lowers the sign-in button, so measure the fold in a browser at ${width}x${MEASURED_HEIGHT} before changing the bound`;
         // Soft, so one run names every term that moved rather than only the first.
         if (direction === "atMost") expect.soft(pixels, hint).toBeLessThanOrEqual(bound);
         else expect.soft(pixels, hint).toBeGreaterThanOrEqual(bound);
