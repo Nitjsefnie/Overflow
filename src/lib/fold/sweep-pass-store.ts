@@ -85,7 +85,9 @@ export class PostgresSweepPassStore {
     }) as unknown as PassRow;
     let anchors = parseWalkAnchors(row.walk_anchors);
     return {
-      id: row.pass_id, scanStartedAt: row.scan_started_at, dirtySubjects: row.dirty_subjects,
+      // A pass stored by an earlier release holds numeric generations; carry every one as text.
+      id: row.pass_id, scanStartedAt: row.scan_started_at,
+      dirtySubjects: row.dirty_subjects.map((dirty) => ({ ...dirty, generation: String(BigInt(dirty.generation)) })),
       read: async (key) => {
         const [page] = await this.sql<{ payload: unknown }[]>`select payload from reconciliation_sweep_pages
           where pass_id = ${row.pass_id} and request_key = ${key}`;

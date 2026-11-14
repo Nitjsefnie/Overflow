@@ -976,7 +976,7 @@ async function assertDrainedFailure(
       version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, omittedOversizedFacts: 0,
       checkpoint: now, lastFullPassAt: now, issues: [], pullRequests: [],
     });
-    f.fold.store.getDirtyReconciliationSubjects = async () => [{ kind: "ISSUE", id: 101, number: 1, generation: 1 }];
+    f.fold.store.getDirtyReconciliationSubjects = async () => [{ kind: "ISSUE", id: 101, number: 1, generation: "1" }];
   }
   const fail = async () => {
     await lateStarted;

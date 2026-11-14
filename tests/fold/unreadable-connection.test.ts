@@ -64,7 +64,7 @@ describe("reconcileRepository unreadable issue connections", () => {
       issues: [cachedIssue],
       pullRequests: [{ id: 201, reviews: [cachedReview], rawDiff: "cached diff" }],
     });
-    dependencies.store.getDirtyReconciliationSubjects = async () => [{ kind: "ISSUE" as const, id: 101, number: 1, generation: 7 }];
+    dependencies.store.getDirtyReconciliationSubjects = async () => [{ kind: "ISSUE" as const, id: 101, number: 1, generation: "7" }];
     const discard = vi.fn().mockResolvedValue(undefined);
     dependencies.store.discardDirtyReconciliationSubject = discard;
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -73,7 +73,7 @@ describe("reconcileRepository unreadable issue connections", () => {
       await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
       expect(discard).toHaveBeenCalledTimes(1);
       expect(discard).toHaveBeenCalledWith({
-        repositoryId: "repository", kind: "ISSUE", githubSubjectId: 101, generation: 7,
+        repositoryId: "repository", kind: "ISSUE", githubSubjectId: 101, generation: "7",
       });
       expect(errorLog).toHaveBeenCalledWith(
         "Reconciliation of repository repository discarded unresolvable subject kind=ISSUE number=1 reason=UNREADABLE_FIELD",
@@ -153,7 +153,7 @@ describe("reconcileRepository unreadable issue connections", () => {
       pullRequests: [],
     });
     dependencies.store.getDirtyReconciliationSubjects = async () => [
-      { kind: "ISSUE" as const, id: 999, number: 42, generation: 7 },
+      { kind: "ISSUE" as const, id: 999, number: 42, generation: "7" },
     ];
     dependencies.store.discardDirtyReconciliationSubject = vi.fn().mockResolvedValue(undefined);
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -273,7 +273,7 @@ describe("reconcileRepository unreadable pull request connections", () => {
       version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, checkpoint: new Date(), lastFullPassAt: new Date(), omittedOversizedFacts: 0,
       issues: [closingIssue()], pullRequests: [{ id: 201, reviews: [cachedReview], rawDiff: "cached diff" }],
     });
-    dependencies.store.getDirtyReconciliationSubjects = async () => [{ kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: 9 }];
+    dependencies.store.getDirtyReconciliationSubjects = async () => [{ kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "9" }];
     return dependencies;
   }
 
@@ -290,7 +290,7 @@ describe("reconcileRepository unreadable pull request connections", () => {
         await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
         expect(dependencies.store.failRun).not.toHaveBeenCalled();
         expect(dependencies.store.discardDirtyReconciliationSubject).toHaveBeenCalledExactlyOnceWith({
-          repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: 9,
+          repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: "9",
         });
         expect(errorLog).toHaveBeenCalledExactlyOnceWith(
           `Reconciliation of repository repository discarded unresolvable subject kind=PULL_REQUEST number=11 reason=UNREADABLE_FIELD field=${fieldPath}`,
@@ -317,7 +317,7 @@ describe("reconcileRepository unreadable pull request connections", () => {
         await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
         expect(dependencies.store.failRun).not.toHaveBeenCalled();
         expect(dependencies.store.discardDirtyReconciliationSubject).toHaveBeenCalledExactlyOnceWith({
-          repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: 9,
+          repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: "9",
         });
         expect(errorLog).toHaveBeenCalledExactlyOnceWith(
           `Reconciliation of repository repository discarded unresolvable subject kind=PULL_REQUEST number=11 reason=UNREADABLE_FIELD field=${fieldPath}`,
@@ -356,7 +356,7 @@ describe("reconcileRepository unreadable pull request connections", () => {
     f.gateway.getPullRequestClosingIssues = (pr) => f.read(`closing:${pr.id}`, () => {
       throw new GitHubGraphqlInvalidResponseError("Unreadable closing read", "closingIssuesReferences.nodes");
     });
-    f.pass.dirtySubjects = [{ kind: "PULL_REQUEST", id: 2, number: 2, generation: 3 }];
+    f.pass.dirtySubjects = [{ kind: "PULL_REQUEST", id: 2, number: 2, generation: "3" }];
     const dependencies = reconciliationDependencies({
       github: { walkReconciliation: (_reference, input) => walkReconciliation({ ...input, listing: f.listing, gateway: f.gateway }) },
     });
@@ -365,7 +365,7 @@ describe("reconcileRepository unreadable pull request connections", () => {
     try {
       await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
       expect(dependencies.store.discardDirtyReconciliationSubject).toHaveBeenCalledExactlyOnceWith({
-        repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 2, generation: 3,
+        repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 2, generation: "3",
       });
       expect(errorLog).toHaveBeenCalledExactlyOnceWith(
         "Reconciliation of repository repository discarded unresolvable subject kind=PULL_REQUEST number=2 reason=UNREADABLE_FIELD field=closingIssuesReferences.nodes",
