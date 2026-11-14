@@ -1,6 +1,12 @@
 # shellcheck shell=bash disable=SC2034
-# Sourced by deploy-revision.sh, which explains it.
+# Sourced by deploy-revision.sh, which explains it, and the documented procedures.
 # shortcut: no invalid-UTF-8 refusal or NUL stop as in systemd; such a unit fails is-active.
+export_env_file() {
+  read_env_file "$1" || { printf 'Could not read the environment file %s (missing, unreadable, or not read within %ss); nothing was loaded from it.\n' "$1" "${OVERFLOW_DEPLOY_ENV_READ_TIMEOUT:-5}" >&2; return 1; }
+  # A bare export would print the whole environment.
+  if ((${#env_file_assignments[@]})); then export -- "${env_file_assignments[@]}"; fi
+}
+
 read_env_file() {
   local LC_ALL=C bytes c i n state=pre_key key='' value='' key_ws=-1 value_ws=-1
   bytes=$(timeout "${OVERFLOW_DEPLOY_ENV_READ_TIMEOUT:-5}" cat -- "$1" 2>/dev/null && printf x) || return

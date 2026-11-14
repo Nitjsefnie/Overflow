@@ -21,7 +21,8 @@ describe("ordinary deployment webhook upgrade", () => {
     try {
       await mkdir(join(fixture, ".next-current/cache"), { recursive: true });
       await writeFile(join(fixture, "overflow.env"), "");
-      const script = block.replaceAll("/srv/overflow", fixture)
+      const script = block.replaceAll("/srv/overflow/scripts/systemd-env-file.sh", join(process.cwd(), "scripts/systemd-env-file.sh"))
+        .replaceAll("/srv/overflow", fixture)
         .replaceAll("/etc/overflow/overflow.env", join(fixture, "overflow.env"))
         .replaceAll("/var/log/overflow", join(fixture, "logs"))
         .replaceAll("/run/overflow-deploy.lock", join(fixture, "deploy.lock"));
