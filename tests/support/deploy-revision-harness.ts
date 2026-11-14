@@ -16,6 +16,7 @@ const fixtureDirectories = createOwnedTempDirectoryRegistry(path.join(tmpdir(), 
 export const script = fileURLToPath(new URL("../../scripts/deploy-revision.sh", import.meta.url));
 // Copy the parser alongside the deploy script so their pinned formats travel together.
 export const parser = fileURLToPath(new URL("../../scripts/required-checks-parse.jq", import.meta.url));
+export const envReader = fileURLToPath(new URL("../../scripts/systemd-env-file.sh", import.meta.url));
 // Substitute the fixture lock in the procedure’s exact refusal.
 export const REFUSAL_TEMPLATE =
   "Could not acquire the deploy lock on %LOCK%; refusing to deploy. Consult the deploy procedure's serialization notes before re-running.";
@@ -313,6 +314,7 @@ export async function makeFixture(options: {
   await mkdir(path.join(tree, "scripts"));
   await writeFile(path.join(tree, "scripts", "deploy-revision.sh"), await readFile(script, "utf8"));
   await writeFile(path.join(tree, "scripts", "required-checks-parse.jq"), await readFile(parser, "utf8"));
+  await writeFile(path.join(tree, "scripts", "systemd-env-file.sh"), await readFile(envReader, "utf8"));
   const envFile = path.join(dir, "overflow.env");
   await writeFile(envFile, "OVERFLOW_FIXTURE_ENV_MARKER=loaded\n");
   const logDir = path.join(dir, "logs");

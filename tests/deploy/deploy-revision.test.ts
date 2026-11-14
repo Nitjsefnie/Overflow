@@ -34,6 +34,7 @@ import {
   makeFixture,
   missingGhPath,
   parser,
+  envReader,
   readLog,
   refusalFor,
   runDeploy,
@@ -2090,7 +2091,8 @@ async function makeGitFixture(): Promise<{ fixture: Fixture; behind: string; tip
   await mkdir(path.join(origin, "scripts"));
   await writeFile(path.join(origin, "scripts", "deploy-revision.sh"), await readFile(script, "utf8"));
   await writeFile(path.join(origin, "scripts", "required-checks-parse.jq"), await readFile(parser, "utf8"));
-  run(origin, ["add", ".gitignore", "app.txt", SOURCE_PATH, MAP_PATH, "scripts/deploy-revision.sh", "scripts/required-checks-parse.jq"]);
+  await writeFile(path.join(origin, "scripts", "systemd-env-file.sh"), await readFile(envReader, "utf8"));
+  run(origin, ["add", ".gitignore", "app.txt", SOURCE_PATH, MAP_PATH, "scripts/deploy-revision.sh", "scripts/required-checks-parse.jq", "scripts/systemd-env-file.sh"]);
   run(origin, ["commit", "-q", "-m", "base"]);
   const behind = run(origin, ["rev-parse", "HEAD"]);
   const git = (...args: string[]): string => run(fixture.tree, args);
@@ -2103,6 +2105,7 @@ async function makeGitFixture(): Promise<{ fixture: Fixture; behind: string; tip
   // untracked placeholders would collide with them.
   await rm(path.join(fixture.tree, "scripts", "deploy-revision.sh"));
   await rm(path.join(fixture.tree, "scripts", "required-checks-parse.jq"));
+  await rm(path.join(fixture.tree, "scripts", "systemd-env-file.sh"));
   git("checkout", "-q", "-B", "main", behind);
   for (const n of [1, 2, 3]) {
     await writeFile(path.join(origin, "incoming.txt"), `${n}\n`);
