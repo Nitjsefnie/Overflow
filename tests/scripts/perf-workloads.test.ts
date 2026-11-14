@@ -21,8 +21,7 @@ beforeAll(async () => {
   const options = { database: "overflow_ci", user: "perf_test" };
   const built = new GenericContainer(POSTGRES_IMAGE)
     .withEnvironment({ POSTGRES_DB: options.database, POSTGRES_USER: options.user, POSTGRES_PASSWORD: password })
-    .withExposedPorts(5432)
-    .withWaitStrategy(postgresWaitStrategy(options));
+    .withExposedPorts(5432).withWaitStrategy(postgresWaitStrategy(options));
   publishPostgresOnLoopback(built, "0");
   container = await built.start();
   databaseUrl = postgresConnectionUrl({ ...options, password, ...await startedPostgresEndpoint(container) });
@@ -47,9 +46,15 @@ afterAll(async () => {
 });
 
 it("measures all real workloads twice deterministically without touching the parent database", async () => {
-  const measurements = await measurePerfWorkloads(databaseUrl);
+  const statements: Record<string, string[]> = {};
+  const measurements = await measurePerfWorkloads(databaseUrl, (id, text) => { (statements[id] ??= []).push(text); });
   process.stdout.write(`${JSON.stringify(measurements)}\n`);
-  expect(Object.keys(measurements).sort()).toEqual(["board-load", "repository-fold", "webhook-ingestion"]);
+  expect(Object.keys(measurements).sort()).toEqual(["board-load", "repository-fold", "repository-inactive-fold", "repository-sweep-fold", "webhook-ingestion"]);
+  // Each counted sweep-control step: open, spend, staging, completion, discardIfInactive; the inactive fold's pass discard.
+  const inactive = /select active from registered_repositories\s+where id = \$1 for share/, sweep: Record<string, RegExp[]> = {
+    "repository-sweep-fold": [/insert into reconciliation_sweep_passes/, /update reconciliation_sweep_rounds set spent/, /insert into reconciliation_sweep_walk_subjects/,
+      /delete from reconciliation_sweep_passes where pass_id/, inactive], "repository-inactive-fold": [/delete from reconciliation_sweep_passes where repository_id = \$1$/, inactive] };
+  expect(Object.entries(sweep).flatMap(([id, patterns]) => patterns.filter((pattern) => !statements[id]?.some((text) => pattern.test(text))).map(String))).toEqual([]);
   for (const samples of Object.values(measurements)) {
     expect(samples).toHaveLength(2);
     expect(samples[0]).toBeGreaterThan(0);
@@ -62,9 +67,7 @@ it("measures all real workloads twice deterministically without touching the par
 });
 
 it("runs the workflow's plain Node command against an isolated migrated database", () => {
-  const gate = spawnSync(process.execPath, ["scripts/check-perf-budget.ts"], {
-    cwd: root, encoding: "utf8", env: { ...process.env, OVERFLOW_DATABASE_URL: databaseUrl },
-  });
+  const gate = spawnSync(process.execPath, ["scripts/check-perf-budget.ts"], { cwd: root, encoding: "utf8", env: { ...process.env, OVERFLOW_DATABASE_URL: databaseUrl } });
   expect(gate.stderr).not.toContain("Transform Types is an experimental feature");
   expect(gate.status, `${gate.stdout}\n${gate.stderr}`).toBe(0);
   expect(gate.stdout).toContain("performance budget check: 0 violation(s)");
@@ -73,9 +76,7 @@ it("runs the workflow's plain Node command against an isolated migrated database
 it("refuses the database query override before it can truncate the parent sentinel", async () => {
   const override = new URL(databaseUrl);
   override.searchParams.set("database", "overflow_ci");
-  const gate = spawnSync(process.execPath, ["scripts/check-perf-budget.ts"], {
-    cwd: root, encoding: "utf8", env: { ...process.env, OVERFLOW_DATABASE_URL: override.href },
-  });
+  const gate = spawnSync(process.execPath, ["scripts/check-perf-budget.ts"], { cwd: root, encoding: "utf8", env: { ...process.env, OVERFLOW_DATABASE_URL: override.href } });
   const users = await sql`select github_login from users where github_user_id = 1`;
   const databases = await sql`select datname from pg_database where datname like 'overflow_perf_%'`;
   expect({ exit: gate.status, users, databases }, `${gate.stdout}\n${gate.stderr}`).toEqual({
@@ -101,8 +102,7 @@ it("counts the same operation on cold and fully initialized pools", async () => 
       return await countOperationStatements(client, "overflow_ci", async () => {
         const coordination = await client.reserve();
         try {
-          await coordination`select 1`;
-          await client.begin(async (tx) => { await tx`select 1`; });
+          await coordination`select 1`; await client.begin(async (tx) => { await tx`select 1`; });
         } finally { coordination.release(); }
       });
     } finally { await client.end(); }
@@ -128,8 +128,7 @@ it("refuses an effective-database mismatch before the operation can write", asyn
 it("proves the migration process uses the expected scratch database before migrations", () => {
   const preload = new URL("../../scripts/perf-node-setup.mjs", import.meta.url).href;
   const migration = spawnSync("pnpm", ["db:migrate"], {
-    cwd: root, encoding: "utf8", env: { ...process.env, OVERFLOW_DATABASE_URL: databaseUrl,
-      OVERFLOW_PERF_EXPECTED_DATABASE: "overflow_perf_other",
+    cwd: root, encoding: "utf8", env: { ...process.env, OVERFLOW_DATABASE_URL: databaseUrl, OVERFLOW_PERF_EXPECTED_DATABASE: "overflow_perf_other",
       NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${preload}` },
   });
   expect(migration.status, migration.stdout + migration.stderr).not.toBe(0);
