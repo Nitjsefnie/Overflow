@@ -50,7 +50,7 @@ it("measures all real workloads twice deterministically without touching the par
   const measurements = await measurePerfWorkloads(databaseUrl, (id, text) => { (statements[id] ??= []).push(text); });
   process.stdout.write(`${JSON.stringify(measurements)}\n`);
   expect(Object.keys(measurements).sort()).toEqual(["board-load", "repository-fold", "repository-inactive-fold", "repository-sweep-fold", "webhook-ingestion"]);
-  // Each counted sweep-control step: open, spend, staging, completion, discardIfInactive; the inactive fold's discardPass.
+  // Each counted sweep-control step: open, spend, staging, completion, discardIfInactive; the inactive fold's pass discard.
   const inactive = /select active from registered_repositories\s+where id = \$1 for share/, sweep: Record<string, RegExp[]> = {
     "repository-sweep-fold": [/insert into reconciliation_sweep_passes/, /update reconciliation_sweep_rounds set spent/, /insert into reconciliation_sweep_walk_subjects/,
       /delete from reconciliation_sweep_passes where pass_id/, inactive], "repository-inactive-fold": [/delete from reconciliation_sweep_passes where repository_id = \$1$/, inactive] };
