@@ -249,7 +249,7 @@ export class GitHubGraphqlClient {
   }
 }
 
-// Null entries and non-list `nodes` ride nowhere: the error names the field (issue 1408).
+// Null entries and non-list `nodes` ride nowhere: the error names the field.
 export function requireConnectionNodes<TNode>(fieldPath: string, nodes: unknown): TNode[] {
   if (!Array.isArray(nodes)) {
     throw new GitHubGraphqlInvalidResponseError(`GitHub GraphQL response was invalid. ${fieldPath} was not a list.`, fieldPath);
