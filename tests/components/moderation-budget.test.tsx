@@ -67,7 +67,7 @@ beforeEach(async () => {
   loaders.moderators.mockResolvedValue([]);
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-09-07T14:15:00.000Z"));
-  vi.stubEnv("GITHUB_GRAPHQL_BUDGET_RESERVE", "600");
+  vi.stubEnv("OVERFLOW_GITHUB_GRAPHQL_BUDGET_RESERVE", "600");
   const { createGitHubGraphqlBudgetStore } = await import("@/lib/github/rate-limit-budget");
   const store = createGitHubGraphqlBudgetStore();
   store.record("sponsor-1", {
@@ -155,7 +155,7 @@ describe("moderation budget integration", () => {
     expect(firstObserved).toHaveAttribute("datetime", "2026-09-07T14:15:00.000Z");
 
     cleanup();
-    vi.stubEnv("GITHUB_GRAPHQL_BUDGET_RESERVE", "800");
+    vi.stubEnv("OVERFLOW_GITHUB_GRAPHQL_BUDGET_RESERVE", "800");
     vi.setSystemTime(new Date("2026-09-07T15:01:00.000Z"));
     store.record("sponsor-1", {
       remaining: 4200, limit: null, cost: 1,

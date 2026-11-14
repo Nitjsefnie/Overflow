@@ -865,7 +865,7 @@ describe("reconciliation budget holds under the repository lock", () => {
   it("defaults to the shared budget and configured reserve", async () => {
     const { fold, budgetStore, store, worker } = fixture(600);
     vi.spyOn(budgets, "gitHubGraphqlBudget").mockReturnValue(budgetStore);
-    vi.stubEnv("GITHUB_GRAPHQL_BUDGET_RESERVE", "700");
+    vi.stubEnv("OVERFLOW_GITHUB_GRAPHQL_BUDGET_RESERVE", "700");
     fold.budget = createReconciliationBudgetGate();
     await expect(runNextReconciliationJob(worker)).resolves.toBe("BUDGET_HELD");
     expect(store.deferReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", resetAt);
