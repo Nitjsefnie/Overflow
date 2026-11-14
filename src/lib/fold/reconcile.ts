@@ -1,4 +1,4 @@
-import { discardInactivePassAfterFailure, discardSweepPass, holdSweepPass, StagedPassDataUnreadable, withSweepPass, type ReconciliationSweepControl, type SweepPass } from "@/lib/fold/sweep-pass";
+import { discardInactivePassAfterRun, discardSweepPass, holdSweepPass, StagedPassDataUnreadable, withSweepPass, type ReconciliationSweepControl, type SweepPass } from "@/lib/fold/sweep-pass";
 import type { ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
 import { readEnv } from "@/lib/env";
 import { readDiffOnlyBacklogThreshold } from "@/lib/fold/repository-size";
@@ -168,7 +168,7 @@ export async function reconcileRepository(
       ? sanitizedGateway
       : Reflect.get(target, property, receiver),
   });
-  return discardInactivePassAfterFailure(dependencies.sweep, repositoryId, () => dependencies.store.withRepositoryReconciliation(
+  return discardInactivePassAfterRun(dependencies.sweep, repositoryId, () => dependencies.store.withRepositoryReconciliation(
     repositoryId,
     () => reconcileRepositoryWhileCoordinated(sanitizedDependencies, repositoryId, options),
   ));
