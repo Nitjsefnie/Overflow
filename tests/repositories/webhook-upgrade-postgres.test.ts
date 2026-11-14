@@ -84,9 +84,7 @@ describe("upgrading actual persisted registrations", () => {
     expect(await sql`select * from registered_repositories where id = ${repositoryIds[0]!}`).toEqual([before]);
     expect(await sql`select * from repository_reconciliation_jobs where repository_id = ${repositoryIds[0]!}`).toEqual([]);
     expect(lines.map((line) => JSON.parse(line))).toEqual([
-      { repositoryId: repositoryIds[0], subscription: "SKIPPED", queue: "NOT_ATTEMPTED", failure: "REPOSITORY_GONE" },
-      { succeeded: 0, failed: 0, gone: 1 },
-    ]);
+      { repositoryId: repositoryIds[0], subscription: "SKIPPED", queue: "NOT_ATTEMPTED", failure: "REPOSITORY_GONE" }, { succeeded: 0, failed: 0, gone: 1 }]);
   });
 
   it("reuses durable material after timeout, finalization and queue failures, and owes a moved hook's re-derivation until queued", async () => {
