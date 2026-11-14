@@ -125,7 +125,10 @@ describe("scripts/deploy-revision.sh — the startup-sweep override", () => {
     ["a line continuation", "", `${KEY}=\\\n1\n`, "1"],
     ["the line commented out by #", "", `#${KEY}=1\n`, ""],
     ["the line commented out by ;", "", `;${KEY}=1\n`, ""],
-    ["export before the name", "", `export ${KEY}=1\n`, ""],
+    ["names systemd drops as invalid, at the first read too", `export ${KEY}=1\n9${KEY}=1\n${KEY}-X=1\n`, undefined, ""],
+    ["spaces around = and after the value", "", `${KEY} = 1 \t\n`, "1"],
+    ["a backslash inside double quotes", "", `${KEY}="\\1"\n`, "\\\\1"],
+    ["no final newline", "", `${KEY}=1`, "1"],
     ["the line inside another variable's double-quoted value", "", `OTHER="a\n${KEY}=1\n"\n`, ""],
   ];
 
