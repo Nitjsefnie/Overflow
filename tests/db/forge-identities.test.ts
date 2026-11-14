@@ -184,7 +184,7 @@ describe("migration 038: forge identities and provider columns", () => {
       store: {
         withWebhookUpgradeLock: async (_id, operation) => operation(),
         stageWebhookCredential: async () => { throw new Error("must not stage a hookless registration"); },
-        finalizeWebhookCredential: async () => false,
+        finalizeWebhookCredential: async () => false, markWebhookRederivationOwed: async () => null, clearWebhookRederivationOwed: async () => {},
         listActiveRepositoryIds: async () => [created!.id],
         findActiveRepositoryById: async (id) => (created!.id === id ? { ...created! } : null),
         findActiveRepositoryForgeById: async () => ({ provider: "gitlab", instanceUrl: "https://gitlab.example.com" }),

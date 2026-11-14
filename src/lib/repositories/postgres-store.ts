@@ -107,11 +107,7 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
         select id, webhook_credential_id, encrypted_webhook_secret, provider, instance_url,
           case when provider = 'github' then github_repository_id else forge_project_id end as project_id,
           github_webhook_id, webhook_configured_at
-        from registered_repositories
-        where id = ${target.repositoryId} and provider = ${target.provider}
-          and instance_url is not distinct from ${target.instanceUrl}
-          and (case when provider = 'github' then github_repository_id else forge_project_id end) = ${target.projectId}
-          and github_webhook_id = ${target.webhookId} and active = true and unregistered_at is null
+        from registered_repositories where ${this.webhookRow(target)}
         for update
       `;
       if (row === undefined) return null;
@@ -132,11 +128,9 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
   public async finalizeWebhookCredential(credential: WebhookCredentialRecord, beforeCommit?: () => Promise<void>): Promise<boolean> {
     return this.sql.begin(async (transaction) => {
       const [row] = await transaction<{ id: string }[]>`
-        update registered_repositories set webhook_configured_at = coalesce(webhook_configured_at, now())
-        where id = ${credential.repositoryId} and webhook_credential_id = ${credential.credentialId}
-          and provider = ${credential.provider} and instance_url is not distinct from ${credential.instanceUrl}
-          and (case when provider = 'github' then github_repository_id else forge_project_id end) = ${credential.projectId}
-          and github_webhook_id = ${credential.webhookId} and active = true and unregistered_at is null
+        update registered_repositories set webhook_configured_at = coalesce(webhook_configured_at, now()),
+          webhook_rederivation_owed_at = case when webhook_configured_at is null then null else webhook_rederivation_owed_at end
+        where ${this.webhookRow(credential)}
         returning id
       `;
       if (row === undefined) return false;
@@ -145,11 +139,33 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
     }) as Promise<boolean>;
   }
 
+  /** Owes the credential's repository a re-derivation; answers whether one was owed already, or null once the row moved on. */
+  public async markWebhookRederivationOwed(credential: WebhookCredentialRecord): Promise<boolean | null> {
+    const [row] = await this.sql<{ owed: boolean }[]>`
+      with previous as (select id, webhook_rederivation_owed_at as owed_at from registered_repositories where ${this.webhookRow(credential)} for update)
+      update registered_repositories as repository set webhook_rederivation_owed_at = coalesce(previous.owed_at, now())
+      from previous where repository.id = previous.id returning previous.owed_at is not null as owed
+    `;
+    return row === undefined ? null : row.owed;
+  }
+
+  public async clearWebhookRederivationOwed(credential: WebhookCredentialRecord): Promise<void> {
+    await this.sql`update registered_repositories set webhook_rederivation_owed_at = null where ${this.webhookRow(credential)}`;
+  }
+
   public async withWebhookUpgradeLock<T>(repositoryId: string, operation: () => Promise<T>): Promise<T> {
     return getCoordinationSql().begin(async (transaction) => {
       await transaction`select pg_advisory_xact_lock(hashtextextended(${`webhook-upgrade:${repositoryId}`}, 0))`;
       return operation();
     }) as Promise<T>;
+  }
+
+  /** The staged hook's own registration, still active (and holding the credential, given one): every webhook-credential write is held to it. */
+  private webhookRow(target: WebhookCredentialTarget & { credentialId?: string }) {
+    return this.sql`id = ${target.repositoryId} and provider = ${target.provider} and instance_url is not distinct from ${target.instanceUrl}
+      and (case when provider = 'github' then github_repository_id else forge_project_id end) = ${target.projectId}
+      and github_webhook_id = ${target.webhookId} and active = true and unregistered_at is null
+      ${target.credentialId === undefined ? this.sql`` : this.sql`and webhook_credential_id = ${target.credentialId}`}`;
   }
 
   private toWebhookCredential(row: WebhookCredentialRow): WebhookCredentialRecord {
@@ -339,7 +355,7 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
       const [updated] = await transaction<RepositoryRow[]>`
         update registered_repositories
         set active = false, unregistered_at = now(), updated_at = now(),
-          webhook_credential_id = null, encrypted_webhook_secret = null, webhook_configured_at = null
+          webhook_credential_id = null, encrypted_webhook_secret = null, webhook_configured_at = null, webhook_rederivation_owed_at = null
         where id = ${row.id} and sponsor_id = ${input.sponsorId}
         returning
           id, github_repository_id, owner_name, sponsor_id,
@@ -430,7 +446,7 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
             forge_project_id = excluded.forge_project_id,
             webhook_credential_id = excluded.webhook_credential_id,
             encrypted_webhook_secret = excluded.encrypted_webhook_secret,
-            webhook_configured_at = excluded.webhook_configured_at,
+            webhook_configured_at = excluded.webhook_configured_at, webhook_rederivation_owed_at = null,
             active = true,
             unregistered_at = null,
             sanction_deactivated_at = null,

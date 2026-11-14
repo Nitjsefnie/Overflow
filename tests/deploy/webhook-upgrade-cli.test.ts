@@ -11,7 +11,7 @@ function fixture() {
     store: {
       withWebhookUpgradeLock: async (_id, operation) => operation(),
       stageWebhookCredential: async () => { throw new Error("must not stage without sponsor credentials"); },
-      finalizeWebhookCredential: async () => false,
+      finalizeWebhookCredential: async () => false, markWebhookRederivationOwed: async () => false, clearWebhookRederivationOwed: async () => {},
       listActiveRepositoryIds: async () => ["repository-1", "repository-2"],
       findActiveRepositoryById: async (id) => ({ id, githubRepositoryId: 42, githubWebhookId: 81, registrationMethod: "oauth_hook", ownerName: "octo/old", sponsorId: id, visibility: "PUBLIC" }),
       findActiveRepositoryForgeById: async () => ({ provider: "github", instanceUrl: null }),

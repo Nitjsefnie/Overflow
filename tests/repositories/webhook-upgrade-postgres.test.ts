@@ -3,7 +3,7 @@ import { createHmac } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Sql } from "postgres";
 import { runMigrations } from "../../scripts/migrate";
-import { runWebhookUpgradeCli } from "../../scripts/upgrade-webhooks";
+import { runWebhookUpgradeCli, type WebhookUpgradeCliDependencies } from "../../scripts/upgrade-webhooks";
 import { startPostgresContainer, type StartedPostgres } from "../support/postgres-container";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { closeSql, getSql } from "@/lib/db/client";
@@ -41,6 +41,20 @@ beforeAll(async () => {
   }
 });
 
+type Store = WebhookUpgradeCliDependencies["store"];
+function realStore(registrations: PostgresRepositoryStore, queue: PostgresFoldStore, overrides: Partial<Store> = {}): Store {
+  return {
+    listActiveRepositoryIds: () => queue.listActiveRepositoryIds(), getGitHubAccessToken: (id) => registrations.getGitHubAccessToken(id),
+    findActiveRepositoryById: (id) => registrations.findActiveRepositoryById(id), findActiveRepositoryForgeById: (id) => registrations.findActiveRepositoryForgeById(id),
+    getForgeToken: async () => { throw new Error("must not read a forge identity for a GitHub registration"); },
+    stageWebhookCredential: (target) => registrations.stageWebhookCredential(target), withWebhookUpgradeLock: registrations.withWebhookUpgradeLock.bind(registrations),
+    finalizeWebhookCredential: (credential, beforeCommit) => registrations.finalizeWebhookCredential(credential, beforeCommit),
+    markWebhookRederivationOwed: (credential) => registrations.markWebhookRederivationOwed(credential),
+    clearWebhookRederivationOwed: (credential) => registrations.clearWebhookRederivationOwed(credential),
+    requestRepositoryRederivation: (id, at) => queue.requestRepositoryRederivation(id, at), ...overrides,
+  };
+}
+
 afterAll(async () => {
   await closeSql();
   await started?.container.stop();
@@ -56,17 +70,7 @@ describe("upgrading actual persisted registrations", () => {
     const lines: string[] = [];
     const requests: string[] = [];
     expect.soft(await runWebhookUpgradeCli([], {
-      store: {
-        listActiveRepositoryIds: async () => [repositoryIds[0]!],
-        findActiveRepositoryById: registrations.findActiveRepositoryById.bind(registrations),
-        findActiveRepositoryForgeById: registrations.findActiveRepositoryForgeById.bind(registrations),
-        getGitHubAccessToken: async () => "synthetic-sponsor-token",
-        getForgeToken: async () => null,
-        stageWebhookCredential: registrations.stageWebhookCredential.bind(registrations),
-        finalizeWebhookCredential: registrations.finalizeWebhookCredential.bind(registrations),
-        withWebhookUpgradeLock: registrations.withWebhookUpgradeLock.bind(registrations),
-        requestRepositoryRederivation: queue.requestRepositoryRederivation.bind(queue),
-      },
+      store: realStore(registrations, queue, { listActiveRepositoryIds: async () => [repositoryIds[0]!], getGitHubAccessToken: async () => "synthetic-sponsor-token" }),
       webhookUrls: { github: "https://overflow.test/api/github/webhooks", gitlab: "" },
       createGateway: (accessToken) => new GitHubGateway({ accessToken, fetch: async (input, init) => {
         const request = new Request(input, init);
@@ -85,11 +89,12 @@ describe("upgrading actual persisted registrations", () => {
     ]);
   });
 
-  it("reuses durable material after timeout, finalization failure, and queue failure", async () => {
+  it("reuses durable material after timeout, finalization and queue failures, and owes a moved hook's re-derivation until queued", async () => {
+    // The leftover marker models an owed row whose credential was reset: its first finalization queues and pays it.
     const [registered] = await sql<{ id: string }[]>`
       insert into registered_repositories
-        (github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme)
-      values (46, 'retry/project', ${sponsorIds[0]!}, 'PUBLIC', 85, ${sql.json(validDifficultyScheme())}) returning id
+        (github_repository_id, owner_name, sponsor_id, visibility, github_webhook_id, difficulty_scheme, webhook_rederivation_owed_at)
+      values (46, 'retry/project', ${sponsorIds[0]!}, 'PUBLIC', 85, ${sql.json(validDifficultyScheme())}, now()) returning id
     `;
     const registrations = new PostgresRepositoryStore(sql, key);
     const queue = new PostgresFoldStore(sql, key);
@@ -101,23 +106,17 @@ describe("upgrading actual persisted registrations", () => {
     const writes: Array<{ url: string; secret: string }> = [];
     const outcomes: string[] = [];
     const dependencies = {
-      store: {
-        listActiveRepositoryIds: async () => [registered.id],
-        findActiveRepositoryById: registrations.findActiveRepositoryById.bind(registrations),
-        findActiveRepositoryForgeById: registrations.findActiveRepositoryForgeById.bind(registrations),
-        getGitHubAccessToken: async () => "synthetic-sponsor-token",
-        getForgeToken: async () => null,
-        stageWebhookCredential: registrations.stageWebhookCredential.bind(registrations),
-        withWebhookUpgradeLock: registrations.withWebhookUpgradeLock.bind(registrations),
-        finalizeWebhookCredential: async (...args: Parameters<typeof registrations.finalizeWebhookCredential>) => {
+      store: realStore(registrations, queue, {
+        listActiveRepositoryIds: async () => [registered.id], getGitHubAccessToken: async () => "synthetic-sponsor-token",
+        finalizeWebhookCredential: async (...args) => {
           if (phase === "finalize") throw new Error("synthetic database failure");
           return registrations.finalizeWebhookCredential(...args);
         },
-        requestRepositoryRederivation: async (id: string, at: Date) => {
-          if (phase === "queue") throw new Error("synthetic queue failure");
+        requestRepositoryRederivation: async (id, at) => {
+          if (phase.startsWith("queue")) throw new Error("synthetic queue failure");
           return queue.requestRepositoryRederivation(id, at);
         },
-      },
+      }),
       webhookUrls: { github: "https://overflow.test/api/github/webhooks", gitlab: "" },
       createGateway: () => new GitHubGateway({ accessToken: "synthetic-sponsor-token", fetch: async (input, init) => {
         const request = new Request(input, init);
@@ -137,22 +136,31 @@ describe("upgrading actual persisted registrations", () => {
     };
     try {
       let material: { webhook_credential_id: string; encrypted_webhook_secret: Buffer } | undefined;
-      for (const step of ["timeout", "finalize", "queue", "ok"]) {
+      // After the first finalization the hook moves, two queue writes fail, the owed write lands, and nothing is owed.
+      for (const [step, configured, owed, generation] of [["timeout", false, true, null], ["finalize", false, true, null], ["queue", false, true, null],
+        ["ok", true, false, 1], ["queue moved", true, true, 1], ["queue", true, true, 1], ["ok", true, false, 2], ["ok", true, false, 2]] as const) {
         phase = step;
+        if (step === "queue moved") remote.config.url = "https://old.test/moved";
         expect(await runWebhookUpgradeCli([], dependencies)).toBe(step === "ok" ? 0 : 1);
-        const [row] = await sql<{ webhook_credential_id: string; encrypted_webhook_secret: Buffer; webhook_configured_at: Date | null }[]>`
-          select webhook_credential_id, encrypted_webhook_secret, webhook_configured_at
+        const [row] = await sql<{ webhook_credential_id: string; encrypted_webhook_secret: Buffer }[]>`
+          select webhook_credential_id, encrypted_webhook_secret, webhook_configured_at is not null as configured, webhook_rederivation_owed_at is not null as owed,
+            (select rederivation_generation::int from repository_reconciliation_jobs where repository_id = ${registered.id}) as generation
           from registered_repositories where id = ${registered.id}
         `;
         material ??= { webhook_credential_id: row.webhook_credential_id, encrypted_webhook_secret: row.encrypted_webhook_secret };
-        expect(row).toMatchObject(material);
-        expect(row.webhook_configured_at !== null, JSON.stringify({ step, outcomes })).toBe(step === "ok");
+        expect(row, JSON.stringify({ step, outcomes })).toEqual({ ...material, configured, owed, generation });
       }
-      expect(writes).toHaveLength(4);
+      expect(outcomes.map((line) => JSON.parse(line).queue).filter(Boolean)).toEqual(["NOT_ATTEMPTED", "NOT_ATTEMPTED", "FAILED", "QUEUED", "FAILED", "FAILED", "QUEUED", "NOT_NEEDED"]);
+      expect(writes).toHaveLength(8);
       expect(writes.every((write) => write.url === writes[0].url && write.secret === writes[0].secret)).toBe(true);
       expect(outcomes.join("\n")).not.toContain(writes[0].secret);
       expect(await sql`select reason, state from repository_reconciliation_jobs where repository_id = ${registered.id}`)
         .toEqual([{ reason: "REDERIVATION", state: "PENDING" }]);
+      const credential = (await registrations.stageWebhookCredential({ repositoryId: registered.id, provider: "github", instanceUrl: null, projectId: 46, webhookId: 85 }))!;
+      expect([await registrations.markWebhookRederivationOwed(credential), await registrations.markWebhookRederivationOwed(credential)]).toEqual([false, true]);
+      expect((await registrations.unregisterRepository({ ownerName: "retry/project", sponsorId: sponsorIds[0]!, provider: "github" })).kind).toBe("UNREGISTERED");
+      expect([await sql`select webhook_rederivation_owed_at from registered_repositories where id = ${registered.id}`, await registrations.markWebhookRederivationOwed(credential)])
+        .toEqual([[{ webhook_rederivation_owed_at: null }], null]);
     } finally {
       await sql`delete from repository_reconciliation_jobs where repository_id = ${registered.id}`;
       await sql`delete from registered_repositories where id = ${registered.id}`;
@@ -230,17 +238,7 @@ describe("upgrading actual persisted registrations", () => {
     const remoteUrls = new Map<number, string>();
     const lines: string[] = [];
     const dependencies = {
-      store: {
-        withWebhookUpgradeLock: registrations.withWebhookUpgradeLock.bind(registrations),
-        stageWebhookCredential: registrations.stageWebhookCredential.bind(registrations),
-        finalizeWebhookCredential: registrations.finalizeWebhookCredential.bind(registrations),
-        listActiveRepositoryIds: () => queue.listActiveRepositoryIds(),
-        findActiveRepositoryById: (id: string) => registrations.findActiveRepositoryById(id),
-        findActiveRepositoryForgeById: (id: string) => registrations.findActiveRepositoryForgeById(id),
-        getGitHubAccessToken: (id: string) => registrations.getGitHubAccessToken(id),
-        getForgeToken: async () => { throw new Error("must not read a forge identity for a GitHub registration"); },
-        requestRepositoryRederivation: queue.requestRepositoryRederivation.bind(queue),
-      },
+      store: realStore(registrations, queue),
       webhookUrls: { github: "https://overflow.example/api/github/webhooks", gitlab: "https://overflow.example/api/gitlab/webhooks" },
       createGateway: (accessToken: string) => new GitHubGateway({ accessToken, fetch: async (input, init) => {
         const request = new Request(input, init);

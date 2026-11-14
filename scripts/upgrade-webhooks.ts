@@ -51,6 +51,8 @@ function productionDependencies(write: (line: string) => void): WebhookUpgradeCl
     store: {
       stageWebhookCredential: registrations.stageWebhookCredential.bind(registrations),
       finalizeWebhookCredential: registrations.finalizeWebhookCredential.bind(registrations),
+      markWebhookRederivationOwed: registrations.markWebhookRederivationOwed.bind(registrations),
+      clearWebhookRederivationOwed: registrations.clearWebhookRederivationOwed.bind(registrations),
       withWebhookUpgradeLock: registrations.withWebhookUpgradeLock.bind(registrations),
       listActiveRepositoryIds: () => queue.listActiveRepositoryIds(),
       findActiveRepositoryById: (id) => registrations.findActiveRepositoryById(id),
