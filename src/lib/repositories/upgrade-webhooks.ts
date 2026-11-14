@@ -18,7 +18,8 @@ export type WebhookUpgradeOutcome = {
 export type WebhookUpgradeDependencies = {
   store: Pick<PostgresFoldStore, "listActiveRepositoryIds" | "requestRepositoryRederivation">
     & Pick<PostgresRepositoryStore, "findActiveRepositoryById" | "findActiveRepositoryForgeById" | "getGitHubAccessToken"
-      | "stageWebhookCredential" | "finalizeWebhookCredential" | "withWebhookUpgradeLock">
+      | "stageWebhookCredential" | "finalizeWebhookCredential" | "markWebhookRederivationOwed" | "clearWebhookRederivationOwed"
+      | "withWebhookUpgradeLock">
     & {
       /**
        * The sponsor's decrypted GitLab PAT for a normalized instance, or null
@@ -122,10 +123,10 @@ async function upgradeRegistration(
       repositoryId, provider: "github", instanceUrl: null, projectId: repository.id, webhookId: registration.githubWebhookId,
     });
     if (credential === null) return outcome;
-    const changed = await github.configureWebhook(repository, registration.githubWebhookId, {
+    const webhookId = registration.githubWebhookId;
+    return await finishUpgrade({ store }, credential, () => github.configureWebhook(repository, webhookId, {
       callbackUrl: webhookCallbackUrl(webhookUrls.github, credential.credentialId), secret: credential.secret,
-    });
-    return await finishUpgrade({ store }, credential, changed, outcome);
+    }), outcome);
   } catch (error) {
     // Only the stage code reaches the outcome: any exception here can carry
     // credentials, upstream bodies or DB diagnostics, so its cause is sanitized.
@@ -172,21 +173,29 @@ async function upgradeGitLabRegistration(
     repositoryId, provider: "gitlab", instanceUrl: forge.instanceUrl, projectId: repository.id, webhookId,
   });
   if (credential === null) return outcome;
-  const changed = await gitlab.configureWebhook(
+  return await finishUpgrade({ store }, credential, () => gitlab.configureWebhook(
     { owner: repository.owner, name: repository.name },
     webhookId,
     { callbackUrl: webhookCallbackUrl(webhookUrls.gitlab, credential.credentialId), secret: credential.secret },
-  );
-  return await finishUpgrade({ store }, credential, changed, outcome);
+  ), outcome);
 }
 
+/**
+ * A first finalization queues inside its own transaction. For a finalized
+ * hook the re-derivation is owed durably before the forge is asked (a lost
+ * response looks like a refused update) and cleared only once queued or found
+ * unneeded, so a later run queues one whose queue write or response was lost.
+ */
 async function finishUpgrade(
   { store }: Pick<WebhookUpgradeDependencies, "store">,
   credential: WebhookCredentialRecord,
-  changed: boolean,
+  configure: () => Promise<boolean>,
   outcome: WebhookUpgradeOutcome,
 ): Promise<WebhookUpgradeOutcome> {
   const firstUpgrade = credential.configuredAt === null;
+  const owed = firstUpgrade ? false : await store.markWebhookRederivationOwed(credential);
+  if (owed === null) return outcome;
+  const changed = await configure();
   if (!await store.finalizeWebhookCredential(credential, firstUpgrade ? async () => {
     outcome.subscription = "VERIFIED";
     await queueRederivation({ store }, credential.repositoryId, outcome);
@@ -194,9 +203,16 @@ async function finishUpgrade(
     outcome.failure = "SUBSCRIPTION_FAILED";
   } : undefined)) return outcome;
   outcome.subscription = "VERIFIED";
-  if (!firstUpgrade && changed) return await queueRederivation({ store }, credential.repositoryId, outcome);
-  if (!firstUpgrade) outcome.queue = "NOT_NEEDED";
-  outcome.failure = null;
+  if (firstUpgrade) {
+    outcome.failure = null;
+    return outcome;
+  }
+  const owes = changed || owed;
+  if (owes) await queueRederivation({ store }, credential.repositoryId, outcome);
+  // Until the clear lands the debt stands and the next run queues again, so a failed clear reports it unpaid.
+  [outcome.queue, outcome.failure] = ["FAILED", "QUEUE_FAILED"];
+  await store.clearWebhookRederivationOwed(credential);
+  [outcome.queue, outcome.failure] = [owes ? "QUEUED" : "NOT_NEEDED", null];
   return outcome;
 }
 

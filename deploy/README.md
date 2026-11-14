@@ -1381,12 +1381,17 @@ An exception behind a failure also writes one stderr line to the same log,
 string credentials, `password` values and GitHub and Overflow token prefixes
 redacted. Other token shapes in a message are not redacted, so keep the log private.
 `subscription: VERIFIED` and `queue: NOT_NEEDED` means the subscription was
-unchanged and the credential was already finalized, so no repair was requested.
-`subscription: VERIFIED` and `queue: FAILED` is partial completion. A rerun
-retries repair when the credential was not yet finalized. If an already-finalized
-hook changed and its update response was lost or queueing failed, the rerun may
-see the updated subscription and skip the repair; request a rederivation for
-that repository through moderation instead. Do not report the upgrade as
+unchanged, the credential was already finalized and no earlier run left a repair
+owed, so no repair was requested.
+`subscription: VERIFIED` and `queue: FAILED` is partial completion; a rerun
+queues the repair. For a credential not yet finalized the rerun retries the
+finalization and its repair. Before updating an already-finalized hook the
+upgrade records that the repository owes a repair and clears the record only
+once the repair is queued (or the hook proved unchanged with nothing owed), so
+the rerun queues it once even when the earlier run's queue write failed or the
+forge's response to the update was lost (reported as `SUBSCRIPTION_FAILED`). A
+hook update the forge refused leaves the record too: the next run queues one
+full rederivation it may not have needed. Do not report the upgrade as
 successful from a restart or startup sweep. Queue acceptance does not establish
 that reconciliation has finished; check the worker's outcomes afterwards.
 
