@@ -1149,10 +1149,7 @@ export async function listUnwritableClosures(
       debtorLogin: readText(row.debtor_login, "Debtor login"),
     },
     calibrationId: row.calibration_id === null ? null : readText(row.calibration_id, "Calibration identifier"),
-    calibrationOwnerLogin:
-      row.calibration_owner_login === null
-        ? null
-        : readText(row.calibration_owner_login, "Calibration owner login"),
+    calibrationOwnerLogin: row.calibration_owner_login === null ? null : readText(row.calibration_owner_login, "Calibration owner login"),
     viewerCanRequestCorrection: row.viewer_can_request_correction,
     latestCorrection: row.correction_state === null ? null : {
       state: row.correction_state,
