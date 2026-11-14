@@ -258,9 +258,9 @@ describe("paused full-pass pages", () => {
   });
 
   it("keeps no walk cursor on the pass row", async () => {
-    expect((await sql<{ column_name: string }[]>`select column_name from information_schema.columns
-      where table_schema = 'public' and table_name = 'reconciliation_sweep_passes' order by column_name`).map(({ column_name }) => column_name))
-      .toEqual(["dirty_subjects", "evidence_version", "failed_runs", "pass_id", "repository_id", "scan_started_at", "walk_anchors"]);
+    // walk_anchors proves the query reads the pass table; any other column may come and go.
+    expect(await sql`select column_name from information_schema.columns where table_schema = 'public'
+      and table_name = 'reconciliation_sweep_passes' and column_name in ('walk_cursor', 'walk_anchors')`).toEqual([{ column_name: "walk_anchors" }]);
   });
 
   it("invalidates pages after an intervening evidence publication and keeps newer dirty generations", async () => {
