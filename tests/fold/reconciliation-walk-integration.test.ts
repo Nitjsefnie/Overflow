@@ -270,13 +270,15 @@ describe("a budget-bound reconciliation walk", () => {
     const f = await fixture();
     f.store.getRepository = async () => ({ ...f.repository, disputePullRequests: [{ id: 901, number: 7 }] });
     f.state.prFailure = new GitHubApiError(406);
-    await sql`insert into repository_reconciliation_dirty_subjects (repository_id, kind, github_subject_id, subject_number)
-      values (${f.repositoryId}, 'PULL_REQUEST', 901, 7)`;
+    await sql`insert into repository_reconciliation_dirty_subjects (repository_id, kind, github_subject_id, subject_number, generation)
+      values (${f.repositoryId}, 'PULL_REQUEST', 901, 7, ${String(2n ** 53n + 1n)})`;
     const [dirty] = await f.store.getDirtyReconciliationSubjects(f.repositoryId);
     const discard = vi.spyOn(f.store, "discardDirtyReconciliationSubject");
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    // A failed publication acknowledges nothing, so only the discard can remove the dirty row.
+    f.materialize.mockRejectedValueOnce(new Error("Publication failed after the discard."));
     try {
-      await f.run("SWEEP");
+      await expect(f.run("SWEEP")).rejects.toThrow();
       expect(log).toHaveBeenCalledWith(`Reconciliation of repository ${f.repositoryId} discarded unresolvable subject kind=PULL_REQUEST number=7 reason=DIFF_TOO_LARGE`);
       expect(discard).toHaveBeenCalledWith({ repositoryId: f.repositoryId, kind: "PULL_REQUEST", githubSubjectId: 901, generation: dirty!.generation });
       expect(await f.store.getDirtyReconciliationSubjects(f.repositoryId)).toEqual([]);
