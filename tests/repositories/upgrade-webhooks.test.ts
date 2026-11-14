@@ -21,10 +21,8 @@ function fixture(options: { provider?: string; instanceUrl?: string | null; look
   const registrations = [registration];
   const credentialId = randomUUID();
   let pending: WebhookCredentialRecord | null = null;
-  const repository = {
-    id: 42, name: "renamed", full_name: "new-owner/renamed", private: false,
-    html_url: "https://github.com/new-owner/renamed", owner: { login: "new-owner" }, permissions: { admin: true },
-  };
+  const repository = { id: 42, name: "renamed", full_name: "new-owner/renamed", private: false,
+    html_url: "https://github.com/new-owner/renamed", owner: { login: "new-owner" }, permissions: { admin: true } };
   const hook = {
     id: 81, active: true, name: "web", type: "Repository",
     events: ["issues", "pull_request", "pull_request_review"],
@@ -35,9 +33,7 @@ function fixture(options: { provider?: string; instanceUrl?: string | null; look
   const dependencies: WebhookUpgradeDependencies = {
     store: {
       withWebhookUpgradeLock: async (_id, operation) => operation(),
-      stageWebhookCredential: async (target) => pending ??= {
-        ...target, credentialId, secret: "scoped-upgrade-secret", configuredAt: options.configuredAt ?? null,
-      },
+      stageWebhookCredential: async (target) => pending ??= { ...target, credentialId, secret: "scoped-upgrade-secret", configuredAt: options.configuredAt ?? null },
       finalizeWebhookCredential: async (_credential, beforeCommit) => {
         await beforeCommit?.();
         if (pending !== null) pending = { ...pending, configuredAt: new Date("2026-01-01T00:00:00Z") };
@@ -45,15 +41,11 @@ function fixture(options: { provider?: string; instanceUrl?: string | null; look
       },
       listActiveRepositoryIds: async () => registrations.map((entry) => entry.id),
       findActiveRepositoryById: async (id) => registrations.find((entry) => entry.id === id) ?? null,
-      findActiveRepositoryForgeById: async (id) =>
-        registrations.some((entry) => entry.id === id)
-          ? { provider: options.provider ?? "github", instanceUrl: options.instanceUrl ?? null }
-          : null,
+      findActiveRepositoryForgeById: async (id) => registrations.some((entry) => entry.id === id)
+        ? { provider: options.provider ?? "github", instanceUrl: options.instanceUrl ?? null } : null,
       getGitHubAccessToken: async (sponsorId) => { credentials.push(sponsorId); return `token-${sponsorId}`; },
       getForgeToken: async (sponsorId, instanceUrl) => {
-        forgeCredentials.push(`${sponsorId}@${instanceUrl}`);
-        return { token: `glpat-${sponsorId}`, identityId: "identity-1" };
-      },
+        forgeCredentials.push(`${sponsorId}@${instanceUrl}`); return { token: `glpat-${sponsorId}`, identityId: "identity-1" }; },
       requestRepositoryRederivation: async (repositoryId) => { queued.push({ repositoryId, reason: "REDERIVATION" }); },
     },
     webhookUrls: { github: "https://overflow.example/api/github/webhooks", gitlab: "https://overflow.example/api/gitlab/webhooks" },
@@ -134,10 +126,7 @@ describe("existing registration webhook upgrade", () => {
 
   it.each(["github", "gitlab"] as const)("reports %s finalization failure after queue acceptance", async (provider) => {
     const f = fixture({ provider, instanceUrl: provider === "gitlab" ? "https://gitlab.example.com" : null });
-    f.dependencies.store.finalizeWebhookCredential = async (_credential, beforeCommit) => {
-      await beforeCommit?.();
-      throw new Error("synthetic finalization failure");
-    };
+    f.dependencies.store.finalizeWebhookCredential = async (_credential, beforeCommit) => { await beforeCommit?.(); throw new Error("synthetic finalization failure"); };
     expect.soft(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 0, failed: 1, gone: 0 });
     expect(f.queued).toEqual([{ repositoryId: "registration-1", reason: "REDERIVATION" }]);
     expect(f.outcomes).toEqual([{ repositoryId: "registration-1", subscription: "FAILED", queue: "QUEUED", failure: "SUBSCRIPTION_FAILED" }]);
@@ -198,9 +187,8 @@ describe("existing registration webhook upgrade", () => {
   });
 
   it.each([
-    ["mismatched", { id: 43 }], ["private", { private: true }],
-    ["visibility absent", { private: undefined }], ["admin denied", { permissions: { admin: false } }],
-    ["invalid path", { name: "../wrong" }], ["inconsistent full name", { full_name: "another/project" }],
+    ["mismatched", { id: 43 }], ["private", { private: true }], ["visibility absent", { private: undefined }],
+    ["admin denied", { permissions: { admin: false } }], ["invalid path", { name: "../wrong" }], ["inconsistent full name", { full_name: "another/project" }],
   ])("refuses a %s repository before touching its hook", async (_name, replacement) => {
     const f = fixture(); Object.assign(f.repository, replacement);
     expect(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 0, failed: 1, gone: 0 });
@@ -219,9 +207,7 @@ describe("existing registration webhook upgrade", () => {
     expect(f.outcomes).toEqual([{ repositoryId: "registration-1", subscription: "SKIPPED", queue: "NOT_ATTEMPTED", failure: "REPOSITORY_GONE" }]);
   });
 
-  it.each([
-    ["github", 401], ["github", 500], ["gitlab", 401], ["gitlab", 500],
-  ] as const)("keeps a %s by-id lookup error %s as a repository failure", async (provider, lookupStatus) => {
+  it.each([["github", 401], ["github", 500], ["gitlab", 401], ["gitlab", 500]] as const)("keeps a %s by-id lookup error %s as a repository failure", async (provider, lookupStatus) => {
     const f = fixture({ provider, instanceUrl: "https://gitlab.example.com", lookupStatus });
     expect.soft(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 0, failed: 1, gone: 0 });
     expect(f.queued).toEqual([]);
@@ -297,9 +283,7 @@ describe("existing registration webhook upgrade", () => {
     expect(f.forgeCredentials).toEqual(["sponsor-1@https://gitlab.example.com"]);
     expect(f.credentials).toEqual([]);
     expect(f.requests.map((request) => `${request.method} ${new URL(request.url).pathname}`)).toEqual([
-      "GET /api/v4/projects/42",
-      "GET /api/v4/projects/gl-group%2Fproject/hooks/81",
-      "PUT /api/v4/projects/gl-group%2Fproject/hooks/81",
+      "GET /api/v4/projects/42", "GET /api/v4/projects/gl-group%2Fproject/hooks/81", "PUT /api/v4/projects/gl-group%2Fproject/hooks/81",
     ]);
     expect(f.outcomes).toEqual([{ repositoryId: "registration-1", subscription: "VERIFIED", queue: "QUEUED", failure: null }]);
     expect(f.queued).toEqual([{ repositoryId: "registration-1", reason: "REDERIVATION" }]);
@@ -307,10 +291,7 @@ describe("existing registration webhook upgrade", () => {
 
   it("answers CREDENTIALS_FAILED for a GitLab registration whose sponsor has no identity linked on the instance", async () => {
     const f = fixture({ provider: "gitlab", instanceUrl: "https://gitlab.example.com" });
-    f.dependencies.store.getForgeToken = async (sponsorId, instanceUrl) => {
-      f.forgeCredentials.push(`${sponsorId}@${instanceUrl}`);
-      return null;
-    };
+    f.dependencies.store.getForgeToken = async (sponsorId, instanceUrl) => { f.forgeCredentials.push(`${sponsorId}@${instanceUrl}`); return null; };
     expect(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 0, failed: 1, gone: 0 });
     expect(f.forgeCredentials).toEqual(["sponsor-1@https://gitlab.example.com"]);
     expect(f.requests).toEqual([]);

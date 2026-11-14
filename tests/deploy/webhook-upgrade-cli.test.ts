@@ -51,10 +51,8 @@ describe("webhook upgrade CLI", () => {
     const getRepositoryById = gateway.getRepositoryById.bind(gateway);
     const upgraded: number[] = [];
     const create = () => ({
-      getRepositoryById: async (id: number) => id === 42 ? getRepositoryById(id) : {
-        id, owner: "current", ownerType: "USER" as const, name: "project", fullName: "current/project", visibility: "PUBLIC" as const,
-        canAdminister: true, url: "https://forge.example/current/project",
-      },
+      getRepositoryById: async (id: number) => id === 42 ? getRepositoryById(id) : { id, owner: "current", ownerType: "USER" as const, name: "project",
+        fullName: "current/project", visibility: "PUBLIC" as const, canAdminister: true, url: "https://forge.example/current/project" },
       configureWebhook: async () => { upgraded.push(43); return true; },
     });
     f.dependencies.createGateway = create;
@@ -68,9 +66,7 @@ describe("webhook upgrade CLI", () => {
     ]);
   });
 
-  it.each([
-    ["github", 401], ["github", 500], ["gitlab", 401], ["gitlab", 500],
-  ] as const)("exits nonzero for a %s by-id lookup error %s", async (provider, status) => {
+  it.each([["github", 401], ["github", 500], ["gitlab", 401], ["gitlab", 500]] as const)("exits nonzero for a %s by-id lookup error %s", async (provider, status) => {
     const f = lookupFixture(provider, status);
     expect(await runWebhookUpgradeCli([], f.dependencies)).toBe(1);
     expect(f.lines.map((line) => JSON.parse(line))).toEqual([
@@ -114,8 +110,7 @@ describe("webhook upgrade CLI", () => {
   });
 
   it.each([["--repository"], ["--unknown", "secret-token"], ["--help", "extra"]])("rejects invalid arguments without database or GitHub work: %j", async (...args) => {
-    const f = fixture();
-    f.dependencies.store.listActiveRepositoryIds = async () => { throw new Error("must not enumerate"); };
+    const f = fixture(); f.dependencies.store.listActiveRepositoryIds = async () => { throw new Error("must not enumerate"); };
     expect(await runWebhookUpgradeCli(args, f.dependencies)).toBe(2);
     expect(f.lines).toEqual(["Usage: pnpm webhooks:upgrade [--help]"]);
   });
@@ -125,10 +120,8 @@ describe("webhook upgrade CLI", () => {
     { args: ["--bad", "secret-argument"], status: 2, output: "Usage: pnpm webhooks:upgrade [--help]" },
     { args: [], status: 1, output: '{"failure":"UPGRADE_FAILED"}' },
   ])("reaches the actual package command with args $args and preserves exit $status", ({ args, status, output }) => {
-    const result = spawnSync("pnpm", ["--silent", "webhooks:upgrade", ...args], {
-      cwd: process.cwd(), encoding: "utf8", timeout: 60_000,
-      env: { ...process.env, NODE_OPTIONS: "", OVERFLOW_DATABASE_URL: "", GITHUB_WEBHOOK_SECRET: "" },
-    });
+    const result = spawnSync("pnpm", ["--silent", "webhooks:upgrade", ...args], { cwd: process.cwd(), encoding: "utf8", timeout: 60_000,
+      env: { ...process.env, NODE_OPTIONS: "", OVERFLOW_DATABASE_URL: "", GITHUB_WEBHOOK_SECRET: "" } });
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(status);
     expect(result.stdout.trim()).toBe(output);
