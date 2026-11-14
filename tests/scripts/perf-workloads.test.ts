@@ -49,11 +49,13 @@ it("measures all real workloads twice deterministically without touching the par
   const statements: Record<string, string[]> = {};
   const measurements = await measurePerfWorkloads(databaseUrl, (id, text) => { (statements[id] ??= []).push(text); });
   process.stdout.write(`${JSON.stringify(measurements)}\n`);
-  expect(Object.keys(measurements).sort()).toEqual(["board-load", "repository-fold", "repository-inactive-fold", "repository-sweep-fold", "webhook-ingestion"]);
-  // Each counted sweep-control step: open, spend, staging, completion, discardIfInactive; the inactive fold's pass discard.
+  expect(Object.keys(measurements).sort()).toEqual(["board-load", "repository-fold", "repository-held-sweep-fold", "repository-inactive-fold", "repository-sweep-fold", "webhook-ingestion"]);
+  // Each counted sweep-control step: open, spend, staging, the drift delete, completion, discardIfInactive; the inactive fold's pass discard; the hold.
   const inactive = /select active from registered_repositories\s+where id = \$1 for share/, sweep: Record<string, RegExp[]> = {
     "repository-sweep-fold": [/insert into reconciliation_sweep_passes/, /update reconciliation_sweep_rounds set spent/, /insert into reconciliation_sweep_walk_subjects/,
-      /delete from reconciliation_sweep_passes where pass_id/, inactive], "repository-inactive-fold": [/delete from reconciliation_sweep_passes where repository_id = \$1$/, inactive] };
+      /delete from reconciliation_sweep_walk_subjects/, /delete from reconciliation_sweep_passes where pass_id/, inactive],
+    "repository-inactive-fold": [/delete from reconciliation_sweep_passes where repository_id = \$1$/, inactive],
+    "repository-held-sweep-fold": [/insert into reconciliation_sweep_passes/, /update reconciliation_sweep_passes set failed_runs = 0/] };
   expect(Object.entries(sweep).flatMap(([id, patterns]) => patterns.filter((pattern) => !statements[id]?.some((text) => pattern.test(text))).map(String))).toEqual([]);
   for (const samples of Object.values(measurements)) {
     expect(samples).toHaveLength(2);

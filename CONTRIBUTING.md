@@ -266,18 +266,22 @@ requires it; the default contracts include signed-in pages. Refusals exit 2;
 measured failures exit 1.
 
 The SQL statement budget check counts statements through the real postgres.js
-client during five workloads: two default-size pages of board data, one full
-repository fold, one sweep fold through the production sweep control (it
-opens, charges, stages and completes its pass), one sweep fold of a
-deactivated repository (it runs the pass discard in the fold and again after
-it), and one signature-verified webhook ingestion. A sweep pass hold is an
-error path no counted operation reaches. The sweep fold charges one budget
-admission per modelled forge read, not per GraphQL request a real issue read
-sends. Each workload starts from a fresh deterministic fixture and runs twice;
-unequal counts fail. Missing or unbudgeted workloads also fail. This measures
-statement counts, never elapsed time or rows returned. Fixture setup and
-verification queries are outside the count; transaction and coordination
-statements are included.
+client during six workloads: two default-size pages of board data, one full
+repository fold, one sweep fold through the production sweep control and
+GitHub gateway over a fixture `fetch` (it resumes a held pass, charges each
+forge request, stages, drops a staged issue the forge reports deleted, and
+completes the pass), one sweep fold whose small request budget holds its pass,
+one sweep fold of a deactivated repository (it runs the pass discard in the
+fold and again after it), and one signature-verified webhook ingestion. Each
+sweep workload passes its request budget explicitly, so no host setting moves
+a count. The walk reads fresh, so the gateway's per-request page checkpoint is
+skipped in every sweep fold, as in production. The fixture is one open issue
+without pull requests, so the walk's pull-request reads, its timeline re-read
+and multi-page listings are not driven. Each workload starts from a fresh
+deterministic fixture and runs twice; unequal counts fail. Missing or
+unbudgeted workloads also fail. This measures statement counts, never elapsed
+time or rows returned. Fixture setup and verification queries are outside the
+count; transaction and coordination statements are included.
 
 `scripts/perf-budget.json` records the initial measured counts. A count above
 its budget fails; a lower count fails as `shrunk` until you run
