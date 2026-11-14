@@ -771,7 +771,7 @@ button:disabled {
 
 .landing-hero h1 {
   max-width: 13ch;
-  font-size: clamp(2.5rem, 12vw, 6rem);
+  font-size: clamp(2.5rem, 12vw, 4rem);
 }
 
 .landing-lede {
