@@ -430,14 +430,15 @@ const PAGE_CONTRACTS = [
     renderRoot: "#main-content",
     viewports: [
       [1440, 800],
-      // The action ends at 589.6px on this box at 1366 and 1280 wide: 35.4px
-      // above the 1366x625 target fold, 110.4px above 700. Fonts and layout
-      // may differ on the GitHub runner; re-measure when changing the copy.
+      // The action ends at 589.6px on this box at 1366 and 1280 wide (35.4px
+      // above the 1366x625 target fold, 110.4px above 700) and at 572px at
+      // 390x600 (28px). Fonts and layout may differ on the GitHub runner;
+      // re-measure when changing the copy.
       [1366, 625],
       [1280, 700],
+      [390, 600],
       // issue 1067 @320: RED ran with scrollWidth 330px vs 320 (the hero h1's
-      // clamp floor pushed .landing-hero's grid-item min-content past the
-      // viewport). Bottom 623.6px (this box); 650 leaves 26.4px.
+      // clamp floor widened the hero). Bottom 571.6px (this box); 650 leaves 78.4px.
       [320, 650],
     ],
     primaryAction: ".landing-hero .action-button",
