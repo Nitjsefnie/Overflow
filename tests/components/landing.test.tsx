@@ -267,9 +267,10 @@ describe("landing page", () => {
 // these are bounds on the terms it rests on. Every one is an upper bound on
 // something that pushes the button down, or a lower bound on a measure that
 // narrowing would wrap into more lines: raising one is a deliberate act, not a
-// number to copy across from a diff. jsdom resolves the cascade, clamp() and vw
-// against window.innerWidth, so the bounds are read at 1440px, where all three
-// clamps sit at their ceilings, and 390px, where all three sit at their floors.
+// number to copy across from a diff. jsdom resolves the cascade and clamp(), and
+// withLandingPageAt hands it the stylesheet with every viewport length already
+// in px, so the bounds are read at 1440px, where all three clamps sit at their
+// ceilings, and 390px, where the padding and lede clamps sit at their floors.
 //
 // WHAT IT IS NOT, in full. It is not a fold check, and cannot become one here -
 // Overflow issue 111 tracks the real fix, which is a browser in CI.
@@ -278,17 +279,18 @@ describe("landing page", () => {
 //     var(--display), and pinning a font stack would be an equality, not a bound.
 //   - It covers the elements that stack above the button and no others, and the
 //     properties in the table below and no others.
-//   - A border shorthand carrying var() is invisible on any element. This is
-//     the house idiom for every border in globals.css: jsdom collapses it to
-//     style `none` and width 16px, exactly like no border. It can therefore add
-//     up to the declared width per edge to the stack without failing a bound;
-//     a raw-width ceiling of 16px cannot distinguish that collapse either.
-//     On a budgeted edge, a border without var() is caught: both
-//     `border-top: 3rem solid #8a8479` and the currentColor spelling resolve to
-//     solid and 48px. A width without a style occupies no browser space
-//     (border-top-width: 3rem alone on the hero leaves the clearing height at
-//     572px). The button already has a browser-visible style through var(), so
-//     its raw width-only edits at or below 16px remain invisible too
+//   - Under jsdom 30 a border shorthand carrying var() is invisible on any
+//     element. This is the house idiom for every border in globals.css: jsdom
+//     30 collapses it to style `none` and width 0px, exactly like no border,
+//     and a width-only edit on top of it reads 0px too, so it can add any
+//     width per edge to the stack without failing a bound. jsdom 31
+//     substitutes var() and reads the border as declared, so there the
+//     effective bounds see it. On a budgeted edge, a border without var() is
+//     caught by both: `border-top: 3rem solid #8a8479` and the currentColor
+//     spelling resolve to solid and 48px. A width without a style occupies no
+//     browser space (border-top-width: 3rem alone on the hero leaves the
+//     clearing height at 572px). The button already has a browser-visible
+//     style through var(), so its width-only edits move it
 //     (border-bottom-width: 1rem takes it from 49px to 63px tall).
 //   - font-weight and word-spacing are not bounded and were measured not to
 //     move the button here -
@@ -311,10 +313,12 @@ describe("landing page", () => {
 //     writing-mode and generated content are also unbounded. These can change
 //     placement or wrapping without violating the table; re-measure in a
 //     browser when changing them.
-//   - It cannot evaluate a media, supports or container condition; those are
-//     pinned as declarations instead. A @layer block is exempt, because an
-//     unlayered declaration always beats a layered one and nothing here is
-//     layered - which stops holding the day anything is.
+//   - It cannot evaluate a media, supports or container condition at the width
+//     under test (jsdom 30 applies none, jsdom 31 evaluates them against its
+//     own fixed 1024x768 viewport); those are pinned as declarations instead.
+//     A @layer block is exempt, because an unlayered declaration always beats
+//     a layered one and nothing here is layered - which stops holding the day
+//     anything is.
 //   - It cannot see an at-rule jsdom's parser drops entirely, and does not try.
 //   - It reads both page stylesheets, and refuses an @import rather than pretend to
 //     follow it.
@@ -404,16 +408,15 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["form", "border-top", "atMost", 0, 0],
   ["form", "font-size", "atMost", 16, 16],
   ["form", "line-height", "atMost", 24, 24],
-  // The button's own box: 49px tall, 24px below the lede. The raw widths are
-  // bounded here as well as the effective borders, because the shipped
-  // shorthand carries var() - jsdom reads no style through it, so a width-only
-  // change to this element is one the browser uses and the effective bound
-  // cannot see.
+  // The button's own box: 49px tall, 24px below the lede, with the 2px solid
+  // top and bottom borders Chrome measured at both widths. The raw widths are
+  // bounded as well as the effective borders. The shipped shorthand carries
+  // var(), so under jsdom 30 both read 0px and see no change to this border.
   ["button", "margin-top", "atMost", 24, 24],
   ["button", "padding-top", "atMost", 10.4, 10.4],
   ["button", "padding-bottom", "atMost", 10.4, 10.4],
-  ["button", "border-top", "atMost", 0, 0],
-  ["button", "border-bottom", "atMost", 0, 0],
+  ["button", "border-top", "atMost", 2, 2],
+  ["button", "border-bottom", "atMost", 2, 2],
   ["button", "border-top-width", "atMost", 16, 16],
   ["button", "border-bottom-width", "atMost", 16, 16],
   ["button", "min-height", "atMost", 44.8, 44.8],
@@ -422,9 +425,10 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["button", "line-height", "atMost", 24, 24],
 ];
 
-// jsdom applies no condition, so a conditional declaration is pinned as text
-// rather than resolved. This one narrows the page's gutter on small screens and
-// was measured to move the button up, never down.
+// jsdom cannot evaluate a condition at the width under test, so a conditional
+// declaration is pinned as text rather than resolved. This one narrows the
+// page's gutter on small screens and was measured to move the button up, never
+// down.
 const CONDITIONAL_OVERRIDES = [
   "page | (max-width: 520px) | .app-shell, .landing-page | width: min(100% - 1.2rem, 1180px)",
 ];
@@ -468,16 +472,28 @@ function landingSubtree(): Array<[SubtreeElement, Element]> {
   ];
 }
 
-// A fresh mount per width: jsdom resolves vw live from innerWidth, but memoises
-// the computed declaration per element (document._styleCache), so re-reading an
-// element already read at another width returns the earlier answer.
+// The viewport lengths jsdom would resolve against a viewport of its own: jsdom
+// 31 reads a fixed 1024x768 whatever window.innerWidth says. The physical ones
+// are rewritten to px at the width under test; anything left - the logical vi/vb
+// and the container units that fall back to the viewport - is refused.
+const VIEWPORT_LENGTH = /(?<![\w.-])(-?(?:\d+\.?\d*|\.\d+))[sld]?(vw|vh|vmin|vmax)(?![\w-])/gi;
+const UNRESOLVED_LENGTH = /[\d.]+(?:[sld]?(?:vw|vh|vi|vb|vmin|vmax)|cq(?:w|h|i|b|min|max))(?![\w-])/i;
+
+function atViewport(css: string, width: number): string {
+  const sides: Record<string, number> = { vw: width, vh: VIEWPORT_HEIGHT, vmin: Math.min(width, VIEWPORT_HEIGHT), vmax: Math.max(width, VIEWPORT_HEIGHT) };
+  const resolved = css.replace(VIEWPORT_LENGTH, (_, value: string, unit: string) => `${(Number(value) * sides[unit.toLowerCase()]) / 100}px`);
+  const left = UNRESOLVED_LENGTH.exec(resolved);
+  if (left) throw new Error(`the fold budget cannot resolve "${left[0]}" at ${width}px wide; measure the fold in a browser and teach this guard the unit`);
+  return resolved;
+}
+
+// A fresh mount and stylesheet per width: the sheet carries that width's
+// viewport lengths, and jsdom 30 memoises the computed declaration per element
+// (document._styleCache), so re-reading an element already read at another
+// width returns the earlier answer.
 function withLandingPageAt<T>(width: number, read: (sheet: CSSStyleSheet) => T): T {
-  const previousWidth = window.innerWidth;
-  const previousHeight = window.innerHeight;
-  window.innerWidth = width;
-  window.innerHeight = VIEWPORT_HEIGHT;
   const style = document.createElement("style");
-  style.textContent = readFileSync("src/app/globals.css", "utf8") + "\n" + readFileSync("src/app/landing.css", "utf8");
+  style.textContent = atViewport(readFileSync("src/app/globals.css", "utf8") + "\n" + readFileSync("src/app/landing.css", "utf8"), width);
   document.head.append(style);
   try {
     render(<LandingPage />);
@@ -485,8 +501,6 @@ function withLandingPageAt<T>(width: number, read: (sheet: CSSStyleSheet) => T):
   } finally {
     cleanup();
     style.remove();
-    window.innerWidth = previousWidth;
-    window.innerHeight = previousHeight;
   }
 }
 
@@ -538,9 +552,9 @@ function conditionOf(rule: CSSRule): string {
 }
 
 // Every style rule in the sheet, with the condition it sits under. A @layer
-// block is walked as if unconditional: jsdom applies neither, and in a browser
-// an unlayered declaration beats a layered one, so a layered rule cannot
-// override anything this stylesheet declares.
+// block is walked as if unconditional: in a browser an unlayered declaration
+// beats a layered one, so a layered rule cannot override anything this
+// stylesheet declares.
 function styleRules(sheet: CSSStyleSheet): { rules: ParsedRule[]; imports: string[] } {
   const rules: ParsedRule[] = [];
   const imports: string[] = [];
@@ -649,8 +663,8 @@ describe("landing hero fold budget", () => {
 
     expect(
       found,
-      "a conditional declaration reaching the hero: jsdom applies no condition, so measure the fold in " +
-        "a browser at the widths this applies to and pin it in CONDITIONAL_OVERRIDES",
+      "a conditional declaration reaching the hero: jsdom cannot evaluate it at the width under test, so " +
+        "measure the fold in a browser at the widths this applies to and pin it in CONDITIONAL_OVERRIDES",
     ).toEqual(CONDITIONAL_OVERRIDES);
   });
 
