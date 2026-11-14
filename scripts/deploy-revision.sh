@@ -60,9 +60,8 @@ is_operational_ignored() {
   [[ "$1" != *$'\n'* ]] && printf '%s' "$1" | LC_ALL=C grep -Eq -- "$operational_ignored_re"
 }
 
-# Sets skip_value to the file's OVERFLOW_SKIP_STARTUP_RECONCILIATION, read
-# afresh so a caller's export never stands in ('' when unset or blank); fails
-# when the file cannot be read.
+# skip_value: the file's own OVERFLOW_SKIP_STARTUP_RECONCILIATION ('' when unset
+# or blank, never a caller's export); fails when the file cannot be read.
 env_file_skip_value() {
   read_env_file "$env_file" || return
   local pair
@@ -647,24 +646,20 @@ if [ "$serving_release" != absent ] && [ -f "$serving_release/REVISION" ]; then
   fi
 fi
 npm_config_package_import_method=copy pnpm install --frozen-lockfile
-# The steps below and the two reports read the file as the service does:
-# scripts/systemd-env-file.sh, beside this script in the tree being deployed,
-# ports systemd v257's EnvironmentFile= parser state for state (quotes,
-# escapes, continuations, #/; comments, no expansion), so the file never runs.
-# Each name it sets is exported over any caller's value, and every step below
-# fails without the variables it reads; a file that cannot be read within
-# OVERFLOW_DEPLOY_ENV_READ_TIMEOUT seconds (a test-only knob like
-# OVERFLOW_DEPLOY_CI_TIMEOUT, default 5) refuses here. The reader's path is
-# resolved at run time, so the directive stops the linter's chase; it is
-# linted on its own.
-env_file_assignments=() # read_env_file's result
+# This read and both reports use systemd-env-file.sh, beside this script in the
+# deployed tree: systemd v257's EnvironmentFile= parser ported state for state,
+# so the file never runs. Each name it sets is exported over a caller's, for the
+# steps below that need them; a file that cannot be read within
+# OVERFLOW_DEPLOY_ENV_READ_TIMEOUT seconds (test-only, default 5) refuses here.
+# The run-time path stops the linter's chase; the reader is linted on its own.
+env_file_assignments=()
 # shellcheck source=/dev/null
 . "$tree/scripts/systemd-env-file.sh"
 read_env_file "$env_file" || {
   printf 'Could not read the environment file %s (missing, unreadable, or not read within %ss); refusing to deploy.\n' "$env_file" "${OVERFLOW_DEPLOY_ENV_READ_TIMEOUT:-5}" >&2
   exit 1
 }
-# Guarded: export with no names would print the whole environment.
+# A bare export would print the whole environment.
 if ((${#env_file_assignments[@]})); then export -- "${env_file_assignments[@]}"; fi
 migration_status=$(node scripts/deploy-migration-status.ts) || {
   printf 'Could not list the pending migrations (node scripts/deploy-migration-status.ts failed); refusing to deploy. Database connection details come from %s.\n' "$env_file" >&2

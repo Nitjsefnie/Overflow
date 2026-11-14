@@ -1,8 +1,6 @@
-#!/usr/bin/env bash
-# Sourced by scripts/deploy-revision.sh, whose comment above the first read
-# says what read_env_file FILE does; env_file_assignments is its result.
-# shortcut: systemd refuses a file with invalid UTF-8 and stops at a NUL byte;
-# this does neither, so such a unit fails to start, which is-active surfaces.
+# shellcheck shell=bash disable=SC2034
+# Sourced by deploy-revision.sh, which explains it.
+# shortcut: no invalid-UTF-8 refusal or NUL stop as in systemd; such a unit fails is-active.
 read_env_file() {
   local LC_ALL=C bytes c i n state=pre_key key='' value='' key_ws=-1 value_ws=-1
   bytes=$(timeout "${OVERFLOW_DEPLOY_ENV_READ_TIMEOUT:-5}" cat -- "$1" 2>/dev/null && printf x) || return
@@ -30,17 +28,15 @@ read_env_file() {
       double_escape:[\"\\\`\$]) state=double value+=$c ;;
       double_escape:$'\n') state=double ;;
       double_escape:*) state=double value+="\\$c" ;;
-      comment:[$'\n\r']) state=pre_key ;; # COMMENT_ESCAPE acts as COMMENT since v254
+      comment:[$'\n\r']) state=pre_key ;;
     esac
   done
   [[ $state == pre_key || $state == key || $state == comment ]] || env_file_push
 }
 
-# Trailing whitespace off the key and an unquoted value; invalid names dropped.
 env_file_push() {
   ((key_ws < 0)) || key=${key:0:key_ws}
   [[ $state != value ]] || ((value_ws < 0)) || value=${value:0:value_ws}
-  # shellcheck disable=SC2034 # read by the sourcing script
   [[ $key != [A-Za-z_]* || $key == *[!A-Za-z0-9_]* ]] || env_file_assignments+=("$key=$value")
   state=pre_key
 }
