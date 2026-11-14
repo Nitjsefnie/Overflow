@@ -30,12 +30,10 @@ read_env_file() {
       double_escape:[\"\\\`\$]) state=double value+=$c ;;
       double_escape:$'\n') state=double ;;
       double_escape:*) state=double value+="\\$c" ;;
-      comment:\\) state=comment_escape ;;
-      comment*:[$'\n\r']) state=pre_key ;;
-      comment*:*) state=comment ;;
+      comment:[$'\n\r']) state=pre_key ;; # COMMENT_ESCAPE acts as COMMENT since v254
     esac
   done
-  [[ $state == @(pre_key|key|comment*) ]] || env_file_push
+  [[ $state == @(pre_key|key|comment) ]] || env_file_push
 }
 
 # Trailing whitespace off the key and an unquoted value; invalid names dropped.
