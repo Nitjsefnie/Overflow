@@ -334,11 +334,8 @@ describe("reconcileRepository", () => {
       const histories = unreadableRows.filter(([label]) => label.startsWith(prefix)).map(([, , payload]) => (payload as { history: unknown[] }).history);
       expect(histories.map((history) => history.slice(0, 3))).toEqual(histories.map(() => sponsorHistory));
       const late = { createdAt: "2026-09-01T11:05:00.000Z" };
-      const lateEntryLiterals = [
-        { kind: "ASSIGNED", id: "assigned-9-again", assigneeLogin: "contributor", ...late },
-        { kind: "UNASSIGNED", id: "unassigned-9", assigneeLogin: "contributor", ...late },
-        { kind: "UNLABELED", id: "unlabeled-9", label: "delivered/6", ...late },
-      ];
+      const lateEntryLiterals = [{ kind: "ASSIGNED", id: "assigned-9-again", assigneeLogin: "contributor", ...late },
+        { kind: "UNASSIGNED", id: "unassigned-9", assigneeLogin: "contributor", ...late }, { kind: "UNLABELED", id: "unlabeled-9", label: "delivered/6", ...late }];
       const wrongActors = [{ actorLogin: 1, actorGitHubUserId: 3001 }, { actorLogin: 1, actorGitHubUserId: null }, { actorLogin: false, actorGitHubUserId: 3001 },
         { actorLogin: false, actorGitHubUserId: null }, { actorLogin: {}, actorGitHubUserId: 3001 }, { actorLogin: {}, actorGitHubUserId: null },
         { actorLogin: [], actorGitHubUserId: 3001 }, { actorLogin: [], actorGitHubUserId: null }, { actorGitHubUserId: 3001 }, { actorGitHubUserId: null }];
