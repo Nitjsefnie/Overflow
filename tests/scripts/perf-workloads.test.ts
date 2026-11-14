@@ -26,9 +26,7 @@ beforeAll(async () => {
   container = await built.start();
   databaseUrl = postgresConnectionUrl({ ...options, password, ...await startedPostgresEndpoint(container) });
   process.env.OVERFLOW_MIGRATE_DEFAULT_BRANCH_GUARD = "skip";
-  const migration = spawnSync("pnpm", ["db:migrate"], {
-    cwd: root, encoding: "utf8", env: { ...process.env, OVERFLOW_DATABASE_URL: databaseUrl },
-  });
+  const migration = spawnSync("pnpm", ["db:migrate"], { cwd: root, encoding: "utf8", env: { ...process.env, OVERFLOW_DATABASE_URL: databaseUrl } });
   expect(migration.status, migration.stderr).toBe(0);
   sql = postgres(databaseUrl, { max: 1, onnotice: () => {} });
 });
