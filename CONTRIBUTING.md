@@ -267,16 +267,17 @@ measured failures exit 1.
 
 The SQL statement budget check counts statements through the real postgres.js
 client during five workloads: two default-size pages of board data, one full
-repository fold, one sweep fold through the production sweep control (it opens,
-charges, stages and completes its pass), one sweep fold of a deactivated
-repository (it discards the held pass, in the fold and again after it), and
-one signature-verified webhook ingestion. A sweep pass hold is an error path no
-workload reaches. The sweep fold charges one budget admission per modelled
-forge read, not per GraphQL request a real issue read sends. Each workload
-starts from a fresh deterministic fixture and runs twice; unequal counts fail.
-Missing or unbudgeted workloads also fail. This measures statement counts,
-never elapsed time or rows returned. Fixture setup and verification queries
-are outside the count; transaction and coordination statements are included.
+repository fold, one sweep fold through the production sweep control (it
+opens, charges, stages and completes its pass), one sweep fold of a
+deactivated repository (it runs the pass discard in the fold and again after
+it), and one signature-verified webhook ingestion. A sweep pass hold is an
+error path no counted operation reaches. The sweep fold charges one budget
+admission per modelled forge read, not per GraphQL request a real issue read
+sends. Each workload starts from a fresh deterministic fixture and runs twice;
+unequal counts fail. Missing or unbudgeted workloads also fail. This measures
+statement counts, never elapsed time or rows returned. Fixture setup and
+verification queries are outside the count; transaction and coordination
+statements are included.
 
 `scripts/perf-budget.json` records the initial measured counts. A count above
 its budget fails; a lower count fails as `shrunk` until you run
