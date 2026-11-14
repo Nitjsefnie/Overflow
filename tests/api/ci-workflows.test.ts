@@ -372,18 +372,18 @@ fi
 
     const verify = workflow.jobs.verify!;
     expect(verify.services?.postgres?.options).toContain("pg_isready");
-    // Keep the reviewed artifact actions' counts and identities exact across
-    // jobs: verify uploads the pair on push and dispatch, then the calibration
-    // job downloads the summary. Which REVISION they share across files is
-    // held by `keeps each action family to one revision across all workflow
-    // files`; within this file the family sets below pin the counts. The
-    // pull-request leg's one download is asserted in ci-pr.yml's own case
-    // below, so neither file's artifact actions are checked by a derivation
-    // that only reads this one.
+    // Keep the artifact actions' counts and identities exact across jobs:
+    // verify uploads the pair, each retried, on push and dispatch, then
+    // the calibration job downloads the summary. Which REVISION they share
+    // across files is held by `keeps each action family to one revision
+    // across all workflow files`; the family sets below pin this file's
+    // counts. The pull-request leg's one download is asserted in ci-pr.yml's
+    // own case below, so neither file's artifact actions are checked by a
+    // derivation that only reads this one.
     const ciSteps = Object.values(workflow.jobs).flatMap((job) => job.steps);
     const uploads = ciSteps.filter((step) => step.uses?.startsWith("actions/upload-artifact@"));
     const downloads = ciSteps.filter((step) => step.uses?.startsWith("actions/download-artifact@"));
-    expect(uploads).toHaveLength(2);
+    expect(uploads).toHaveLength(4);
     expect(downloads).toHaveLength(1);
     // Exactly one checkout: under push and workflow_dispatch the default
     // checkout takes the event's own commit, at full history (issue 1098) so

@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -466,6 +466,16 @@ export function evaluateExpression(expression: string, context: ActionsContext =
   }
 }
 
+/** Whether an `if:` calls a status function, which is what stops GitHub adding
+ *  its implicit `success() &&`. Read from the parse tree, so `'always()'` as a
+ *  string literal is not a call. */
+function callsStatusFunction(expression: string): boolean {
+  const walk = (node: Node): boolean =>
+    node.kind === "status" || (node.kind === "not" && walk(node.operand)) ||
+    ((node.kind === "and" || node.kind === "or" || node.kind === "compare") && (walk(node.left) || walk(node.right)));
+  return walk(parseExpression(unwrap(expression)));
+}
+
 /** Whether GitHub would select this step in this context.
  *
  *  - A step with no `if:` is selected: no failures are assumed, and the only
@@ -643,6 +653,10 @@ function shellWords(command: string): string[] {
  * The completeness assertion below is what closes it, and it closes it by
  * comparing this table against the workflow rather than trusting it.
  */
+/** An upload's first attempt; its retry (`overwrite: true`) is held to it by Half 4. */
+const isFirstUpload = (step: WorkflowStep) =>
+  (step.uses ?? "").startsWith("actions/upload-artifact@") && step.with?.overwrite !== true;
+
 const COVERAGE_ARTIFACTS: { label: string; matches: (step: WorkflowStep) => boolean }[] = [
   {
     label: "the patch coverage report",
@@ -651,12 +665,12 @@ const COVERAGE_ARTIFACTS: { label: string; matches: (step: WorkflowStep) => bool
   {
     label: "the patch coverage upload",
     matches: (step) =>
-      (step.uses ?? "").startsWith("actions/upload-artifact@") && step.with?.name === "patch-coverage",
+      isFirstUpload(step) && step.with?.name === "patch-coverage",
   },
   {
     label: "the coverage summary upload",
     matches: (step) =>
-      (step.uses ?? "").startsWith("actions/upload-artifact@") && step.with?.name === "coverage-summary",
+      isFirstUpload(step) && step.with?.name === "coverage-summary",
   },
 ];
 
@@ -1147,7 +1161,7 @@ describe("the docs-only detection the scenarios above assume", () => {
     // The table describes the leg that MEASURES coverage. The pull-request leg
     // is checked for carrying none of them separately, below.
     const measureLeg = legs.get(COVERAGE_LEG)!.steps;
-    const inWorkflow = measureLeg.filter(namesCoverageArtifact);
+    const inWorkflow = measureLeg.filter((step) => namesCoverageArtifact(step) && step.with?.overwrite !== true);
     const matched = measureLeg.filter((step) =>
       COVERAGE_ARTIFACTS.some((artifact) => artifact.matches(step)),
     );
@@ -2242,3 +2256,100 @@ for (const scenario of SCENARIOS.filter((entry) => entry.file === "ci.yml")) {
     expect(selected.indexOf(gates[0]!)).toBeGreaterThan(selected.indexOf(builds[0]!));
   });
 }
+
+/* -------------------------------------------------------------------------- */
+/* Half 4 — a bounded second attempt for every required-path artifact upload    */
+/* -------------------------------------------------------------------------- */
+
+// actions/upload-artifact rethrows a network error (ETIMEDOUT, ECONNRESET) at
+// once, so one dropped connection failed the job and skipped every later step.
+// Each upload below is a tolerated first attempt followed at once by an
+// identical retry that overwrites what the first left and carries the failure.
+// `afterFailure`: the upload runs on a red job too (the findings report).
+const DOCS_CHANGE: ActionsContext = { steps: { [DETECT_STEP_ID]: { outputs: { docs_only: "false" } } } };
+const DOCS_ONLY: ActionsContext = { steps: { [DETECT_STEP_ID]: { outputs: { docs_only: "true" } } } };
+const RETRIED_UPLOADS = [
+  { file: "ci.yml", artifact: "patch-coverage", afterFailure: false, skippedWhen: DOCS_ONLY },
+  { file: "ci.yml", artifact: "coverage-summary", afterFailure: false, skippedWhen: DOCS_ONLY },
+  { file: "pr-suite.yml", artifact: "patch-coverage", afterFailure: false, skippedWhen: DOCS_ONLY },
+  { file: "pr-suite.yml", artifact: "coverage-summary", afterFailure: false, skippedWhen: DOCS_ONLY },
+  { file: "secret-scan.yml", artifact: "gitleaks-report", afterFailure: true, skippedWhen: null },
+  { file: "pr-gates.yml", artifact: "gitleaks-report", afterFailure: true, skippedWhen: null },
+];
+// The one exemption: scorecard.yml feeds no required context, so one attempt.
+const UNRETRIED_UPLOADS = [{ file: "scorecard.yml", artifact: "scorecard-results" }];
+
+/** Runs a first attempt and its retry as the runner would: a step whose `if:`
+ *  calls no status function also needs a green job, a failed step turns the
+ *  job red unless it is `continue-on-error: true`, and a later `if:` reads each
+ *  earlier step's outcome. Returns which attempts ran and the job's status. */
+function runAttempts(pair: WorkflowStep[], context: ActionsContext, prior: JobStatus, fails: boolean[]) {
+  let status = prior;
+  const outcomes: Record<string, unknown> = { ...(context.steps as Record<string, unknown>) };
+  const ran: string[] = [];
+  pair.forEach((step, index) => {
+    const condition = step.if === undefined ? "true" : typeof step.if === "boolean" ? String(step.if) : (step.if as string);
+    const tolerated = step["continue-on-error"];
+    if (tolerated !== undefined && typeof tolerated !== "boolean") throw new Error(`${label(step)}: continue-on-error must be a boolean`);
+    const runs = toBoolean(evaluateExpression(condition, { ...context, steps: outcomes }, status)) &&
+      (status === "success" || callsStatusFunction(condition));
+    if (runs) ran.push(index === 0 ? "first" : "retry");
+    if (runs && fails[index] && tolerated !== true) status = "failure";
+    if (step.id) outcomes[step.id] = { outcome: runs ? (fails[index] ? "failure" : "success") : "skipped" };
+  });
+  return { ran, status };
+}
+
+describe("every artifact upload on a required path", () => {
+  const uploads: { file: string; steps: WorkflowStep[]; step: WorkflowStep }[] = [];
+  const requiredFiles: string[] = [];
+  beforeAll(async () => {
+    for (const file of (await readdir(resolve(".github/workflows"))).filter((name) => name.endsWith(".yml"))) {
+      const workflow = parse(await readFile(resolve(`.github/workflows/${file}`), "utf8")) as { jobs?: Record<string, { steps?: WorkflowStep[] }> };
+      for (const job of Object.values(workflow.jobs ?? {})) {
+        for (const step of job.steps ?? []) {
+          if ((step.uses ?? "").startsWith("actions/upload-artifact@")) uploads.push({ file, steps: job.steps!, step });
+        }
+      }
+    }
+    const required = JSON.parse(await readFile(resolve(".github/required-checks.json"), "utf8")) as Record<string, string[]>;
+    requiredFiles.push(...Object.values(required).flat());
+  });
+  const attemptsOf = (file: string, artifact: string) =>
+    uploads.filter((upload) => upload.file === file && upload.step.with?.name === artifact);
+
+  it("is listed here, twice for a retried upload and once for the exemption, which feeds no required context", () => {
+    expect(uploads.map(({ file, step }) => `${file} ${String(step.with?.name)}`).sort()).toEqual([
+      ...RETRIED_UPLOADS.flatMap(({ file, artifact }) => [`${file} ${artifact}`, `${file} ${artifact}`]),
+      ...UNRETRIED_UPLOADS.map(({ file, artifact }) => `${file} ${artifact}`),
+    ].sort());
+    for (const { file } of UNRETRIED_UPLOADS) expect(requiredFiles, `${file} now feeds a required context`).not.toContain(`.github/workflows/${file}`);
+  });
+
+  for (const site of RETRIED_UPLOADS) {
+    describe(`${site.file}'s ${site.artifact} upload`, () => {
+      const pair = () => attemptsOf(site.file, site.artifact).map(({ step }) => step);
+
+      it("is followed at once by a retry of the same action and inputs that overwrites the first attempt's artifact", () => {
+        const [first, retry] = attemptsOf(site.file, site.artifact);
+        expect(first!.steps.indexOf(retry!.step), "the retry must be the very next step of the same job").toBe(first!.steps.indexOf(first!.step) + 1);
+        expect(retry!.step.uses).toBe(first!.step.uses);
+        expect(retry!.step.with).toEqual({ ...first!.step.with, overwrite: true });
+      });
+
+      for (const prior of ["success", "failure"] as const) {
+        for (const skipped of site.skippedWhen ? [false, true] : [false]) {
+          for (const [firstFails, retryFails] of [[false, false], [true, false], [true, true]]) {
+            const holds = !skipped && (prior === "success" || site.afterFailure);
+            const when = `job ${prior}, ${skipped ? "condition false" : "condition holds"}, first ${firstFails ? "fails" : "succeeds"}, retry ${retryFails ? "fails" : "succeeds"}`;
+            it(`on ${when}`, () => {
+              const run = runAttempts(pair(), skipped ? site.skippedWhen! : DOCS_CHANGE, prior, [firstFails!, retryFails!]);
+              expect(run.ran, "which attempts run").toEqual(holds ? (firstFails ? ["first", "retry"] : ["first"]) : []);
+              expect(run.status, "the job's status after them").toBe(prior === "failure" || (holds && firstFails && retryFails) ? "failure" : "success");
+            });
+          }
+        }
+      }
+    });
+  }
+});
