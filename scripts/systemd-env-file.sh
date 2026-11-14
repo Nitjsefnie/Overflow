@@ -41,6 +41,6 @@ env_file_push() {
   ((key_ws < 0)) || key=${key:0:key_ws}
   [[ $state != value ]] || ((value_ws < 0)) || value=${value:0:value_ws}
   # shellcheck disable=SC2034 # read by the sourcing script
-  [[ ! $key =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || env_file_assignments+=("$key=$value")
+  [[ $key != [A-Za-z_]* || $key == *[!A-Za-z0-9_]* ]] || env_file_assignments+=("$key=$value")
   state=pre_key
 }
