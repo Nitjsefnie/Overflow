@@ -256,8 +256,10 @@ describe("landing page", () => {
 // 1366x768 laptop panel gives Chrome roughly 625px of viewport once its chrome
 // and a taskbar are subtracted, so the button clears 1366x625 by 35px.
 //
-// The headline wraps to three lines at every width measured, 320 to 1920. At
-// 390x600 the button ends at 621px, 21px below that fold.
+// The headline wraps to three lines at every width measured, 320 to 1920; the
+// 404 and error-fallback headlines share its selector. At 520px wide and below
+// the line under the lede sets at 14px, tight to the form: the button ends at
+// 572px at 390x600 (621px before), 28px above that fold.
 //
 // WHAT THIS GUARD IS. A proxy. jsdom does no layout, so nothing here can measure
 // where the button lands - the browser measurement above is the evidence, and
@@ -274,8 +276,8 @@ describe("landing page", () => {
 //   - It cannot see line counts, so a copy change moves the fold silently.
 //   - It cannot see the type faces: the h1's wrap depends on the metrics behind
 //     var(--display), and pinning a font stack would be an equality, not a bound.
-//   - It covers the subtree's elements, not the line under the lede, and the
-//     properties in the table below and no others.
+//   - It covers the subtree's elements, the line under the lede only by its
+//     pinned narrow-screen rule, and the properties in the table below.
 //   - A border shorthand carrying var(), the house idiom for every border in
 //     globals.css, is invisible under jsdom 30: it reads style `none` and
 //     width 0px like no border, as does a width-only edit on top of it, so it
@@ -316,7 +318,7 @@ describe("landing page", () => {
 //   - It cannot see an at-rule jsdom's parser drops entirely, and does not try.
 //   - It reads both page stylesheets, and refuses an @import rather than pretend to
 //     follow it.
-type SubtreeElement = "page" | "hero" | "eyebrow" | "h1" | "lede" | "form" | "button";
+type SubtreeElement = "page" | "hero" | "eyebrow" | "h1" | "lede" | "trade" | "form" | "button";
 
 // element, property, direction, and the bound at 1440px and at 390px - the
 // values the browser measurement above was taken over. Infinity is `none` or
@@ -369,12 +371,10 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["h1", "border-bottom", "atMost", 0, 0],
   ["h1", "border-left", "atMost", 0, 0],
   ["h1", "border-right", "atMost", 0, 0],
-  ["h1", "height", "atMost", 201.6, 176.4],
-  ["h1", "min-height", "atMost", 201.6, 176.4],
-  ["h1", "font-size", "atMost", 64, 56],
-  ["h1", "line-height", "atMost", 67.2, 58.8],
-  // The 390px font-size, line-height and height predate the issue-1067 floor
-  // change, which left 12vw = 46.8px there; letter-spacing and max-width follow it.
+  ["h1", "height", "atMost", 201.6, 147.42],
+  ["h1", "min-height", "atMost", 201.6, 147.42],
+  ["h1", "font-size", "atMost", 64, 46.8],
+  ["h1", "line-height", "atMost", 67.2, 49.14],
   ["h1", "letter-spacing", "atMost", -2.88, -2.106],
   ["h1", "word-spacing", "atMost", 0, 0],
   ["h1", "text-transform", "atMost", 0, 0],
@@ -389,8 +389,8 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["lede", "border-bottom", "atMost", 0, 0],
   ["lede", "border-left", "atMost", 0, 0],
   ["lede", "border-right", "atMost", 0, 0],
-  ["lede", "height", "atMost", 84, 120],
-  ["lede", "min-height", "atMost", 84, 120],
+  ["lede", "height", "atMost", 42, 60],
+  ["lede", "min-height", "atMost", 42, 60],
   ["lede", "font-size", "atMost", 28, 20],
   ["lede", "line-height", "atMost", 42, 30],
   ["lede", "letter-spacing", "atMost", 0, 0],
@@ -423,11 +423,13 @@ const FOLD_BUDGET: BudgetRow[] = [
 ];
 
 // jsdom cannot evaluate a condition at the width under test, so a conditional
-// declaration is pinned as text rather than resolved. This one narrows the
-// page's gutter on small screens and was measured to move the button up, never
-// down.
+// declaration is pinned as text rather than resolved. These narrow the page's
+// gutter and shrink the line under the lede; measured, they move the button up
+// (621.00 to 572.00 at 390x600), never down.
 const CONDITIONAL_OVERRIDES = [
   "page | (max-width: 520px) | .app-shell, .landing-page | width: min(100% - 1.2rem, 1180px)",
+  "trade | (max-width: 520px) | .landing-trade | margin-bottom: 0px",
+  "trade | (max-width: 520px) | .landing-trade | font-size: 0.875rem",
 ];
 
 // Two terms are keywords rather than lengths, so they are compared as a rank:
@@ -460,6 +462,7 @@ function landingSubtree(): Array<[SubtreeElement, Element]> {
     ["eyebrow", document.querySelector(".landing-hero .eyebrow")!],
     ["h1", screen.getByRole("heading", { level: 1 })],
     ["lede", document.querySelector(".landing-lede")!],
+    ["trade", document.querySelector(".landing-trade")!],
     ["form", form],
     ["button", button],
   ];

@@ -21,3 +21,12 @@
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 }
+
+/* Narrow screens: a smaller points line, set tight to the sign-in form, keeps
+   the button above a 390x600 fold. */
+@media (max-width: 520px) {
+  .landing-trade {
+    margin-bottom: 0;
+    font-size: 0.875rem;
+  }
+}
