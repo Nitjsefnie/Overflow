@@ -129,6 +129,8 @@ describe("scripts/deploy-revision.sh — the startup-sweep override", () => {
     ["spaces around = and after the value", "", `${KEY} = 1 \t\n`, "1"],
     ["a backslash inside double quotes", "", `${KEY}="\\1"\n`, "\\\\1"],
     ["no final newline", "", `${KEY}=1`, "1"],
+    ["a double quote left open at the end", "", `${KEY}="1\n`, "$'1\\n'"],
+    ["CRLF line ends", "", `${KEY}=1\r\nOTHER=2\r\n`, "1"],
     ["the line inside another variable's double-quoted value", "", `OTHER="a\n${KEY}=1\n"\n`, ""],
   ];
 
