@@ -49,11 +49,12 @@ it("measures all real workloads twice deterministically without touching the par
   const statements: Record<string, string[]> = {};
   const measurements = await measurePerfWorkloads(databaseUrl, (id, text) => { (statements[id] ??= []).push(text); });
   process.stdout.write(`${JSON.stringify(measurements)}\n`);
-  expect(Object.keys(measurements).sort()).toEqual(["board-load", "repository-fold", "repository-sweep-fold", "webhook-ingestion"]);
-  // Each counted sweep-control step: open, spend, staging, completion, discardIfInactive.
-  const sweep = [/insert into reconciliation_sweep_passes/, /update reconciliation_sweep_rounds set spent/, /insert into reconciliation_sweep_walk_subjects/,
-    /delete from reconciliation_sweep_passes where pass_id/, /select active from registered_repositories\s+where id = \$1 for share/];
-  expect(sweep.filter((pattern) => !statements["repository-sweep-fold"]?.some((text) => pattern.test(text)))).toEqual([]);
+  expect(Object.keys(measurements).sort()).toEqual(["board-load", "repository-fold", "repository-inactive-fold", "repository-sweep-fold", "webhook-ingestion"]);
+  // Each counted sweep-control step: open, spend, staging, completion, discardIfInactive; the inactive fold's discardPass.
+  const inactive = /select active from registered_repositories\s+where id = \$1 for share/, sweep: Record<string, RegExp[]> = {
+    "repository-sweep-fold": [/insert into reconciliation_sweep_passes/, /update reconciliation_sweep_rounds set spent/, /insert into reconciliation_sweep_walk_subjects/,
+      /delete from reconciliation_sweep_passes where pass_id/, inactive], "repository-inactive-fold": [/delete from reconciliation_sweep_passes where repository_id = \$1$/, inactive] };
+  expect(Object.entries(sweep).flatMap(([id, patterns]) => patterns.filter((pattern) => !statements[id]?.some((text) => pattern.test(text))).map(String))).toEqual([]);
   for (const samples of Object.values(measurements)) {
     expect(samples).toHaveLength(2);
     expect(samples[0]).toBeGreaterThan(0);
