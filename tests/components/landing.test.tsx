@@ -442,12 +442,7 @@ const KEYWORD_RANKS: Record<string, Record<string, number>> = {
 };
 
 // The synthetic terms above, and the border styles that occupy no space.
-const EFFECTIVE_BORDERS: Record<string, string> = {
-  "border-top": "border-top",
-  "border-bottom": "border-bottom",
-  "border-left": "border-left",
-  "border-right": "border-right",
-};
+const EFFECTIVE_BORDERS: Record<string, string> = { "border-top": "border-top", "border-bottom": "border-bottom", "border-left": "border-left", "border-right": "border-right" };
 const NO_BORDER = new Set(["none", "hidden", ""]);
 
 const BASE_WIDTH = 1440;
@@ -504,22 +499,14 @@ function withLandingPageAt<T>(width: number, read: (sheet: CSSStyleSheet) => T):
   }
 }
 
-function toPixels(
-  value: string,
-  fontSize: number,
-  property: string,
-  direction: "atMost" | "atLeast",
-  term: string,
-): number {
+function toPixels(value: string, fontSize: number, property: string, direction: "atMost" | "atLeast", term: string): number {
   const trimmed = value.trim();
   const ranks = KEYWORD_RANKS[property];
   if (ranks) {
     const rank = ranks[trimmed];
     if (rank === undefined) {
-      throw new Error(
-        `${term} resolves to "${value}", a value this guard has no ordering for; measure the fold in ` +
-          "a browser and give it a rank",
-      );
+      throw new Error(`${term} resolves to "${value}", a value this guard has no ordering for; measure the fold in ` +
+        "a browser and give it a rank");
     }
     return rank;
   }
@@ -540,10 +527,8 @@ function toPixels(
     if (trimmed.endsWith("rem")) return number * ROOT_FONT_SIZE;
     if (/^-?[\d.]+$/.test(trimmed)) return number * fontSize; // a unitless line-height
   }
-  throw new Error(
-    `${term} resolves to "${value}", which this guard cannot compare; measure the fold in a browser ` +
-      "and pin the term in px",
-  );
+  throw new Error(`${term} resolves to "${value}", which this guard cannot compare; measure the fold in a browser ` +
+    "and pin the term in px");
 }
 
 function conditionOf(rule: CSSRule): string {
@@ -589,10 +574,8 @@ function appliesTo(element: Element, rule: ParsedRule): boolean {
     return element.matches(rule.selectorText);
   } catch {
     // Refuse to classify rather than assume it does not apply.
-    throw new Error(
-      `the fold budget cannot evaluate the selector "${rule.selectorText}"; measure the fold in a ` +
-        "browser and teach this guard the new shape",
-    );
+    throw new Error(`the fold budget cannot evaluate the selector "${rule.selectorText}"; measure the fold in a ` +
+      "browser and teach this guard the new shape");
   }
 }
 
