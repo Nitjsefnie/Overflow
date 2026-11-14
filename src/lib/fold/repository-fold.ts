@@ -228,6 +228,8 @@ export type UnwritableClosure = {
     | "CLOSING_EVIDENCE_UNREADABLE";
   githubPullRequestId: number | null;
   reason: string;
+  /** The sponsor's own closure had no actual-catalog label standing or applied later: nothing for a moderator to price. */
+  unlabelledSelfWork?: true;
 };
 
 export type SettlementEvidenceViolationCode = "SETTLED_LABEL_UNAUTHORIZED" | "SETTLED_RATIONALE_EDITED";
@@ -350,7 +352,7 @@ type RejectionReach =
   | { kind: "WINDOW"; refusedEvidenceAt: string | null };
 type SettledDifficultyResolution =
   | { kind: "accepted"; evidence: SettledDifficultyEvidence }
-  | { kind: "rejected"; reason: string; reach: RejectionReach; violation?: SettlementEvidenceViolationCode };
+  | { kind: "rejected"; reason: string; reach: RejectionReach; violation?: SettlementEvidenceViolationCode; unlabelled?: boolean };
 
 type AuthoritativeClosingPullRequest = RepositoryFoldPullRequest & {
   mergedAt: string;
@@ -546,6 +548,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
         kind: "SETTLEMENT_EVIDENCE_REJECTED",
         githubPullRequestId: pullRequest.id,
         reason: settledResolution.reason,
+        ...(settledResolution.unlabelled === true && author?.id === sponsor.id && { unlabelledSelfWork: true as const }),
       });
     }
 
@@ -954,6 +957,7 @@ function resolveSettledDifficulty(
       : ` The earliest later application, \`${earliestLaterApplication.label}\` at ${new Date(earliestLaterApplication.createdAt).toISOString()}, came after that window.`;
     return {
       kind: "rejected", reach: windowReach,
+      unlabelled: earliestLaterApplication === undefined,
       reason: `No configured actual-catalog label was standing on the issue by fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.${laterApplication}`,
     };
   }

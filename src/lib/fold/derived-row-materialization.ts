@@ -36,6 +36,7 @@ type UnwritableClosureRow = {
   kind: UnwritableClosure["kind"];
   github_pull_request_id: number | string | null;
   reason: string;
+  unlabelled_self_work: boolean;
 };
 
 export async function materializeSettlements(
@@ -346,7 +347,8 @@ export async function materializeUnwritableClosures(
 ): Promise<ReconciliationDeltas> {
   const existingRows = await sql<UnwritableClosureRow[]>`
     select unwritable_closures.id, unwritable_closures.fold_revision, unwritable_closures.issue_id, issues.github_issue_id,
-      unwritable_closures.kind::text, pull_requests.github_pull_request_id, unwritable_closures.reason
+      unwritable_closures.kind::text, pull_requests.github_pull_request_id, unwritable_closures.reason,
+      unwritable_closures.unlabelled_self_work
     from unwritable_closures
     join issues on issues.id = unwritable_closures.issue_id
     left join pull_requests on pull_requests.id = unwritable_closures.pull_request_id
@@ -369,8 +371,8 @@ export async function materializeUnwritableClosures(
     const desired = unwritableClosureState(closure);
     if (current === undefined) {
       await sql`
-        insert into unwritable_closures (issue_id, pull_request_id, kind, reason, fold_revision)
-        values (${issueId}, ${pullRequestId}, ${closure.kind}, ${closure.reason}, ${FOLD_REVISION})
+        insert into unwritable_closures (issue_id, pull_request_id, kind, reason, unlabelled_self_work, fold_revision)
+        values (${issueId}, ${pullRequestId}, ${closure.kind}, ${closure.reason}, ${closure.unlabelledSelfWork === true}, ${FOLD_REVISION})
       `;
       await recordChange(sql, input.runId, null, "UNWRITABLE_CLOSURE", "ADD", null, desired);
       adds += 1;
@@ -383,7 +385,7 @@ export async function materializeUnwritableClosures(
       await sql`
         update unwritable_closures
         set pull_request_id = ${pullRequestId}, kind = ${closure.kind}, reason = ${closure.reason},
-            fold_revision = ${FOLD_REVISION}
+            unlabelled_self_work = ${closure.unlabelledSelfWork === true}, fold_revision = ${FOLD_REVISION}
         where id = ${current.id}
       `;
       await recordChange(sql, input.runId, null, "UNWRITABLE_CLOSURE", "CHANGE", before, desired);
@@ -508,6 +510,7 @@ function unwritableClosureState(closure: UnwritableClosure): JSONValue {
     kind: closure.kind,
     githubPullRequestId: closure.githubPullRequestId,
     reason: closure.reason,
+    unlabelledSelfWork: closure.unlabelledSelfWork === true,
   };
 }
 
@@ -517,5 +520,6 @@ function unwritableClosureStateFromRow(row: UnwritableClosureRow): JSONValue {
     kind: row.kind,
     githubPullRequestId: row.github_pull_request_id === null ? null : toSafeInteger(row.github_pull_request_id),
     reason: row.reason,
+    ...(row.unlabelled_self_work && { unlabelledSelfWork: true as const }),
   });
 }
