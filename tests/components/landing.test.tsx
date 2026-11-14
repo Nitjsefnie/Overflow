@@ -286,11 +286,10 @@ describe("landing page", () => {
 //     occupies no browser space (border-top-width: 3rem alone on the hero
 //     leaves the clearing height at 590px), but the button's var() border is
 //     styled (border-bottom-width: 1rem takes it from 49px to 63px tall).
-//   - font-weight and word-spacing are not bounded and were measured not to
-//     move the button here -
-//     Georgia has no 900 weight and the headline's wrap is measure-bound - so
-//     bounding them would only manufacture a red for a change that renders
-//     identically. white-space and text-wrap have values that could matter and
+//   - font-weight is not bounded: 900 on the whole page measured no move at
+//     1440x600 or 390x600, so a bound would only manufacture a red. word-spacing
+//     is bounded wherever 0.3em-3em measured a move; the form's is not, as the
+//     button resets it. white-space and text-wrap have values that could matter and
 //     an ordering this guard cannot establish by measurement. display and
 //     font-family would each have to be pinned as an equality, which is the
 //     thing this table exists not to be.
@@ -334,11 +333,13 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["page", "border-top", "atMost", 0, 0],
   ["page", "font-size", "atMost", 16, 16],
   ["page", "line-height", "atMost", 24, 24],
+  ["page", "word-spacing", "atMost", 0, 0],
   // The hero, whose max-width is the headline's wrap measure above ~102px of type.
   ["hero", "margin-top", "atMost", 0, 0],
   ["hero", "padding-top", "atMost", 0, 0],
   ["hero", "border-top", "atMost", 0, 0],
   ["hero", "line-height", "atMost", 24, 24],
+  ["hero", "word-spacing", "atMost", 0, 0],
   ["hero", "max-width", "atLeast", 928, 928],
   // The eyebrow: one line of type, the box around it, and the space between it
   // and the headline.
@@ -355,6 +356,7 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["eyebrow", "font-size", "atMost", 11.52, 11.52],
   ["eyebrow", "line-height", "atMost", 17.28, 17.28],
   ["eyebrow", "letter-spacing", "atMost", 0.2304, 0.2304],
+  ["eyebrow", "word-spacing", "atMost", 0, 0],
   ["eyebrow", "text-transform", "atMost", 2, 2],
   ["eyebrow", "width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
   ["eyebrow", "max-width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
@@ -374,6 +376,7 @@ const FOLD_BUDGET: BudgetRow[] = [
   // The 390px font-size, line-height and height predate the issue-1067 floor
   // change, which left 12vw = 46.8px there; letter-spacing and max-width follow it.
   ["h1", "letter-spacing", "atMost", -2.88, -2.106],
+  ["h1", "word-spacing", "atMost", 0, 0],
   ["h1", "text-transform", "atMost", 0, 0],
   ["h1", "width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
   ["h1", "max-width", "atLeast", 416, 304.2],
@@ -391,6 +394,7 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["lede", "font-size", "atMost", 28, 20],
   ["lede", "line-height", "atMost", 42, 30],
   ["lede", "letter-spacing", "atMost", 0, 0],
+  ["lede", "word-spacing", "atMost", 0, 0],
   ["lede", "text-transform", "atMost", 0, 0],
   ["lede", "width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
   ["lede", "max-width", "atLeast", 728, 520],
@@ -415,6 +419,7 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["button", "box-sizing", "atMost", 0, 0],
   ["button", "font-size", "atMost", 16, 16],
   ["button", "line-height", "atMost", 24, 24],
+  ["button", "word-spacing", "atMost", 0, 0],
 ];
 
 // jsdom cannot evaluate a condition at the width under test, so a conditional
