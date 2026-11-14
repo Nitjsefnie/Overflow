@@ -1,10 +1,10 @@
 {
   "trees": {
-    "tests/": 199330
+    "tests/": 199329
   },
   "schema_version": 1,
   "baseline": {
-    "scripts/check-page-geometry.mjs": 1379,
+    "scripts/check-page-geometry.mjs": 1378,
     "src/app/globals.css": 1233,
     "src/components/repository-form.tsx": 833,
     "src/lib/dashboard/queries.ts": 1526,
