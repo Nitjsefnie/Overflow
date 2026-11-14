@@ -15,7 +15,7 @@ export function readSweepPassPageCeiling(environment: Partial<Record<string, str
 }
 /** One job's whole retry ladder: RECONCILIATION_RETRY_DELAYS_MS plus the first attempt. */
 export const SWEEP_PASS_FAILED_RUN_BOUND = 5;
-/** Held passes span windows; the largest repository needs about four days. */
+/** Held passes span windows; the age bound retires a pass that cannot complete. */
 export const SWEEP_PASS_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
 export class StagedPassDataUnreadable extends Error {

@@ -215,7 +215,7 @@ describe("sponsor quota admission through transport, fold and worker", () => {
   ])("keeps candidate A independent of B ($a / $b)", async ({ a, b, outcome }) => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-09-07T10:00:00Z"));
-    vi.stubEnv("GITHUB_GRAPHQL_BUDGET_RESERVE", "500");
+    vi.stubEnv("OVERFLOW_GITHUB_GRAPHQL_BUDGET_RESERVE", "500");
     const budget = createGitHubGraphqlBudgetStore();
     Reflect.set(globalThis, budgetKey, budget);
     for (const [owner, remaining, resetAt] of [
@@ -288,7 +288,7 @@ describe("sponsor quota admission through transport, fold and worker", () => {
     const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-09-07T10:00:00Z"));
-    vi.stubEnv("GITHUB_GRAPHQL_BUDGET_RESERVE", "500");
+    vi.stubEnv("OVERFLOW_GITHUB_GRAPHQL_BUDGET_RESERVE", "500");
     const budget = createGitHubGraphqlBudgetStore();
     const resetAt = new Date("2026-09-07T11:00:00Z");
     budget.record("sponsor-1", { remaining: 42, limit: 5000, cost: 1, resetAt, observedAt: new Date("2026-09-07T10:00:00Z") });
