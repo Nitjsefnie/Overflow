@@ -597,6 +597,36 @@ describe("rating authority", () => {
   });
 });
 
+describe("unlabelled self-work closures", () => {
+  // The true case is the sponsor's own merged pull request with no actual-catalog label standing at
+  // the window close and none applied after it; every other row differs from it in exactly one property.
+  const lateLabel = { kind: "LABELED" as const, id: "late", actorLogin: "sponsor", actorGitHubUserId: null, label: "delivered/6", createdAt: "2026-09-01T13:00:00.000Z" };
+  it.each([
+    { name: "marks the sponsor's own unlabelled closure", marked: true, reason: /^No configured actual-catalog label was standing .*Z\.$/ },
+    { name: "keeps the sponsor's own unlabelled closure marked while the sponsor was banned at merge", marked: true, reason: /^No configured/, banned: true },
+    { name: "leaves an outsider's unlabelled closure unmarked", marked: false, reason: /^No configured/, outsider: true },
+    { name: "leaves a closure with a label applied after the window unmarked", marked: false, reason: /The earliest later application, `delivered\/6`/, history: [lateLabel] },
+    { name: "leaves a label applied before the ordering window unmarked", marked: false, reason: /^The settled label `delivered\/6` was applied at .*, outside the window/, history: [{ ...lateLabel, createdAt: "2026-09-01T09:00:00.000Z" }] },
+    { name: "leaves several standing labels unmarked", marked: false, reason: /^Several actual-catalog labels/, history: [{ ...lateLabel, createdAt: "2026-09-01T11:00:00.000Z" }, { ...lateLabel, id: "other", label: "delivered/5", createdAt: "2026-09-01T11:00:00.000Z" }] },
+    { name: "leaves a standing label with no rationale unmarked", marked: false, reason: /^No nonblank rationale comment/, history: [{ ...lateLabel, createdAt: "2026-09-01T11:00:00.000Z" }] },
+  ])("$name", ({ marked, reason, banned, outsider, history = [] }) => {
+    const snapshot = evidenceFixture(outsider ? {} : { pullRequestAuthor: "sponsor" });
+    const issue = snapshot.issues[0]!;
+    issue.closingPullRequests[0]!.authorGitHubUserId = outsider ? 2001 : 1001;
+    issue.history = [issue.history[0]!, ...history];
+    issue.comments = [];
+    if (banned) {
+      snapshot.repository.sponsor.moderationEvents = [{ id: "ban", priorState: "ACTIVE", newState: "BANNED", occurredAt: "2026-09-01T11:59:00.000Z" }];
+    }
+
+    const [closure, ...others] = foldRepository(snapshot).unwritableClosures;
+
+    expect(others).toEqual([]);
+    expect(closure).toMatchObject({ githubIssueId: 101, kind: "SETTLEMENT_EVIDENCE_REJECTED", githubPullRequestId: 201, reason: expect.stringMatching(reason) });
+    expect(closure!.unlabelledSelfWork === true).toBe(marked);
+  });
+});
+
 describe("rationale comment edits", () => {
   it("rejects a rationale comment edited after the settlement window closed and records why", () => {
     const snapshot = evidenceFixture();

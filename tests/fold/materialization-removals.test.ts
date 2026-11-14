@@ -406,6 +406,7 @@ describe("a reconciliation that deletes materialized rows says so", () => {
           kind: "CLOSING_EVIDENCE_UNREADABLE",
           githubPullRequestId: null,
           reason: "The closing pull request connection could not be read, so no settlement derives from closing evidence that was never read.",
+          unlabelledSelfWork: false,
         },
         after_state: null,
       }]);
