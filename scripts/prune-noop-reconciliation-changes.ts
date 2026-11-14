@@ -22,8 +22,8 @@ import type { Sql } from "postgres";
  *
  * Run against the server DATABASE_URL points at, never without; the variable
  * is read from the environment, so load it first with
- * scripts/systemd-env-file.sh's export_env_file, as the deploy docs do, or let
- * node load a .env file with the --env-file-if-exists=.env flag of the usage. Run it only after
+ * scripts/systemd-env-file.sh's export_env_file, or let node load a .env
+ * file with the --env-file-if-exists=.env flag of the usage. Run it only after
  * the issue 659 fix is deployed: while the bug is live, every pass records
  * new no-op rows and the counted and deleted totals can diverge. Deleting
  * rows does not return the space to the filesystem; afterwards run
