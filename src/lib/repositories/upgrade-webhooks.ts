@@ -36,9 +36,16 @@ export type WebhookUpgradeDependencies = {
   writeError(line: string): void;
 };
 
-/** The stage code and the cause as describeErrorCause renders it: one capped, redacted line. */
-export function failureCauseLine(failure: string | null, error: unknown, repositoryId?: string): string {
-  return JSON.stringify({ repositoryId, failure, cause: describeErrorCause(error) });
+/**
+ * The stage code and the cause as describeErrorCause renders it: one capped,
+ * redacted line. Total, so a catch that writes it still writes its outcome.
+ */
+export function failureCauseLine(failure: WebhookUpgradeOutcome["failure"] | "UPGRADE_FAILED", error: unknown, repositoryId?: string): string {
+  let cause = "unrenderable thrown value";
+  try {
+    cause = describeErrorCause(error);
+  } catch { /* a value String() cannot convert, such as a null-prototype object */ }
+  return JSON.stringify({ repositoryId, failure, cause });
 }
 
 /** Explicit administration followed by durable repair; neither belongs in the fold. */

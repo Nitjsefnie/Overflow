@@ -112,18 +112,19 @@ describe("webhook upgrade CLI", () => {
     expect([...f.lines, ...f.errors].join("\n")).not.toContain("password");
   });
 
-  // One row per catch site: the by-ID read on each arm, the upgrade lock, the enumeration.
-  it.each([["github", "REPOSITORY_FAILED"], ["gitlab", "REPOSITORY_FAILED"], ["github", "REGISTRATION_FAILED"], ["github", "UPGRADE_FAILED"]] as const)(
-    "writes one sanitized %s %s cause to stderr while stdout stays generic", async (provider, failure) => {
+  // One row per catch site: the by-ID read on each arm, the upgrade lock, the enumeration; then each site rejected with a value String() cannot render.
+  it.each([["github", "REPOSITORY_FAILED", true], ["gitlab", "REPOSITORY_FAILED", true], ["github", "REGISTRATION_FAILED", true], ["github", "UPGRADE_FAILED", true],
+    ["github", "REPOSITORY_FAILED", false], ["github", "REGISTRATION_FAILED", false], ["github", "UPGRADE_FAILED", false]] as const)(
+    "writes one sanitized %s %s cause to stderr while stdout stays generic (renderable: %s)", async (provider, failure, renderable) => {
       const token = ["ghp", randomUUID().replaceAll("-", "")].join("_");
-      const refuse = async (): Promise<never> => { throw new TypeError(`refused ${token} upstream`); };
+      const refuse = async (): Promise<never> => { throw renderable ? new TypeError(`refused ${token} upstream`) : Object.create(null); };
       const f = lookupFixture(provider, 200);
       f.dependencies.createGateway = f.dependencies.createGitLabGateway = () => ({ getRepositoryById: refuse, configureWebhook: refuse });
       if (failure === "REGISTRATION_FAILED") f.dependencies.store.withWebhookUpgradeLock = refuse;
       if (failure === "UPGRADE_FAILED") f.dependencies.store.listActiveRepositoryIds = refuse;
       expect(await runWebhookUpgradeCli([], f.dependencies)).toBe(1);
       const repositoryId = failure === "UPGRADE_FAILED" ? undefined : "repository-1";
-      expect(f.errors).toEqual([JSON.stringify({ repositoryId, failure, cause: "TypeError: refused ghp_*** upstream" })]);
+      expect(f.errors).toEqual([JSON.stringify({ repositoryId, failure, cause: renderable ? "TypeError: refused ghp_*** upstream" : "unrenderable thrown value" })]);
       expect(f.lines).toEqual(repositoryId === undefined ? ['{"failure":"UPGRADE_FAILED"}'] : [
         `{"repositoryId":"repository-1","subscription":"FAILED","queue":"NOT_ATTEMPTED","failure":"${failure}"}`, '{"succeeded":0,"failed":1,"gone":0}']);
       expect([...f.lines, ...f.errors].join("\n")).not.toContain(token);
