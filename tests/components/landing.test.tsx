@@ -325,7 +325,7 @@ type SubtreeElement = "page" | "hero" | "eyebrow" | "h1" | "lede" | "trade" | "f
 // browser measurement above, except the h1 and lede max-width: jsdom's 0.5em
 // reading of their ch measures, faithful only to a ch declaration: a non-ch
 // max-width in their stylesheet rules is refused, max-inline-size and inline
-// styles are not (the geometry check's 1366x625 row catches those). Infinity is `none` or `auto`.
+// styles are not (the geometry check measures those at its viewports). Infinity is `none` or `auto`.
 type BudgetRow = [SubtreeElement, string, "atMost" | "atLeast", number, number];
 
 const FOLD_BUDGET: BudgetRow[] = [
