@@ -592,7 +592,7 @@ from the channel as the `osc` identity, through the mailbox CLI the job
 itself used; the messages go and the channel stays, which is the disposal
 phase 7 already performs for the canary's webhook in an operator-held
 channel. A deletion failure is recorded, not retried forever, like phase 4's
-webhook sweep:
+webhook sweep. Run in Bash: the block loads the file with the deploy's reader.
 
 ```sh
 # The channel id comes from the environment file the nightly unit read; this

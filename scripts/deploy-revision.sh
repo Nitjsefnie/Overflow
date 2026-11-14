@@ -647,10 +647,11 @@ if [ "$serving_release" != absent ] && [ -f "$serving_release/REVISION" ]; then
 fi
 npm_config_package_import_method=copy pnpm install --frozen-lockfile
 # This read and both reports use systemd-env-file.sh, beside this script in the
-# deployed tree: systemd v257's EnvironmentFile= parser ported state for state,
-# so the file never runs. Each name it sets is exported over a caller's, for the
-# steps below that need them; a file that cannot be read within
-# OVERFLOW_DEPLOY_ENV_READ_TIMEOUT seconds (test-only, default 5) refuses here.
+# deployed tree: systemd v257's EnvironmentFile= parser ported (its no-op
+# COMMENT_ESCAPE folded into COMMENT), so the file never runs. Each name it sets
+# is exported over a caller's, for the steps below that need them; a file that
+# cannot be read within OVERFLOW_DEPLOY_ENV_READ_TIMEOUT seconds (test-only,
+# default 5) refuses here.
 # The run-time path stops the linter's chase; the reader is linted on its own.
 env_file_assignments=()
 # shellcheck source=/dev/null
