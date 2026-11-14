@@ -17,7 +17,7 @@ function fixture(options: { provider?: string; instanceUrl?: string | null; look
   const queued: { repositoryId: string; reason: string }[] = [];
   const credentials: string[] = [];
   const forgeCredentials: string[] = [];
-  const outcomes: unknown[] = [];
+  const outcomes: unknown[] = [], causes: string[] = [];
   const registrations = [registration];
   const credentialId = randomUUID();
   let pending: WebhookCredentialRecord | null = null;
@@ -82,9 +82,9 @@ function fixture(options: { provider?: string; instanceUrl?: string | null; look
         permissions: { project_access: { access_level: 40 } },
       });
     } }),
-    report: (outcome) => { outcomes.push(outcome); },
+    report: (outcome) => { outcomes.push(outcome); }, writeError: (line) => { causes.push(line); },
   };
-  return { dependencies, requests, queued, credentials, forgeCredentials, outcomes, registrations, repository, hook, gitlabHook, credentialId };
+  return { dependencies, requests, queued, credentials, forgeCredentials, outcomes, causes, registrations, repository, hook, gitlabHook, credentialId };
 }
 
 describe("existing registration webhook upgrade", () => {
@@ -236,6 +236,7 @@ describe("existing registration webhook upgrade", () => {
       { repositoryId: "broken", subscription: "FAILED", queue: "NOT_ATTEMPTED", failure: "REGISTRATION_FAILED" },
       { repositoryId: "registration-1", subscription: "VERIFIED", queue: "QUEUED", failure: null },
     ]);
+    expect(f.causes).toEqual(['{"repositoryId":"broken","failure":"REGISTRATION_FAILED","cause":"Error: private DB row contents"}']);
   });
 
   it("reports a registration deactivated after enumeration without touching GitHub", async () => {

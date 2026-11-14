@@ -1,11 +1,12 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
 import { GitLabGateway } from "@/lib/gitlab/client";
 import { runWebhookUpgradeCli, type WebhookUpgradeCliDependencies } from "../../scripts/upgrade-webhooks";
 
 function fixture() {
-  const lines: string[] = [];
+  const lines: string[] = [], errors: string[] = [];
   const dependencies: WebhookUpgradeCliDependencies = {
     store: {
       withWebhookUpgradeLock: async (_id, operation) => operation(),
@@ -22,8 +23,9 @@ function fixture() {
     createGitLabGateway: () => { throw new Error("must not build a GitLab gateway for a GitHub registration"); },
     webhookUrls: { github: "https://overflow.example/api/github/webhooks", gitlab: "https://overflow.example/api/gitlab/webhooks" },
     write: (line) => { lines.push(line); },
+    writeError: (line) => { errors.push(line); },
   };
-  return { lines, dependencies };
+  return { lines, errors, dependencies };
 }
 
 function lookupFixture(provider: "github" | "gitlab", status: number) {
@@ -106,8 +108,26 @@ describe("webhook upgrade CLI", () => {
   it("sanitizes enumeration failures instead of printing the database connection string", async () => {
     const f = fixture(); f.dependencies.store.listActiveRepositoryIds = async () => { throw new Error("postgres://private:password@database"); };
     expect(await runWebhookUpgradeCli([], f.dependencies)).toBe(1);
-    expect(f.lines.map((line) => JSON.parse(line))).toEqual([{ failure: "UPGRADE_FAILED" }]);
+    expect([f.lines, f.errors]).toEqual([['{"failure":"UPGRADE_FAILED"}'], ['{"failure":"UPGRADE_FAILED","cause":"Error: postgres://***@database"}']]);
+    expect([...f.lines, ...f.errors].join("\n")).not.toContain("password");
   });
+
+  // One row per catch site: the by-ID read on each arm, the upgrade lock, the enumeration.
+  it.each([["github", "REPOSITORY_FAILED"], ["gitlab", "REPOSITORY_FAILED"], ["github", "REGISTRATION_FAILED"], ["github", "UPGRADE_FAILED"]] as const)(
+    "writes one sanitized %s %s cause to stderr while stdout stays generic", async (provider, failure) => {
+      const token = ["ghp", randomUUID().replaceAll("-", "")].join("_");
+      const refuse = async (): Promise<never> => { throw new TypeError(`refused ${token} upstream`); };
+      const f = lookupFixture(provider, 200);
+      f.dependencies.createGateway = f.dependencies.createGitLabGateway = () => ({ getRepositoryById: refuse, configureWebhook: refuse });
+      if (failure === "REGISTRATION_FAILED") f.dependencies.store.withWebhookUpgradeLock = refuse;
+      if (failure === "UPGRADE_FAILED") f.dependencies.store.listActiveRepositoryIds = refuse;
+      expect(await runWebhookUpgradeCli([], f.dependencies)).toBe(1);
+      const repositoryId = failure === "UPGRADE_FAILED" ? undefined : "repository-1";
+      expect(f.errors).toEqual([JSON.stringify({ repositoryId, failure, cause: "TypeError: refused ghp_*** upstream" })]);
+      expect(f.lines).toEqual(repositoryId === undefined ? ['{"failure":"UPGRADE_FAILED"}'] : [
+        `{"repositoryId":"repository-1","subscription":"FAILED","queue":"NOT_ATTEMPTED","failure":"${failure}"}`, '{"succeeded":0,"failed":1,"gone":0}']);
+      expect([...f.lines, ...f.errors].join("\n")).not.toContain(token);
+    });
 
   it.each([["--repository"], ["--unknown", "secret-token"], ["--help", "extra"]])("rejects invalid arguments without database or GitHub work: %j", async (...args) => {
     const f = fixture(); f.dependencies.store.listActiveRepositoryIds = async () => { throw new Error("must not enumerate"); };
@@ -115,17 +135,20 @@ describe("webhook upgrade CLI", () => {
     expect(f.lines).toEqual(["Usage: pnpm webhooks:upgrade [--help]"]);
   });
 
+  // The default stderr writer is reached only here; Node's own warnings share that stream.
   it.each([
-    { args: ["--help"], status: 0, output: "Usage: pnpm webhooks:upgrade [--help]" },
-    { args: ["--bad", "secret-argument"], status: 2, output: "Usage: pnpm webhooks:upgrade [--help]" },
-    { args: [], status: 1, output: '{"failure":"UPGRADE_FAILED"}' },
-  ])("reaches the actual package command with args $args and preserves exit $status", ({ args, status, output }) => {
+    { args: ["--help"], status: 0, output: "Usage: pnpm webhooks:upgrade [--help]", causes: [] },
+    { args: ["--bad", "secret-argument"], status: 2, output: "Usage: pnpm webhooks:upgrade [--help]", causes: [] },
+    { args: [], status: 1, output: '{"failure":"UPGRADE_FAILED"}', causes: [expect.stringMatching(/^\{"failure":"UPGRADE_FAILED","cause":"\w*Error: .+"\}$/)] },
+  ])("reaches the actual package command with args $args and preserves exit $status", ({ args, status, output, causes }) => {
     const result = spawnSync("pnpm", ["--silent", "webhooks:upgrade", ...args], { cwd: process.cwd(), encoding: "utf8", timeout: 60_000,
       env: { ...process.env, NODE_OPTIONS: "", OVERFLOW_DATABASE_URL: "", GITHUB_WEBHOOK_SECRET: "" } });
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(status);
     expect(result.stdout.trim()).toBe(output);
+    const stderr = result.stderr.split("\n");
+    expect(stderr.filter((line) => line.startsWith("{"))).toEqual(causes);
     expect(result.stderr).not.toContain("secret-argument");
-    expect(result.stderr).not.toContain("Error:");
+    expect(stderr.filter((line) => !line.startsWith("{")).join("\n")).not.toContain("Error:");
   });
 });

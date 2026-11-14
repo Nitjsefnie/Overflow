@@ -6,10 +6,11 @@ import { GitLabGateway } from "../src/lib/gitlab/client.ts";
 import { PostgresFoldStore } from "../src/lib/fold/postgres-store.ts";
 import { PostgresForgeIdentityStore } from "../src/lib/forge/postgres-identities-store.ts";
 import { PostgresRepositoryStore } from "../src/lib/repositories/postgres-store.ts";
-import { upgradeRepositoryWebhooks, type WebhookUpgradeDependencies } from "../src/lib/repositories/upgrade-webhooks.ts";
+import { failureCauseLine, upgradeRepositoryWebhooks, type WebhookUpgradeDependencies } from "../src/lib/repositories/upgrade-webhooks.ts";
 
-export type WebhookUpgradeCliDependencies = Omit<WebhookUpgradeDependencies, "report"> & {
+export type WebhookUpgradeCliDependencies = Omit<WebhookUpgradeDependencies, "report" | "writeError"> & {
   write(line: string): void;
+  writeError?(line: string): void;
 };
 
 export async function runWebhookUpgradeCli(
@@ -17,6 +18,7 @@ export async function runWebhookUpgradeCli(
   dependencies?: WebhookUpgradeCliDependencies,
 ): Promise<number> {
   const write = dependencies?.write ?? ((line: string) => process.stdout.write(`${line}\n`));
+  const writeError = dependencies?.writeError ?? ((line: string) => process.stderr.write(`${line}\n`));
   if (argumentsList.length > 0) {
     write("Usage: pnpm webhooks:upgrade [--help]");
     return argumentsList.length === 1 && argumentsList[0] === "--help" ? 0 : 2;
@@ -25,11 +27,13 @@ export async function runWebhookUpgradeCli(
     dependencies ??= productionDependencies(write);
     const summary = await upgradeRepositoryWebhooks({
       ...dependencies,
+      writeError,
       report: (outcome) => write(JSON.stringify(outcome)),
     });
     write(JSON.stringify(summary));
     return summary.failed === 0 ? 0 : 1;
-  } catch {
+  } catch (error) {
+    writeError(failureCauseLine("UPGRADE_FAILED", error));
     write(JSON.stringify({ failure: "UPGRADE_FAILED" }));
     return 1;
   }
