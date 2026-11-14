@@ -519,10 +519,9 @@ function toPixels(value: string, fontSize: number, property: string, direction: 
   if (trimmed === "none" || trimmed === "auto") {
     return direction === "atMost" ? 0 : Number.POSITIVE_INFINITY;
   }
-  // `normal` is zero spacing; for anything else it is a value this cannot bound.
+  // `normal` is zero spacing and a numeric weight is itself; any other keyword is refused below.
   if (trimmed === "normal" && property.endsWith("-spacing")) return 0;
-  // A weight is compared as itself; a weight keyword other than normal or bold is refused.
-  if (property === "font-weight" && /^(normal|bold|\d+(\.\d+)?)$/.test(trimmed)) return trimmed === "normal" ? 400 : trimmed === "bold" ? 700 : Number(trimmed);
+  if (property === "font-weight" && /^\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
   const number = Number.parseFloat(trimmed);
   if (!Number.isNaN(number)) {
     if (trimmed.endsWith("px")) return number;
