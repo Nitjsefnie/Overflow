@@ -64,8 +64,8 @@ const gateway: ReconciliationGateway = {
   getIssue: failRemoteRead, getPullRequestClosingIssues: failRemoteRead,
   getPullRequestReviews: failRemoteRead, getPullRequestDiff: failRemoteRead,
 };
-// A sweep fold walks through the production adapter. Each modelled read is one
-// forge request, admitted by the sweep budget as the gateway transport does.
+// A sweep fold walks through the production adapter. Each modelled read is
+// admitted by the sweep budget as the gateway transport admits each request.
 const forge = {
   request: async (path: string) => {
     await checkSweepRequestBudget();
@@ -74,6 +74,7 @@ const forge = {
     return { status: 200, headers: new Headers(), body: JSON.stringify(rows) };
   },
   gatherIssue: async (_reference: unknown, subject: { id: number }) => {
+    // shortcut: one charge where production gatherIssue sends several GraphQL requests; drive the real gateway to count them.
     await checkSweepRequestBudget();
     return subject.id === issue.id ? issue : failRemoteRead();
   },
@@ -166,6 +167,28 @@ const workloads: Record<string, Workload> = {
       const [share] = await sql`select spent from reconciliation_sweep_repository_spend where repository_id = ${repository.id}`;
       if (passes.length !== 0 || staged.length !== 0 || !(round?.spent > 0) || share?.spent !== round?.spent) {
         throw new Error("repository-sweep-fold did not complete its sweep pass");
+      }
+    },
+  },
+  "repository-inactive-fold": {
+    seed: async (_url, sql) => {
+      await seedMinimal(sql);
+      // A held sweep pass, then a sanction deactivation, which (unlike unregistration) discards no pass.
+      const pass = await new PostgresSweepPassStore(sql).open({ repositoryId: repository.id, evidenceVersion: "held",
+        scanStartedAt: new Date("2025-09-01T12:00:00.000Z"), dirtySubjects: [] });
+      await pass.stage({ anchor: "subjects", kind: "issue", subjectKey: issue.id, updatedAt: new Date(issue.updatedAt), payload: issue });
+      await pass.hold();
+      await sql`update registered_repositories set active = false, sanction_deactivated_at = now() where id = ${repository.id}`;
+    },
+    // The queued SWEEP job folds it; the inactive branch reads no forge.
+    run: (sql) => fold(sql, { ...gateway, getRepositoryById: failRemoteRead, listIssues: failRemoteRead }, sweepControl(sql)),
+    verify: async (sql) => {
+      const [row] = await sql`select status from reconciliation_runs where repository_id = ${repository.id}`;
+      const issues = await sql`select github_issue_id from issues`;
+      const passes = await sql`select pass_id from reconciliation_sweep_passes`;
+      const staged = await sql`select pass_id from reconciliation_sweep_walk_subjects`;
+      if (row?.status !== "COMPLETED" || issues.length !== 0 || passes.length !== 0 || staged.length !== 0) {
+        throw new Error("repository-inactive-fold did not discard its sweep pass");
       }
     },
   },
