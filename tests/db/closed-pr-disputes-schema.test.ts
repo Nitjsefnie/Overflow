@@ -89,8 +89,8 @@ describe("closed PR dispute schema", () => {
       await runMigrations({ upTo: "073_dispute_credit_limit_replay.sql" });
       // Today's materializer writes the fixture, so it gets the columns later migrations add; dropped
       // again before the upgrade runs, the schema is 073's exactly.
-      await sql`alter table issues add column asks_outside_repository boolean not null default false`;
-      await sql`alter table issues add column done_when text`;
+      await sql`alter table issues add column asks_outside_repository boolean not null default false, add column done_when text`;
+      await sql`alter table unwritable_closures add column unlabelled_self_work boolean not null default false`;
       await sql`alter table settlements add column donation_comment_id text`;
       await sql`alter table registered_repositories add column first_listed_issue_id bigint,
         add column second_issue_listed boolean not null default false,
@@ -105,8 +105,8 @@ describe("closed PR dispute schema", () => {
         const surplus = await insertRequest(fixture, { ...grantFields(fixture), pull_request_id: otherPrId });
         surplusRequestIds.push(surplus.id as string);
       }
-      await sql`alter table issues drop column asks_outside_repository`;
-      await sql`alter table issues drop column done_when`;
+      await sql`alter table issues drop column asks_outside_repository, drop column done_when`;
+      await sql`alter table unwritable_closures drop column unlabelled_self_work`;
       await sql`alter table settlements drop column donation_comment_id`;
       await sql`alter table registered_repositories drop column first_listed_issue_id,
         drop column second_issue_listed, drop column contributor_review_received`;
