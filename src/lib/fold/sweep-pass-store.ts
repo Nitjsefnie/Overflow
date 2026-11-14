@@ -7,7 +7,8 @@ import type { DirtyReconciliationSubject } from "@/lib/fold/reconciliation-evide
 import { readSweepPassPageCeiling, SWEEP_PASS_FAILED_RUN_BOUND, SWEEP_PASS_MAX_AGE_MS, type SweepPass, type SweepPassInput } from "@/lib/fold/sweep-pass";
 import { isDirtySubjects } from "@/lib/fold/staged-pass-data";
 
-type PassRow = { pass_id: string; scan_started_at: Date; dirty_subjects: DirtyReconciliationSubject[]; walk_anchors: unknown };
+type StoredDirtySubject = Omit<DirtyReconciliationSubject, "generation"> & { generation: string | number };
+type PassRow = { pass_id: string; scan_started_at: Date; dirty_subjects: StoredDirtySubject[]; walk_anchors: unknown };
 type WalkAnchors = Record<string, { updatedAt: Date; key: number }>;
 
 function parseWalkAnchors(value: unknown): WalkAnchors {
