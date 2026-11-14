@@ -580,6 +580,7 @@ describe("unlabelled self-work closures", () => {
     { name: "keeps the sponsor's own unlabelled closure marked while the sponsor was banned at merge", marked: true, reason: /^No configured/, banned: true },
     { name: "leaves an outsider's unlabelled closure unmarked", marked: false, reason: /^No configured/, outsider: true },
     { name: "leaves a closure with a label applied after the window unmarked", marked: false, reason: /The earliest later application, `delivered\/6`/, history: [lateLabel] },
+    { name: "leaves a closure with a contributor's label applied after the window unmarked", marked: false, reason: /The earliest later application, `delivered\/6`/, history: [{ ...lateLabel, actorLogin: "contributor", actorGitHubUserId: 2001 }] },
     { name: "leaves a label applied before the ordering window unmarked", marked: false, reason: /^The settled label `delivered\/6` was applied at .*, outside the window/, history: [{ ...lateLabel, createdAt: "2026-09-01T09:00:00.000Z" }] },
     { name: "leaves several standing labels unmarked", marked: false, reason: /^Several actual-catalog labels/, history: [{ ...lateLabel, createdAt: "2026-09-01T11:00:00.000Z" }, { ...lateLabel, id: "other", label: "delivered/5", createdAt: "2026-09-01T11:00:00.000Z" }] },
     { name: "leaves a standing label with no rationale unmarked", marked: false, reason: /^No nonblank rationale comment/, history: [{ ...lateLabel, createdAt: "2026-09-01T11:00:00.000Z" }] },
@@ -589,9 +590,7 @@ describe("unlabelled self-work closures", () => {
     issue.closingPullRequests[0]!.authorGitHubUserId = outsider ? 2001 : 1001;
     issue.history = [issue.history[0]!, ...history];
     issue.comments = [];
-    if (banned) {
-      snapshot.repository.sponsor.moderationEvents = [{ id: "ban", priorState: "ACTIVE", newState: "BANNED", occurredAt: "2026-09-01T11:59:00.000Z" }];
-    }
+    if (banned) snapshot.repository.sponsor.moderationEvents = [{ id: "ban", priorState: "ACTIVE", newState: "BANNED", occurredAt: "2026-09-01T11:59:00.000Z" }];
 
     const [closure, ...others] = foldRepository(snapshot).unwritableClosures;
 
