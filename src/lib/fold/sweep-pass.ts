@@ -51,14 +51,13 @@ export type ReconciliationSweepControl = {
   discardIfInactive?(repositoryId: string): Promise<void>;
 };
 /** Runs after coordination is released: an unregistration that committed during the run left no other disposal. */
-export async function discardInactivePassAfterFailure<T>(
+export async function discardInactivePassAfterRun<T>(
   sweep: ReconciliationSweepControl | undefined, repositoryId: string, coordinatedRun: () => Promise<T>,
 ): Promise<T> {
   try {
     return await coordinatedRun();
-  } catch (error) {
+  } finally {
     try { await sweep?.discardIfInactive?.(repositoryId); } catch { console.error("Could not discard reconciliation sweep checkpoints."); }
-    throw error;
   }
 }
 export async function discardSweepPass(pass: SweepPass | undefined): Promise<void> {

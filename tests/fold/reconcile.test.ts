@@ -500,20 +500,21 @@ describe("reconcileRepository", () => {
       expect(f.pass.complete).not.toHaveBeenCalled();
     });
 
-    it("does not settle the pass of a run that succeeded and keeps the failure when settling fails", async () => {
+    it("settles the pass of a run that succeeded too and keeps each outcome when settling fails", async () => {
       const { f, dependencies, discardIfInactive } = sweepRun();
       await reconcileRepository(dependencies, "repository", { reason: "SWEEP" });
-      expect(discardIfInactive).not.toHaveBeenCalled();
+      expect(discardIfInactive).toHaveBeenCalledExactlyOnceWith("repository");
 
-      failGathering(f, 2, new GitHubApiError(500));
       discardIfInactive.mockRejectedValue(new Error("database unavailable"));
       const logged = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
+        expect((await reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).skipped).toBe(false);
+        failGathering(f, 2, new GitHubApiError(500));
         await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).rejects.toThrow("Unable to reconcile repository.");
-        expect(logged.mock.calls).toContainEqual(["Could not discard reconciliation sweep checkpoints."]);
+        expect(logged.mock.calls.filter((call) => call[0] === "Could not discard reconciliation sweep checkpoints.")).toHaveLength(2);
         expect(logged.mock.calls.flat().map(String).join("\n")).not.toContain("database unavailable");
       } finally { logged.mockRestore(); }
-      expect(discardIfInactive).toHaveBeenCalledOnce();
+      expect(discardIfInactive).toHaveBeenCalledTimes(3);
     });
 
     it("ends the sweep pass when the fold completes", async () => {

@@ -325,7 +325,7 @@ describe("paused full-pass pages", () => {
   });
 });
 
-describe("unregistration racing a failed fold", () => {
+describe("unregistration racing a fold", () => {
   type Fixture = Awaited<ReturnType<typeof pausedFixture>>;
   function pausedUnregistration(f: Fixture) {
     const updated = signal(); const commit = signal();
@@ -410,6 +410,42 @@ describe("unregistration racing a failed fold", () => {
     expect(await stagedCounts(f.repositoryId, f.state.pass!.id)).toEqual({ passes: 0, pages: 0 });
   });
 
+  const staged = { anchor: "all", kind: "issue" as const, subjectKey: 1, updatedAt: at, payload: { title: "staged" } };
+  const leftovers = async (f: Fixture) => ({ ...await stagedCounts(f.repositoryId, f.state.pass!.id),
+    staged: (await sql`select 1 from reconciliation_sweep_walk_subjects where pass_id = ${f.state.pass!.id}`).length });
+  const [live, none] = [{ passes: 1, pages: 2, staged: 1 }, { passes: 0, pages: 0, staged: 0 }];
+  const unregister = async (f: Fixture) => (await new PostgresRepositoryStore(sql).unregisterRepository(f.registration)).kind;
+
+  it("leaves no pass, page or staged subject when a run held for the sweep budget outlives the unregistration", async () => {
+    const f = await pausedFixture();
+    const entered = signal(); const release = signal();
+    f.github.listIssues = async () => {
+      await f.state.pass!.write("second", { text: "in-flight page" }); await f.state.pass!.stage(staged);
+      entered.resolve(); await release.promise;
+      throw new SweepBudgetSpent(new Date("2030-01-01T06:00:00Z"));
+    };
+    const run = reconcileRepository(f.dependencies, f.repositoryId, { reason: "SWEEP" });
+    const during = (await entered.promise, await leftovers(f));
+    const unregistered = await unregister(f).finally(() => release.resolve());
+    expect({ during, unregistered, run: await run, after: await leftovers(f) }).toEqual({ during: live, unregistered: "UNREGISTERED",
+      run: expect.objectContaining({ skipped: true, sweepHeldUntil: new Date("2030-01-01T06:00:00Z") }), after: none });
+  });
+
+  it("leaves no pass, page or staged subject when a webhook run read the repository before the unregistration, after a failed run", async () => {
+    const f = await pausedFixture();
+    failWith(f, () => f.state.pass!.stage(staged));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const failedRun = await failed(f).finally(() => log.mockRestore());
+    const kept = await leftovers(f);
+    f.github.listIssues = async () => [];
+    const entered = signal(); const release = signal();
+    const read = f.store.getRepository.bind(f.store);
+    f.store.getRepository = async (id) => { const row = await read(id); entered.resolve(); await release.promise; return row; };
+    const webhook = reconcileRepository(f.dependencies, f.repositoryId, { reason: "WEBHOOK" });
+    const unregistered = (await entered.promise, await unregister(f).finally(() => release.resolve()));
+    expect({ failedRun, kept, unregistered, webhook: (await webhook).repositoryId, after: await leftovers(f) })
+      .toEqual({ failedRun: true, kept: live, unregistered: "UNREGISTERED", webhook: f.repositoryId, after: none });
+  });
 });
 
 describe("durable sweep walk subjects", () => {
