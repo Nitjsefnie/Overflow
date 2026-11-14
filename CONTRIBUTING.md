@@ -266,8 +266,10 @@ requires it; the default contracts include signed-in pages. Refusals exit 2;
 measured failures exit 1.
 
 The SQL statement budget check counts statements through the real postgres.js
-client during three workloads: two default-size pages of board data, one full
-repository fold, and one signature-verified webhook ingestion. Each workload
+client during four workloads: two default-size pages of board data, one full
+repository fold, one sweep fold through the production sweep control (it opens,
+charges, stages and completes its pass), and one signature-verified webhook
+ingestion. A sweep pass hold is an error path no workload reaches. Each workload
 starts from a fresh deterministic fixture and runs twice; unequal counts fail.
 Missing or unbudgeted workloads also fail. This measures statement counts,
 never elapsed time or rows returned. Fixture setup and verification queries
