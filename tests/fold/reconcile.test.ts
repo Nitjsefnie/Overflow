@@ -571,9 +571,7 @@ describe("reconcileRepository", () => {
     });
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({
-        runId: "run-1", skipped: false, adds: 1,
-      });
+      await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ runId: "run-1", skipped: false, adds: 1 });
       expect(dependencies.github.getPullRequestReviews).toHaveBeenCalledTimes(2);
       expect(dependencies.store.materialize).toHaveBeenCalledWith(expect.objectContaining({
         synchronization: expect.objectContaining({ pullRequests: [{ id: 201, reviews, rawDiff: "diff" }] }),
@@ -584,9 +582,7 @@ describe("reconcileRepository", () => {
 
   it("fails the run immediately when a review read rejects the credential", async () => {
     const failure = new GitHubApiError(401);
-    const dependencies = reconciliationDependencies({
-      github: { getPullRequestReviews: vi.fn().mockRejectedValue(failure) },
-    });
+    const dependencies = reconciliationDependencies({ github: { getPullRequestReviews: vi.fn().mockRejectedValue(failure) } });
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ cause: failure });
@@ -598,9 +594,7 @@ describe("reconcileRepository", () => {
 
   it.each(["cause", "deadline", "headers"] as const)("records an ordinary failure when %s guidance is unreadable", async (field) => {
     const upstream = field === "cause" ? new Error("Upstream failure") : new GitHubApiError(403, true, 120);
-    Object.defineProperty(upstream, field === "deadline" ? "notBefore" : field, {
-      get: () => { throw new Error("error field refused"); },
-    });
+    Object.defineProperty(upstream, field === "deadline" ? "notBefore" : field, { get: () => { throw new Error("error field refused"); } });
     const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockRejectedValue(upstream) } });
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
@@ -1247,11 +1241,7 @@ describe("reconcileRepository", () => {
 
   it("records a sanitized failed run while logging and propagating the cause", async () => {
     const upstream = new Error("token=secret should not be persisted");
-    const dependencies = reconciliationDependencies({
-      github: {
-        listIssues: vi.fn().mockRejectedValue(upstream),
-      },
-    });
+    const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockRejectedValue(upstream) } });
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
@@ -1277,12 +1267,8 @@ describe("reconcileRepository", () => {
 
   it("fails the whole run without discarding or materializing when the issue list exceeds the response cap", async () => {
     const overCap = new GitHubResponseTooLargeError(MAX_SUCCESS_BODY_BYTES);
-    const dependencies = reconciliationDependencies({
-      github: { listIssues: vi.fn().mockRejectedValue(overCap) },
-    });
-    dependencies.store.getDirtyReconciliationSubjects = async () => [
-      { kind: "ISSUE", id: 999, number: 42, generation: "7" },
-    ];
+    const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockRejectedValue(overCap) } });
+    dependencies.store.getDirtyReconciliationSubjects = async () => [{ kind: "ISSUE", id: 999, number: 42, generation: "7" }];
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
@@ -1332,9 +1318,7 @@ describe("reconcileRepository", () => {
   it("keeps a GitHub response body on the rethrown cause and out of the stored failure", async () => {
     const body = "secondary rate limit at https://github.com/?token=sponsor-secret";
     const upstream = new GitHubApiError(403, true, null, body);
-    const dependencies = reconciliationDependencies({
-      github: { listIssues: vi.fn().mockRejectedValue(upstream) },
-    });
+    const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockRejectedValue(upstream) } });
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
@@ -1354,15 +1338,11 @@ describe("reconcileRepository", () => {
 
   it("records the credential as the cause when the fold died on a rejected GitLab credential", async () => {
     const rejection = new ForgeCredentialRejectedError();
-    const dependencies = reconciliationDependencies({
-      github: { listIssues: vi.fn().mockRejectedValue(rejection) },
-    });
+    const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockRejectedValue(rejection) } });
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
-      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
-        cause: rejection,
-      });
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ cause: rejection });
       expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE, null);
       // The cause still reaches the service log as the encoded token, exactly
       // as on the generic path (issue 1042).
@@ -1435,9 +1415,7 @@ describe("reconcileRepository", () => {
     try {
       await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
       expect(discard).toHaveBeenCalledTimes(1);
-      expect(discard).toHaveBeenCalledWith({
-        repositoryId: "repository", kind: "ISSUE", githubSubjectId: 999, generation: "7",
-      });
+      expect(discard).toHaveBeenCalledWith({ repositoryId: "repository", kind: "ISSUE", githubSubjectId: 999, generation: "7" });
       expect(dependencies.store.failRun).not.toHaveBeenCalled();
       expect(errorLog).toHaveBeenCalledTimes(1);
       expect(errorLog).toHaveBeenCalledWith(
@@ -1490,9 +1468,7 @@ describe("reconcileRepository", () => {
     try {
       await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
       expect(discard).toHaveBeenCalledTimes(1);
-      expect(discard).toHaveBeenCalledWith({
-        repositoryId: "repository", kind: "ISSUE", githubSubjectId: 999, generation: "7",
-      });
+      expect(discard).toHaveBeenCalledWith({ repositoryId: "repository", kind: "ISSUE", githubSubjectId: 999, generation: "7" });
       expect(dependencies.store.failRun).not.toHaveBeenCalled();
       expect(errorLog).toHaveBeenCalledTimes(1);
       expect(errorLog).toHaveBeenCalledWith(
@@ -1538,9 +1514,7 @@ describe("reconcileRepository", () => {
     dependencies.store.discardDirtyReconciliationSubject = vi.fn().mockResolvedValue(undefined);
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
-        message: "Unable to reconcile repository.",
-      });
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ message: "Unable to reconcile repository." });
       expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
     } finally {
@@ -1577,9 +1551,7 @@ describe("reconcileRepository", () => {
     try {
       await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
       expect(discard).toHaveBeenCalledTimes(1);
-      expect(discard).toHaveBeenCalledWith({
-        repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 777, generation: "9",
-      });
+      expect(discard).toHaveBeenCalledWith({ repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 777, generation: "9" });
       expect(dependencies.store.failRun).not.toHaveBeenCalled();
       expect(errorLog).toHaveBeenCalledTimes(1);
       expect(errorLog).toHaveBeenCalledWith(
@@ -1630,9 +1602,7 @@ describe("reconcileRepository", () => {
       try {
         await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
         expect(discard).toHaveBeenCalledTimes(1);
-        expect(discard).toHaveBeenCalledWith({
-          repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: "7",
-        });
+        expect(discard).toHaveBeenCalledWith({ repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: "7" });
         expect(dependencies.store.failRun).not.toHaveBeenCalled();
         expect(errorLog).toHaveBeenCalledTimes(1);
         expect(errorLog).toHaveBeenCalledWith(
@@ -1686,9 +1656,7 @@ describe("reconcileRepository", () => {
       try {
         await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
         expect(discard).toHaveBeenCalledTimes(1);
-        expect(discard).toHaveBeenCalledWith({
-          repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: "7",
-        });
+        expect(discard).toHaveBeenCalledWith({ repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: "7" });
         expect(dependencies.store.failRun).not.toHaveBeenCalled();
         expect(errorLog).toHaveBeenCalledTimes(1);
         expect(errorLog).toHaveBeenCalledWith(
@@ -1755,9 +1723,7 @@ describe("reconcileRepository", () => {
       try {
         await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
         expect(discard).toHaveBeenCalledTimes(1);
-        expect(discard).toHaveBeenCalledWith({
-          repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: "7",
-        });
+        expect(discard).toHaveBeenCalledWith({ repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: "7" });
         expect(dependencies.store.failRun).not.toHaveBeenCalled();
         expect(errorLog).toHaveBeenCalledTimes(1);
         expect(errorLog).toHaveBeenCalledWith(
@@ -1818,9 +1784,7 @@ describe("reconcileRepository", () => {
       const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
 
       try {
-        await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
-          message: "Unable to reconcile repository.",
-        });
+        await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ message: "Unable to reconcile repository." });
         expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
         expect(discard).not.toHaveBeenCalled();
       } finally {
@@ -1851,15 +1815,11 @@ describe("reconcileRepository", () => {
       issues: [],
       pullRequests: [],
     });
-    dependencies.store.getDirtyReconciliationSubjects = async () => [
-      { kind: "ISSUE" as const, id: 999, number: 42, generation: "7" },
-    ];
+    dependencies.store.getDirtyReconciliationSubjects = async () => [{ kind: "ISSUE" as const, id: 999, number: 42, generation: "7" }];
     dependencies.store.discardDirtyReconciliationSubject = vi.fn().mockResolvedValue(undefined);
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
-        message: "Unable to reconcile repository.",
-      });
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ message: "Unable to reconcile repository." });
       expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
     } finally {
@@ -1949,18 +1909,14 @@ describe("reconcileRepository", () => {
     try {
       await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
       expect(discard).toHaveBeenCalledTimes(1);
-      expect(discard).toHaveBeenCalledWith({
-        repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: "7",
-      });
+      expect(discard).toHaveBeenCalledWith({ repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: "7" });
       expect(dependencies.store.failRun).not.toHaveBeenCalled();
       expect(errorLog).toHaveBeenCalledTimes(1);
       expect(errorLog).toHaveBeenCalledWith(
         "Reconciliation of repository repository discarded unresolvable subject kind=PULL_REQUEST number=11 reason=NOT_FOUND",
       );
       const materializeInput = vi.mocked(dependencies.store.materialize).mock.calls[0]![0];
-      expect(materializeInput.synchronization?.pullRequests).toEqual([
-        { id: 201, reviews: [cachedReview], rawDiff: "cached diff" },
-      ]);
+      expect(materializeInput.synchronization?.pullRequests).toEqual([{ id: 201, reviews: [cachedReview], rawDiff: "cached diff" }]);
       expect(vi.mocked(dependencies.github.getPullRequestDiff).mock.calls.map(([, number]) => number)).toEqual([11]);
     } finally {
       errorLog.mockRestore();
@@ -2018,9 +1974,7 @@ describe("reconcileRepository", () => {
     try {
       await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
       expect(discard).toHaveBeenCalledTimes(1);
-      expect(discard).toHaveBeenCalledWith({
-        repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: "7",
-      });
+      expect(discard).toHaveBeenCalledWith({ repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: "7" });
       expect(errorLog).toHaveBeenCalledTimes(1);
       expect(errorLog).toHaveBeenCalledWith(
         "Reconciliation of repository repository discarded unresolvable subject kind=PULL_REQUEST number=11 reason=NOT_FOUND",
@@ -2050,9 +2004,7 @@ describe("reconcileRepository", () => {
     });
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
-        message: "Unable to reconcile repository.",
-      });
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ message: "Unable to reconcile repository." });
       expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
     } finally {
@@ -2078,9 +2030,7 @@ describe("reconcileRepository", () => {
     ];
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
-        message: "Unable to reconcile repository.",
-      });
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ message: "Unable to reconcile repository." });
       expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
       expect(errorLog).toHaveBeenCalledTimes(1);
@@ -2115,9 +2065,7 @@ describe("reconcileRepository", () => {
     dependencies.store.discardDirtyReconciliationSubject = vi.fn().mockResolvedValue(undefined);
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
-        message: "Unable to reconcile repository.",
-      });
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ message: "Unable to reconcile repository." });
       expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
     } finally {
@@ -2176,9 +2124,7 @@ describe("reconcileRepository", () => {
     { reason: "NOT_PUBLIC", verified: verifiedRepository({ visibility: "PRIVATE" }) },
   ] as const)("declines the crawl and records $reason instead of materializing another repository", async ({ reason, verified }) => {
     const now = () => new Date("2030-01-02T03:04:05.678Z");
-    const dependencies = reconciliationDependencies({
-      github: { getRepositoryById: vi.fn().mockResolvedValue(verified) },
-    });
+    const dependencies = reconciliationDependencies({ github: { getRepositoryById: vi.fn().mockResolvedValue(verified) } });
 
     const summary = await reconcileRepository({ ...dependencies, now }, "repository");
 
@@ -2232,9 +2178,7 @@ describe("reconcileRepository", () => {
     const upstream = new GitHubApiError(403, rateLimited, 120);
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      const dependencies = reconciliationDependencies({
-        github: { getRepositoryById: vi.fn().mockRejectedValue(upstream) },
-      });
+      const dependencies = reconciliationDependencies({ github: { getRepositoryById: vi.fn().mockRejectedValue(upstream) } });
 
       await expect(reconcileRepository({ ...dependencies, now }, "repository")).rejects.toMatchObject({ cause: upstream });
 
@@ -2287,9 +2231,7 @@ describe("reconcileRepository", () => {
     vi.mocked(dependencies.store.getReconciliationCooldown)
       .mockResolvedValue(new Date(now().getTime() + 1));
     const githubReads = vi.fn(() => dependencies.github);
-    const lazyDependencies = Object.defineProperty({ ...dependencies, now }, "github", {
-      get: githubReads, enumerable: true,
-    });
+    const lazyDependencies = Object.defineProperty({ ...dependencies, now }, "github", { get: githubReads, enumerable: true });
 
     const summary = await reconcileRepository(lazyDependencies, "repository");
 

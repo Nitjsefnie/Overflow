@@ -20,9 +20,7 @@ describe("reconcileRepository unreadable issue connections", () => {
   it("completes the run when the walk reports one issue's closing connection unreadable, journaling the marked issue", async () => {
     const marked = { ...reconciliationIssue({ id: 101, number: 1 }), closingPullRequests: [], closingPullRequestsUnreadable: true as const };
     const healthy = { ...reconciliationIssue({ id: 102, number: 2 }), closingPullRequests: [reconciliationPullRequest({ id: 202, number: 12 })] };
-    const dependencies = reconciliationDependencies({
-      github: { listIssues: vi.fn().mockResolvedValue([marked, healthy]) },
-    });
+    const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockResolvedValue([marked, healthy]) } });
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
@@ -52,9 +50,7 @@ describe("reconcileRepository unreadable issue connections", () => {
     const cachedReview = { id: 301, state: "APPROVED" as const, submittedAt: "2026-09-01T11:00:00Z", dismissal: null };
     const cachedIssue = { ...reconciliationIssue({ id: 101, number: 1 }), closingPullRequests: [reconciliationPullRequest({ id: 201, number: 11 })] };
     const marked = { ...reconciliationIssue({ id: 101, number: 1 }), closingPullRequests: [], closingPullRequestsUnreadable: true as const };
-    const dependencies = reconciliationDependencies({
-      github: { listIssues: vi.fn().mockResolvedValue([marked]) },
-    });
+    const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockResolvedValue([marked]) } });
     dependencies.store.getReconciliationEvidence = async () => ({
       version: 1,
       formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
@@ -72,9 +68,7 @@ describe("reconcileRepository unreadable issue connections", () => {
     try {
       await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
       expect(discard).toHaveBeenCalledTimes(1);
-      expect(discard).toHaveBeenCalledWith({
-        repositoryId: "repository", kind: "ISSUE", githubSubjectId: 101, generation: "7",
-      });
+      expect(discard).toHaveBeenCalledWith({ repositoryId: "repository", kind: "ISSUE", githubSubjectId: 101, generation: "7" });
       expect(errorLog).toHaveBeenCalledWith(
         "Reconciliation of repository repository discarded unresolvable subject kind=ISSUE number=1 reason=UNREADABLE_FIELD",
       );
@@ -94,9 +88,7 @@ describe("reconcileRepository unreadable issue connections", () => {
     // The cached-keep limb keys on a cached copy existing: with none, the
     // marked fresh shape is what folds, and the fold prices nothing from it.
     const marked = { ...reconciliationIssue({ id: 101, number: 1 }), closingPullRequests: [], closingPullRequestsUnreadable: true as const };
-    const dependencies = reconciliationDependencies({
-      github: { listIssues: vi.fn().mockResolvedValue([marked]) },
-    });
+    const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockResolvedValue([marked]) } });
     dependencies.store.getReconciliationEvidence = async () => ({
       version: 1,
       formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
@@ -152,15 +144,11 @@ describe("reconcileRepository unreadable issue connections", () => {
       issues: [],
       pullRequests: [],
     });
-    dependencies.store.getDirtyReconciliationSubjects = async () => [
-      { kind: "ISSUE" as const, id: 999, number: 42, generation: "7" },
-    ];
+    dependencies.store.getDirtyReconciliationSubjects = async () => [{ kind: "ISSUE" as const, id: 999, number: 42, generation: "7" }];
     dependencies.store.discardDirtyReconciliationSubject = vi.fn().mockResolvedValue(undefined);
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
-        message: "Unable to reconcile repository.",
-      });
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ message: "Unable to reconcile repository." });
       expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
     } finally {
@@ -191,9 +179,7 @@ describe("reconcileRepository unreadable issue connections", () => {
       openingEvidenceUnreadable: true as const,
     };
     const healthy = { ...reconciliationIssue({ id: 102, number: 2 }), closingPullRequests: [reconciliationPullRequest({ id: 202, number: 12 })] };
-    const dependencies = reconciliationDependencies({
-      github: { listIssues: vi.fn().mockResolvedValue([marked, healthy]) },
-    });
+    const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockResolvedValue([marked, healthy]) } });
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
@@ -227,9 +213,7 @@ describe("reconcileRepository unreadable issue connections", () => {
       closingPullRequests: [],
       openingEvidenceUnreadable: true as const,
     };
-    const dependencies = reconciliationDependencies({
-      github: { listIssues: vi.fn().mockResolvedValue([marked]) },
-    });
+    const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockResolvedValue([marked]) } });
     dependencies.store.getReconciliationEvidence = async () => ({
       version: 1,
       formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
