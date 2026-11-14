@@ -1126,7 +1126,7 @@ export async function listUnwritableClosures(
       order by settlement_override_requests.created_at desc, settlement_override_requests.id desc
       limit 1
     ) as latest_correction on true
-    -- An unlabelled self-work closure leaves a moderator nothing to price until the sponsor labels it,
+    -- An unlabelled self-work closure leaves a moderator nothing to price until an actual-catalog label is applied,
     -- so it is kept out of the queue; once a correction is granted it reaches history like any other.
     where not unwritable_closures.unlabelled_self_work or latest_correction.state = 'GRANTED'
     order by unwritable_closures.created_at desc, issues.github_issue_id asc
