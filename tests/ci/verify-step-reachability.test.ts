@@ -44,13 +44,14 @@ import { parse } from "yaml";
  *    detect step has run, and `... != 'true'` must still hold then — that is
  *    what lets the test step run at all.
  *
- * ONE LIMITATION is deliberate and stated rather than modelled: the selector
- * assumes every preceding step succeeded, which is what GitHub's implicit
- * `success()` on a step carrying no `if:` means, and it never simulates a
- * cancelled or failed job. A status function's suppression of that requirement
- * is therefore invisible to it — `!cancelled()` appended to a test step's
- * condition, or `always()`, would leave every verdict below unchanged even
- * though it changes what a cancelled run executes.
+ * ONE LIMITATION is deliberate and stated rather than modelled: the scenarios
+ * assume every preceding step succeeded, which is what GitHub's implicit
+ * `success()` on a step carrying no `if:` means, and never simulate a
+ * cancelled or failed job (only Half 4's upload pairs run on a red one). A
+ * status function's suppression of that requirement is therefore invisible to
+ * them — `!cancelled()` appended to a test step's condition, or `always()`,
+ * would leave every scenario verdict unchanged even though it changes what a
+ * cancelled run executes.
  *
  * Reordering tolerance is deliberate: the assertions are membership plus the
  * one order that carries meaning (migrations before tests), never an absolute
@@ -454,7 +455,7 @@ function unwrap(expression: string): string {
  * It never returns `false` to mean "I did not understand this": see the header
  * for why that would be the defect this suite exists to close.
  */
-export function evaluateExpression(expression: string, context: ActionsContext = {}, status: JobStatus = "success",): ExpressionValue {
+export function evaluateExpression(expression: string, context: ActionsContext = {}, status: JobStatus = "success"): ExpressionValue {
   try {
     return evaluate(parseExpression(unwrap(expression)), context, status);
   } catch (error) {
@@ -478,23 +479,22 @@ function callsStatusFunction(expression: string): boolean {
 
 /** Whether GitHub would select this step in this context.
  *
- *  - A step with no `if:` is selected: no failures are assumed, and the only
- *    job this suite simulates has every step succeeding.
+ *  - A step with no `if:`, or one calling no status function, also needs a
+ *    green job: GitHub adds `success() &&` to it (the scenarios stay green).
  *  - A `continue-on-error` step IS selected. Selection is about whether the
  *    runner executes the step at all; whether its failure gates anything is a
  *    separate question, and the assertions below ask it separately. Folding
  *    the second question into this one would make the suite unable to say that
  *    a tolerated step does not gate. */
 function isSelected(step: WorkflowStep, context: ActionsContext, status: JobStatus): boolean {
-  if (step.if === undefined) return true;
-  if (typeof step.if === "boolean") return step.if;
+  if (step.if === undefined || typeof step.if === "boolean") return step.if !== false && status === "success";
   if (typeof step.if !== "string") {
     throw new Error(
       `the \`if:\` of step ${JSON.stringify(step.name ?? step.uses ?? step.id ?? "unnamed")} must be a ` +
         `string expression or a boolean, not ${JSON.stringify(step.if)}`,
     );
   }
-  return toBoolean(evaluateExpression(step.if, context, status));
+  return toBoolean(evaluateExpression(step.if, context, status)) && (status === "success" || callsStatusFunction(step.if));
 }
 
 /**
@@ -506,7 +506,7 @@ function isSelected(step: WorkflowStep, context: ActionsContext, status: JobStat
  * exists to remove — the assertions would be reading a list built to satisfy
  * them.
  */
-export function selectSteps(steps: readonly WorkflowStep[], context: ActionsContext, status: JobStatus = "success",): WorkflowStep[] {
+export function selectSteps(steps: readonly WorkflowStep[], context: ActionsContext, status: JobStatus = "success"): WorkflowStep[] {
   return steps.filter((step) => isSelected(step, context, status));
 }
 
@@ -2279,20 +2279,18 @@ const RETRIED_UPLOADS = [
 // The one exemption: scorecard.yml feeds no required context, so one attempt.
 const UNRETRIED_UPLOADS = [{ file: "scorecard.yml", artifact: "scorecard-results" }];
 
-/** Runs a first attempt and its retry as the runner would: a step whose `if:`
- *  calls no status function also needs a green job, a failed step turns the
- *  job red unless it is `continue-on-error: true`, and a later `if:` reads each
- *  earlier step's outcome. Returns which attempts ran and the job's status. */
+/** Runs a first attempt and its retry as the runner would: each is selected by
+ *  `isSelected`, a failed step turns the job red unless it is
+ *  `continue-on-error: true`, and a later `if:` reads each earlier step's
+ *  outcome. Returns which attempts ran and the job's status. */
 function runAttempts(pair: WorkflowStep[], context: ActionsContext, prior: JobStatus, fails: boolean[]) {
   let status = prior;
   const outcomes: Record<string, unknown> = { ...(context.steps as Record<string, unknown>) };
   const ran: string[] = [];
   pair.forEach((step, index) => {
-    const condition = step.if === undefined ? "true" : typeof step.if === "boolean" ? String(step.if) : (step.if as string);
     const tolerated = step["continue-on-error"];
     if (tolerated !== undefined && typeof tolerated !== "boolean") throw new Error(`${label(step)}: continue-on-error must be a boolean`);
-    const runs = toBoolean(evaluateExpression(condition, { ...context, steps: outcomes }, status)) &&
-      (status === "success" || callsStatusFunction(condition));
+    const runs = isSelected(step, { ...context, steps: outcomes }, status);
     if (runs) ran.push(index === 0 ? "first" : "retry");
     if (runs && fails[index] && tolerated !== true) status = "failure";
     if (step.id) outcomes[step.id] = { outcome: runs ? (fails[index] ? "failure" : "success") : "skipped" };
