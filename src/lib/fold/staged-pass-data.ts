@@ -16,24 +16,28 @@ export function stagedIdentity(payload: unknown): GitHubSubject {
   return { id: value.id, number: value.number };
 }
 
+const isLogin = (value: unknown) => value === null || typeof value === "string";
+
 function ensureClosingPullRequest(value: unknown): void {
-  ensure(isFields(value) && isId(value.id) && isId(value.number) && typeof value.state === "string"
+  ensure(isFields(value) && isId(value.id) && isId(value.number) && typeof value.state === "string" && isLogin(value.authorLogin)
     && (value.mergedAt === null || typeof value.mergedAt === "string") && typeof value.repositoryGitHubId === "number");
 }
 
 function ensureIssue(issue: Fields): void {
   ensure(Array.isArray(issue.labels) && Array.isArray(issue.history) && Array.isArray(issue.comments)
-    && Array.isArray(issue.closingPullRequests));
-  ensure(issue.history.every((event) => isFields(event)
-    && (event.actorLogin === null || typeof event.actorLogin === "string")));
-  ensure(issue.comments.every((comment) => typeof comment?.body === "string"
-    && (comment.authorLogin === null || typeof comment.authorLogin === "string")));
+    && Array.isArray(issue.closingPullRequests) && isLogin(issue.authorLogin) && isLogin(issue.claimAssigneeGitHubLogin));
+  ensure(issue.history.every((event) => isFields(event) && isLogin(event.actorLogin) && typeof event.createdAt === "string"));
+  ensure(issue.comments.every((comment) => typeof comment?.body === "string" && isLogin(comment.authorLogin)));
   issue.closingPullRequests.forEach(ensureClosingPullRequest);
 }
 
+// The fields the review-round count reads: a wrong type there throws mid-fold instead of discarding the pass.
+const isReview = (review: unknown) => isFields(review) && (review.submittedAt === null || typeof review.submittedAt === "string")
+  && (review.dismissal === null || (isFields(review.dismissal) && typeof review.dismissal.at === "string"));
+
 function ensurePullRequestRow(row: Fields): void {
   const evidence = row.evidence;
-  ensure(evidence === null || (isFields(evidence) && Array.isArray(evidence.reviews) && typeof evidence.rawDiff === "string"));
+  ensure(evidence === null || (isFields(evidence) && Array.isArray(evidence.reviews) && evidence.reviews.every(isReview) && typeof evidence.rawDiff === "string"));
   if (row.refreshed === true) ensure(typeof row.missing === "boolean" && typeof row.listed === "boolean");
 }
 
