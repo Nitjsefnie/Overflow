@@ -1375,6 +1375,11 @@ A nonzero upgrade leaves the new release serving but the deployment incomplete;
 inspect each sanitized `failure` code, restore sponsor credentials or hook admin
 access as needed, and rerun the `webhooks:upgrade` package script with the same
 environment.
+An exception behind a failure also writes one stderr line to the same log,
+`{"repositoryId":…,"failure":…,"cause":…}` (no `repositoryId` for
+`UPGRADE_FAILED`): its class and message on one capped line, with connection
+string credentials, `password` values and GitHub and Overflow token prefixes
+redacted. Other token shapes in a message are not redacted, so keep the log private.
 `subscription: VERIFIED` and `queue: NOT_NEEDED` means the subscription was
 unchanged and the credential was already finalized, so no repair was requested.
 `subscription: VERIFIED` and `queue: FAILED` is partial completion. A rerun

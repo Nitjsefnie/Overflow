@@ -207,6 +207,7 @@ describe("migration 038: forge identities and provider columns", () => {
       report: (outcome) => {
         outcomes.push(outcome);
       },
+      writeError: (line) => { outcomes.push(line); },
     };
 
     expect(await upgradeRepositoryWebhooks(dependencies)).toEqual({ succeeded: 1, failed: 0, gone: 0 });

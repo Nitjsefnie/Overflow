@@ -2,6 +2,7 @@ import type { GitHubGateway } from "@/lib/github/client";
 import type { GitLabGateway } from "@/lib/gitlab/client";
 import type { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import type { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
+import { describeErrorCause } from "@/lib/repositories/register";
 import { webhookCallbackUrl, type WebhookCredentialRecord } from "@/lib/webhooks/credentials";
 
 export type WebhookUpgradeOutcome = {
@@ -31,7 +32,14 @@ export type WebhookUpgradeDependencies = {
   createGitLabGateway(instanceUrl: string, token: string): Pick<GitLabGateway, "getRepositoryById" | "configureWebhook">;
   webhookUrls: Record<"github" | "gitlab", string>;
   report(outcome: WebhookUpgradeOutcome): void;
+  /** The operator's sink (the CLI's stderr) for one failureCauseLine per caught failure. */
+  writeError(line: string): void;
 };
+
+/** The stage code and the cause as describeErrorCause renders it: one capped, redacted line. */
+export function failureCauseLine(failure: string | null, error: unknown, repositoryId?: string): string {
+  return JSON.stringify({ repositoryId, failure, cause: describeErrorCause(error) });
+}
 
 /** Explicit administration followed by durable repair; neither belongs in the fold. */
 export async function upgradeRepositoryWebhooks(
@@ -41,9 +49,10 @@ export async function upgradeRepositoryWebhooks(
   const summary = { succeeded: 0, failed: 0, gone: 0 };
   for (const repositoryId of repositoryIds) {
     const outcome = await dependencies.store.withWebhookUpgradeLock(repositoryId,
-      () => upgradeRegistration(dependencies, repositoryId)).catch((): WebhookUpgradeOutcome => ({
-      repositoryId, subscription: "FAILED", queue: "NOT_ATTEMPTED", failure: "REGISTRATION_FAILED",
-    }));
+      () => upgradeRegistration(dependencies, repositoryId)).catch((error: unknown): WebhookUpgradeOutcome => {
+      dependencies.writeError(failureCauseLine("REGISTRATION_FAILED", error, repositoryId));
+      return { repositoryId, subscription: "FAILED", queue: "NOT_ATTEMPTED", failure: "REGISTRATION_FAILED" };
+    });
     dependencies.report(outcome);
     if (outcome.failure === "REPOSITORY_GONE") summary.gone++;
     else if (outcome.failure === null) summary.succeeded++;
@@ -53,7 +62,7 @@ export async function upgradeRepositoryWebhooks(
 }
 
 async function upgradeRegistration(
-  { store, createGateway, createGitLabGateway, webhookUrls }: WebhookUpgradeDependencies,
+  { store, createGateway, createGitLabGateway, webhookUrls, writeError }: WebhookUpgradeDependencies,
   repositoryId: string,
 ): Promise<WebhookUpgradeOutcome> {
   const outcome: WebhookUpgradeOutcome = {
@@ -110,9 +119,10 @@ async function upgradeRegistration(
       callbackUrl: webhookCallbackUrl(webhookUrls.github, credential.credentialId), secret: credential.secret,
     });
     return await finishUpgrade({ store }, credential, changed, outcome);
-  } catch {
-    // Only the fixed stage code escapes. Credentials, upstream bodies and DB
-    // diagnostics can appear in any exception along this path.
+  } catch (error) {
+    // Only the stage code reaches the outcome: any exception here can carry
+    // credentials, upstream bodies or DB diagnostics, so its cause is sanitized.
+    writeError(failureCauseLine(outcome.failure, error, repositoryId));
   }
   return outcome;
 }
