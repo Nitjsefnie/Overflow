@@ -18,15 +18,7 @@ import { parse } from "yaml";
  * context a check-run could be confused with.
  */
 
-type Step = {
-  name?: string;
-  id?: string;
-  if?: string;
-  uses?: string;
-  run?: string;
-  with?: Record<string, unknown>;
-  env?: Record<string, string>;
-};
+type Step = { name?: string; id?: string; if?: string; uses?: string; run?: string; with?: Record<string, unknown>; env?: Record<string, string> };
 
 type Job = {
   name?: string;
@@ -54,15 +46,9 @@ let source = "";
 let workflow: Workflow;
 let suite: Job;
 
-beforeAll(async () => {
-  source = await readFile(resolve(PATH), "utf8");
-  workflow = parse(source) as Workflow;
-  suite = workflow.jobs.suite!;
-});
+beforeAll(async () => { source = await readFile(resolve(PATH), "utf8"); workflow = parse(source) as Workflow; suite = workflow.jobs.suite!; });
 
-function runs(): string[] {
-  return suite.steps.flatMap((step) => (step.run ? [step.run] : []));
-}
+function runs(): string[] { return suite.steps.flatMap((step) => (step.run ? [step.run] : [])); }
 
 function stepRunning(command: string): Step {
   const matching = suite.steps.filter((step) => (step.run ?? "").includes(command));

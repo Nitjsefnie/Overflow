@@ -7,12 +7,7 @@ import { parse } from "yaml";
 // A dependabot schedule. `day`, `time` and `timezone` are the keys that move
 // the lane off the default Monday slot and pin its clock, so every consumer of
 // a parsed schedule declares them rather than reading them as absent.
-type Schedule = {
-  interval: string;
-  day?: string;
-  time?: string;
-  timezone?: string;
-};
+type Schedule = { interval: string; day?: string; time?: string; timezone?: string };
 
 // Cron's day-of-week field is 0-6 starting at Sunday; dependabot's `day:` keys
 // are the names. Mapping through this table is what lets a parsed cron be
@@ -126,15 +121,10 @@ describe("GitHub Actions release gates", () => {
 
   it("judges the pull request head only as git data, executed entirely from main", async () => {
     const workflow = await readWorkflow("pr-gates.yml");
-    expect(workflow.on).toEqual({
-      pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
-    });
+    expect(workflow.on).toEqual({ pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] } });
     expect(workflow.permissions).toEqual({ contents: "read" });
     // Each newer PR event replaces only that PR's four privileged gates.
-    expect(workflow.concurrency).toEqual({
-      group: "pr-gates-${{ github.event.pull_request.number }}",
-      "cancel-in-progress": true,
-    });
+    expect(workflow.concurrency).toEqual({ group: "pr-gates-${{ github.event.pull_request.number }}", "cancel-in-progress": true });
     // The job logic and grants, excluding action/tool/runner configuration, in the dependency-audit style. One checkout with
     // no ref input at all — actions/checkout's default, main's last commit, the
     // checkout its fork guard exempts. No step installs or builds anything. The
@@ -212,10 +202,7 @@ fi
     // makes the deploy gate refuse immediately. Keying on the SHA gives each
     // push its own group. There is no pull-request leg in this file, so there is
     // no repository-level arm to bound here.
-    expect(workflow.concurrency).toEqual({
-      group: "ratchet-guard-${{ github.sha }}",
-      "cancel-in-progress": false,
-    });
+    expect(workflow.concurrency).toEqual({ group: "ratchet-guard-${{ github.sha }}", "cancel-in-progress": false });
     // The job logic and grants, excluding action/tool/runner configuration. Two checkouts, each gated on the event name:
     // under push its ref is github.event.before, the previous main tip, whose
     // copy of scripts/check-ratchets.ts executes; dispatch takes the last
@@ -260,12 +247,8 @@ if [[ "$OVERFLOW_BASE_SHA" == *$'\\n'* ]] || ! printf '%s' "$OVERFLOW_BASE_SHA" 
 fi
 `,
           },
-          {
-            if: "${{ github.event_name == 'push' }}",
-          },
-          {
-            if: "${{ github.event_name == 'workflow_dispatch' }}",
-          },
+          { if: "${{ github.event_name == 'push' }}" },
+          { if: "${{ github.event_name == 'workflow_dispatch' }}" },
           {
             name: "Fetch the dispatched commit",
             if: "${{ github.event_name == 'workflow_dispatch' }}",
@@ -572,16 +555,11 @@ fi
     // CodeQL's cache-poisoning and untrusted-checkout alerts report. Asserted
     // whole rather than by objectContaining, which would tolerate a second
     // event sitting beside the one this leg needs.
-    expect(workflow.on).toEqual({
-      pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
-    });
+    expect(workflow.on).toEqual({ pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] } });
     expect(workflow.on.pull_request_target).not.toHaveProperty("paths");
     expect(workflow.on, "a pull_request trigger would execute the PR's own workflow files").not.toHaveProperty("pull_request");
     expect(workflow.permissions).toEqual({ contents: "read" });
-    expect(workflow.concurrency).toEqual({
-      group: "pr-gates-${{ github.event.pull_request.number }}",
-      "cancel-in-progress": true,
-    });
+    expect(workflow.concurrency).toEqual({ group: "pr-gates-${{ github.event.pull_request.number }}", "cancel-in-progress": true });
     // The job logic and grants, excluding action/tool/runner configuration, in the dependency-audit style: any extra step —
     // a second checkout, a script sourced from the extracted tree — fails this
     // equality. Under pull_request_target the default checkout is main's tip;
@@ -609,11 +587,7 @@ tar -xzf "$tarball" actionlint
 ./actionlint --version
 `,
         },
-        {
-          name: "Install zizmor",
-          id: "install_zizmor",
-          run: "pip install --require-hashes -r .github/requirements-zizmor.txt\n",
-        },
+        { name: "Install zizmor", id: "install_zizmor", run: "pip install --require-hashes -r .github/requirements-zizmor.txt\n" },
         {
           name: "Collect the workflow files to lint",
           run: `mkdir -p .github/workflows-pr
@@ -623,11 +597,7 @@ git ls-tree -z --name-only refs/remotes/pr/head:.github/workflows/ |
   done
 `,
         },
-        {
-          name: "actionlint",
-          id: "actionlint",
-          run: "./actionlint -color .github/workflows-pr/*.yml",
-        },
+        { name: "actionlint", id: "actionlint", run: "./actionlint -color .github/workflows-pr/*.yml" },
         {
           name: "zizmor",
           if: "${{ !cancelled() && steps.install_zizmor.outcome == 'success' }}",
@@ -657,18 +627,12 @@ git ls-tree -z --name-only refs/remotes/pr/head:.github/workflows/ |
     // checked-out, trusted tree, so a `refs/pull` fetch or a
     // `github.event.pull_request.*` value here would be a privileged trigger
     // reaching untrusted content.
-    expect(workflow.on).toEqual({
-      push: { branches: ["main"] },
-      workflow_dispatch: null,
-    });
+    expect(workflow.on).toEqual({ push: { branches: ["main"] }, workflow_dispatch: null });
     expect(workflow.on.push).not.toHaveProperty("paths");
     expect(workflow.on, "this leg reads no pull-request data, so no pull-request trigger may reach it")
       .not.toHaveProperty("pull_request_target");
     expect(workflow.permissions).toEqual({ contents: "read" });
-    expect(workflow.concurrency).toEqual({
-      group: "actionlint-${{ github.sha }}",
-      "cancel-in-progress": false,
-    });
+    expect(workflow.concurrency).toEqual({ group: "actionlint-${{ github.sha }}", "cancel-in-progress": false });
     // The job logic and grants, excluding action/tool/runner configuration. No fetch step for a pull request head, and no
     // `Base freshness` step: both belong to the pull-request leg, and a
     // surviving copy here is exactly the failure the split removes.
@@ -688,22 +652,14 @@ tar -xzf "$tarball" actionlint
 ./actionlint --version
 `,
         },
-        {
-          name: "Install zizmor",
-          id: "install_zizmor",
-          run: "pip install --require-hashes -r .github/requirements-zizmor.txt\n",
-        },
+        { name: "Install zizmor", id: "install_zizmor", run: "pip install --require-hashes -r .github/requirements-zizmor.txt\n" },
         {
           name: "Collect the workflow files to lint",
           run: `mkdir -p .github/workflows-pr
 cp .github/workflows/*.yml .github/workflows-pr/
 `,
         },
-        {
-          name: "actionlint",
-          id: "actionlint",
-          run: "./actionlint -color .github/workflows-pr/*.yml",
-        },
+        { name: "actionlint", id: "actionlint", run: "./actionlint -color .github/workflows-pr/*.yml" },
         {
           name: "zizmor",
           if: "${{ !cancelled() && steps.install_zizmor.outcome == 'success' }}",
@@ -783,21 +739,14 @@ cp .github/workflows/*.yml .github/workflows-pr/
     // that). The pull_request trigger is gone entirely: the pull-request leg
     // is pr-gates.yml, the issue-1090 split's base-defined
     // pull_request_target file.
-    expect(workflow.on).toEqual({
-      push: { branches: ["main"] },
-      schedule: [{ cron: "37 6 * * *" }],
-      workflow_dispatch: null,
-    });
+    expect(workflow.on).toEqual({ push: { branches: ["main"] }, schedule: [{ cron: "37 6 * * *" }], workflow_dispatch: null });
     expect(workflow.permissions).toEqual({ contents: "read" });
     // The issue-1090 split is complete for this file: no pull-request trigger
     // reaches it, so the per-SHA group is the sibling push files' shape — no
     // two pushes share a group, so a cancelled conclusion on a merged SHA
     // makes the deploy gate refuse immediately (issue 474). The
     // PR gates share pr-gates.yml's per-PR cancelling group.
-    expect(workflow.concurrency).toEqual({
-      group: "dependency-audit-${{ github.sha }}",
-      "cancel-in-progress": false,
-    });
+    expect(workflow.concurrency).toEqual({ group: "dependency-audit-${{ github.sha }}", "cancel-in-progress": false });
 
     // The job logic and grants, excluding action/tool/runner configuration, in the claim/pr-gate style: any extra key — a
     // step-level continue-on-error tolerating a red audit, or a job-level
@@ -850,20 +799,14 @@ cp .github/workflows/*.yml .github/workflows-pr/
           run: expect.any(String),
         },
         {},
-        {
-          name: "Enable the pinned package manager",
-          run: expect.stringContaining("corepack install --global pnpm@"),
-        },
+        { name: "Enable the pinned package manager", run: expect.stringContaining("corepack install --global pnpm@") },
         {
           name: "Audit lockfile advisories",
           // The fast path's two inputs, delivered through env like every
           // event value (no ${{ }} in run blocks). github.event.before is
           // the previous tip on main for a push, and the all-zeros SHA when
           // there is no previous tip — a new branch or a force push.
-          env: {
-            OVERFLOW_EVENT_NAME: "${{ github.event_name }}",
-            OVERFLOW_BEFORE_SHA: "${{ github.event.before }}",
-          },
+          env: { OVERFLOW_EVENT_NAME: "${{ github.event_name }}", OVERFLOW_BEFORE_SHA: "${{ github.event.before }}" },
           run: `# THE FAST PATH IS AN OUTCOME, NOT A SKIP (issue 1149 fix round 2).
 # The deploy gate derives its required set from branch protection,
 # so a push whose diff touched no manifest must still leave a green
@@ -1739,9 +1682,7 @@ exit 1
   });
 });
 
-async function readWorkflow(name: string): Promise<Workflow> {
-  return parse(await readFile(resolve(".github/workflows", name), "utf8")) as Workflow;
-}
+async function readWorkflow(name: string): Promise<Workflow> { return parse(await readFile(resolve(".github/workflows", name), "utf8")) as Workflow; }
 
 function checkIgnore(pathname: string): number | null {
   return spawnSync("git", ["check-ignore", "--no-index", "--quiet", pathname], {

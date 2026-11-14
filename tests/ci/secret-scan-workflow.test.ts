@@ -41,10 +41,7 @@ type Workflow = {
   >;
 };
 
-const LEGS = [
-  { file: ".github/workflows/secret-scan.yml", pr: false },
-  { file: ".github/workflows/pr-gates.yml", pr: true },
-] as const;
+const LEGS = [{ file: ".github/workflows/secret-scan.yml", pr: false }, { file: ".github/workflows/pr-gates.yml", pr: true }] as const;
 
 /** The file that carries a given leg, as it is named inside `.github/workflows/`. */
 const basename = (file: string): string => file.slice(".github/workflows/".length);

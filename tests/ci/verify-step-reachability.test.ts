@@ -97,20 +97,7 @@ export type JobStatus = "success" | "failure" | "cancelled";
  * `steps.detect-docs.outputs.docs_only != 'true'` depends on before
  * detect-docs has run.
  */
-const CONTEXT_ROOTS = [
-  "env",
-  "github",
-  "inputs",
-  "job",
-  "jobs",
-  "matrix",
-  "needs",
-  "runner",
-  "secrets",
-  "steps",
-  "strategy",
-  "vars",
-];
+const CONTEXT_ROOTS = ["env", "github", "inputs", "job", "jobs", "matrix", "needs", "runner", "secrets", "steps", "strategy", "vars"];
 
 /** The status functions, and what each reports for a job status. `always()` is
  *  the only one that is not a comparison. */
@@ -467,11 +454,7 @@ function unwrap(expression: string): string {
  * It never returns `false` to mean "I did not understand this": see the header
  * for why that would be the defect this suite exists to close.
  */
-export function evaluateExpression(
-  expression: string,
-  context: ActionsContext = {},
-  status: JobStatus = "success",
-): ExpressionValue {
+export function evaluateExpression(expression: string, context: ActionsContext = {}, status: JobStatus = "success",): ExpressionValue {
   try {
     return evaluate(parseExpression(unwrap(expression)), context, status);
   } catch (error) {
@@ -513,11 +496,7 @@ function isSelected(step: WorkflowStep, context: ActionsContext, status: JobStat
  * exists to remove — the assertions would be reading a list built to satisfy
  * them.
  */
-export function selectSteps(
-  steps: readonly WorkflowStep[],
-  context: ActionsContext,
-  status: JobStatus = "success",
-): WorkflowStep[] {
+export function selectSteps(steps: readonly WorkflowStep[], context: ActionsContext, status: JobStatus = "success",): WorkflowStep[] {
   return steps.filter((step) => isSelected(step, context, status));
 }
 
@@ -743,9 +722,7 @@ function contextFor(scenario: Scenario): ActionsContext {
   };
 }
 
-function label(step: WorkflowStep): string {
-  return step.name ?? step.uses ?? step.id ?? "(unnamed step)";
-}
+function label(step: WorkflowStep): string { return step.name ?? step.uses ?? step.id ?? "(unnamed step)"; }
 
 function runsContaining(steps: readonly WorkflowStep[], needle: string): WorkflowStep[] {
   return steps.filter((step) => (step.run ?? "").includes(needle));
@@ -769,12 +746,7 @@ function captureError(run: () => unknown): string {
  */
 const LEGS = ["ci-pr.yml", "ci.yml"] as const;
 type Leg = (typeof LEGS)[number];
-type ParsedLeg = {
-  steps: WorkflowStep[];
-  outputs: Record<string, unknown>;
-  if: unknown;
-  events: string[];
-};
+type ParsedLeg = { steps: WorkflowStep[]; outputs: Record<string, unknown>; if: unknown; events: string[] };
 
 const legs = new Map<Leg, ParsedLeg>();
 
@@ -807,9 +779,7 @@ function legOf(scenario: Scenario): ParsedLeg {
 }
 
 /** The verify steps of the file a scenario runs in. */
-function stepsFor(scenario: Scenario): WorkflowStep[] {
-  return legOf(scenario).steps;
-}
+function stepsFor(scenario: Scenario): WorkflowStep[] { return legOf(scenario).steps; }
 
 /**
  * The push leg — the only one that measures coverage and therefore the only
@@ -1480,9 +1450,7 @@ const ZIZMOR_PIN_RUN_TEXT = [
 ].join("\n");
 
 /** Sanctioned only when the named step is byte-identical to the pinned run text. */
-function isSanctionedZizmorPinStep(step: WorkflowStep): boolean {
-  return (step.run ?? "") === ZIZMOR_PIN_RUN_TEXT;
-}
+function isSanctionedZizmorPinStep(step: WorkflowStep): boolean { return (step.run ?? "") === ZIZMOR_PIN_RUN_TEXT; }
 
 /**
  * Issue 1035: the suppression-list divergence gate is the second inline
@@ -1863,13 +1831,9 @@ const SUPPRESSION_PIN_RUN_TEXT = [
 ].join("\n");
 
 /** Sanctioned only when the named step is byte-identical to the pinned run text. */
-function isSanctionedSuppressionStep(step: WorkflowStep): boolean {
-  return (step.run ?? "") === SUPPRESSION_PIN_RUN_TEXT;
-}
+function isSanctionedSuppressionStep(step: WorkflowStep): boolean { return (step.run ?? "") === SUPPRESSION_PIN_RUN_TEXT; }
 /** A run block that invokes pip or pip3 at all — the one-step allowance is judged over this set. */
-function runsPip(step: WorkflowStep): boolean {
-  return /(?<![\w./-])pip3?(?![\w-])/.test(step.run ?? "");
-}
+function runsPip(step: WorkflowStep): boolean { return /(?<![\w./-])pip3?(?![\w-])/.test(step.run ?? ""); }
 
 /** Commands that run a package manager, which would install or execute the
  *  pull request's dependencies, lifecycle scripts or package.json scripts. */
@@ -1889,9 +1853,7 @@ const BASE_SCRIPT = /^(?:\$GITHUB_WORKSPACE|\$\{GITHUB_WORKSPACE\})\/scripts\/[\
  *  anything from the tree they operate on. */
 const PRT_ACTIONS = ["actions/checkout@", "actions/setup-node@", "actions/download-artifact@"];
 
-function unquoted(word: string): string {
-  return word.replaceAll("'", "").replaceAll('"', "");
-}
+function unquoted(word: string): string { return word.replaceAll("'", "").replaceAll('"', ""); }
 
 /** Every reason one step's run block executes something other than the base
  *  checkout's own scripts. Empty when the step is clean. */
