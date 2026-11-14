@@ -11,7 +11,6 @@ import { ForgeCredentialRejectedError } from "@/lib/forge/gateway";
 import type { FoldResult } from "@/lib/fold/repository-fold";
 import { RECONCILIATION_EVIDENCE_FORMAT } from "@/lib/fold/reconciliation-evidence";
 import { DATA_SUBJECT_TOMBSTONE_LOGIN, scrubPublicationForSuppressions } from "@/lib/fold/data-subject-suppression";
-import { GitHubGateway } from "@/lib/github/client";
 import { CLOSING_PULL_REQUESTS_FIELD_PATH } from "@/lib/github/drain-issue-reads";
 import type { GitHubRepository, GitHubRepositoryReference, GitHubSubject } from "@/lib/github/types";
 import { createHash } from "node:crypto";
@@ -21,8 +20,6 @@ import { GitLabApiError, GitLabGateway } from "@/lib/gitlab/client";
 import { errorLogToken, logField } from "@/lib/webhooks/log-field";
 import { runReconciliationCli } from "../../scripts/reconcile";
 import { reconciliationDependencies, reconciliationIssue, reconciliationPullRequest, pagedReconciliationGateway, verifiedRepository } from "../support/reconciliation-fixtures";
-import { assertClosingPullRequestQuery } from "../support/closing-pull-request-query";
-import { verifiedRepositoryPayload } from "../support/verified-repository";
 import { inspect, format } from "node:util";
 import { walkReconciliation } from "@/lib/fold/reconciliation-walk";
 import { fixture, instant, issue, pullRequest, subject } from "./reconciliation-walk-fixture";
@@ -154,10 +151,8 @@ describe("reconcileRepository", () => {
       ["no author login after two readable comments", [sponsorComment, sponsorComment, loginless]],
     ];
     const unreadableSponsorComments = [...unreadableBodies, ...unreadableLogins];
-    const settled = (authorLogin: unknown) => ({
-      ...commented([{ ...sponsorComment, createdAt: "2026-09-01T11:30:00.000Z", authorLogin, authorGitHubUserId: 1001 }]),
-      closingPullRequests: [reconciliationPullRequest({ id: 201, number: 11 })],
-    });
+    const settled = (authorLogin: unknown) => ({ ...commented([{ ...sponsorComment, createdAt: "2026-09-01T11:30:00.000Z", authorLogin, authorGitHubUserId: 1001 }]),
+      closingPullRequests: [reconciliationPullRequest({ id: 201, number: 11 })] });
     const sponsorHistory = reconciliationIssue({ id: 9, number: 9 }).history;
     const [opening, assigned, actual] = sponsorHistory;
     const labelled = (history: unknown[]) => ({ ...commented([]), history });
@@ -210,6 +205,7 @@ describe("reconcileRepository", () => {
       ["settled label event has an empty actor login on the sponsor's numeric id", settledLabel(""), [["opening-9", "sponsor", null], ["assigned-9", "sponsor", null], ["actual-9", "", 1001]], [201]],
       ["settled label event has a null actor login on another account's numeric id", settledLabel(null, 2001), [["opening-9", "sponsor", null], ["assigned-9", "sponsor", null], ["actual-9", null, 2001]], [201]],
     ];
+    const changesRequested = { id: 1, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T10:00:00.000Z", dismissal: null };
     const unreadableRows: Array<[string, "issue" | "pull_request", unknown]> = [
       ["an unavailable subject identity", "issue", null],
       ["a string id", "issue", { ...issue(9), id: "9" }],
@@ -236,6 +232,10 @@ describe("reconcileRepository", () => {
       ["a settled label event with no actor login, the sponsor's numeric id", "issue", unlogged(1001)],
       ["a settled label event with no actor login, another account's numeric id", "issue", unlogged(2001)],
       ["a settled label event with no actor login, no actor id", "issue", unlogged(null)],
+      ["a history entry with an unconvertible createdAt", "issue", historied([{ id: "event", actorLogin: null, createdAt: { toString: 1 } }])],
+      ...[["a number", 5], ["an object", {}]].map(([label, authorLogin]): [string, "issue", unknown] => [`an author login that is ${label}`, "issue", { ...issue(9), authorLogin }]),
+      ["a claim assignee login that is a number, on a suppressed account's id", "issue", { ...commented([]), claimAssigneeGitHubLogin: 1, claimAssigneeGitHubUserId: suppressed.forgeId }],
+      ["a closing pull request whose author login is a number, on a suppressed account's id", "issue", { ...commented([]), closingPullRequests: [{ ...reconciliationPullRequest({ id: 201, number: 11 }), authorLogin: 1, authorGitHubUserId: suppressed.forgeId }] }],
       ["a null closing pull request", "issue", closing(null)],
       ["a closing pull request with an unsafe id", "issue", closing({ ...pullRequest(7), id: 2 ** 53 })],
       ["a closing pull request with an unsafe number", "issue", closing({ ...pullRequest(7), number: 2 ** 53 })],
@@ -253,6 +253,8 @@ describe("reconcileRepository", () => {
       ["a refreshed pull request row with a string missing", "pull_request", { subject: identity, evidence: null, refreshed: true, missing: "no", listed: true }],
       ["a refreshed pull request row without listed", "pull_request", { subject: identity, evidence: null, refreshed: true, missing: false }],
       ["a refreshed pull request row with a string listed", "pull_request", { subject: identity, evidence: null, refreshed: true, missing: false, listed: "yes" }],
+      ...[["a null review", null], ["a review without a dismissal", withoutField(changesRequested, "dismissal")], ["a review with an unconvertible submittedAt", { ...changesRequested, submittedAt: { toString: 1 } }],
+        ["a review with an unconvertible dismissal time", { ...changesRequested, dismissal: { at: { toString: 1 }, previousState: null } }]].map(([label, review]): [string, "pull_request", unknown] => [`a refreshed pull request row with ${label}`, "pull_request", { subject: identity, refreshed: true, missing: false, listed: true, evidence: { reviews: [review], rawDiff: "" } }]),
     ];
 
     it("stages each unreadable comments row in comments, beside a readable history", () => {
@@ -398,11 +400,14 @@ describe("reconcileRepository", () => {
       await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: 8, updatedAt: instant(8), payload: stub(8) });
       const key = kind === "issue" ? 9 : 19;
       await f.pass.stage({ anchor: "subjects", kind, subjectKey: key, updatedAt: instant(key), payload });
+      if (kind === "pull_request") { // a refreshed row the walk reuses for a merged closing pull request of a staged issue
+        await f.pass.stage({ anchor: "refresh", kind, subjectKey: key, updatedAt: instant(key), payload });
+        await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: 9, updatedAt: instant(9), payload: { ...reconciliationIssue({ id: 9, number: 9 }), closingPullRequests: [reconciliationPullRequest({ id: 19, number: 19 })] } });
+      }
       await f.pass.stage({ anchor: "subjects", kind: "pull_request", subjectKey: 10, updatedAt: instant(10), payload: { ...stub(10), evidence: null } });
       const logged = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
-        await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).rejects
-          .toHaveProperty("cause.message", "Staged sweep pass data is unreadable.");
+        await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).rejects.toHaveProperty("cause.message", "Staged sweep pass data is unreadable.");
       } finally { logged.mockRestore(); }
       expect(walk).toHaveBeenCalledOnce();
       expect(f.pass.complete).toHaveBeenCalledOnce();
