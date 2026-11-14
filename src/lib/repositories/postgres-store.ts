@@ -8,21 +8,12 @@ import {
 } from "@/lib/db/types";
 import type { DifficultyScheme } from "@/lib/domain/difficulty-scheme";
 import type {
-  AbandonedWebhookCleanup,
-  NewRegisteredRepository,
-  RegisteredRepository,
-  RepositoryCatalogChange,
-  RepositoryRegistrationState,
-  RepositoryRegistrationStore,
-  RepositoryUnregisterOutcome,
+  AbandonedWebhookCleanup, NewRegisteredRepository, RegisteredRepository, RepositoryCatalogChange,
+  RepositoryRegistrationState, RepositoryRegistrationStore, RepositoryUnregisterOutcome,
 } from "@/lib/repositories/register";
 import {
-  RepositoryOwnerNameConflictError,
-  RepositoryProviderConflictError,
-  RepositoryRegistrationEnforcementError,
-  RepositorySchemeChangeForbiddenError,
-  RepositorySchemeChangeOrderError,
-  RepositoryWebhookIdConflictError,
+  RepositoryOwnerNameConflictError, RepositoryProviderConflictError, RepositoryRegistrationEnforcementError,
+  RepositorySchemeChangeForbiddenError, RepositorySchemeChangeOrderError, RepositoryWebhookIdConflictError,
 } from "@/lib/repositories/register";
 import { getCoordinationSql, getSql } from "@/lib/db/client";
 import { scrubRepositoryFreeText } from "@/lib/repositories/unregister-scrub";
