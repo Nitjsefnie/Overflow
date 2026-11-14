@@ -12,9 +12,7 @@ describe("integrated rejected settlement closure reasons", () => {
     const result = foldRepository(snapshot);
 
     expect(result.unwritableClosures).toEqual([{
-      githubIssueId: 101,
-      kind: "SETTLEMENT_EVIDENCE_REJECTED",
-      githubPullRequestId: 201,
+      githubIssueId: 101, kind: "SETTLEMENT_EVIDENCE_REJECTED", githubPullRequestId: 201,
       reason: "The settled label `delivered/6` was applied by a different GitHub account using the login "
         + `\`${displayedLogin}\`, not by the repository sponsor.`,
     }]);
@@ -29,9 +27,7 @@ describe("integrated rejected settlement closure reasons", () => {
     const result = foldRepository(snapshot);
 
     expect(result.unwritableClosures).toEqual([{
-      githubIssueId: 101,
-      kind: "SETTLEMENT_EVIDENCE_REJECTED",
-      githubPullRequestId: 201,
+      githubIssueId: 101, kind: "SETTLEMENT_EVIDENCE_REJECTED", githubPullRequestId: 201,
       reason: "The application of the settled label `delivered/6` by `contributor` could not be attributed to the repository sponsor `sponsor`.",
     }]);
     expect(result.policyViolations).toEqual([{ code: "SETTLED_LABEL_UNAUTHORIZED", githubIssueId: 101 }]);
@@ -46,9 +42,7 @@ describe("integrated rejected settlement closure reasons", () => {
     const result = foldRepository(snapshot);
 
     expect(result.unwritableClosures).toEqual([{
-      githubIssueId: 101,
-      kind: "SETTLEMENT_EVIDENCE_REJECTED",
-      githubPullRequestId: 201,
+      githubIssueId: 101, kind: "SETTLEMENT_EVIDENCE_REJECTED", githubPullRequestId: 201,
       reason: "Every nonblank rationale comment by the repository sponsor's account (login `sponsor`) inside the window was edited after the settlement evidence window closed at 2026-09-01T12:15:00.000Z.",
     }]);
     expect(result.policyViolations).toEqual([{ code: "SETTLED_RATIONALE_EDITED", githubIssueId: 101 }]);
@@ -277,10 +271,8 @@ describe("same-instant settled label standing", () => {
         status: "UNSETTLED", settledPoints: null, credits: 0, settledLabelEventId: null,
       });
       expect(result.unwritableClosures).toEqual([{
-        githubIssueId: 101,
-        kind: "SETTLEMENT_EVIDENCE_REJECTED",
-        githubPullRequestId: 201,
-        reason: NO_STANDING_REASON,
+        githubIssueId: 101, kind: "SETTLEMENT_EVIDENCE_REJECTED",
+        githubPullRequestId: 201, reason: NO_STANDING_REASON,
       }]);
       expect(result.policyViolations).toEqual([]);
     },
@@ -308,10 +300,8 @@ describe("same-instant settled label standing", () => {
         status: "UNSETTLED", settledPoints: null, credits: 0, settledLabelEventId: null,
       });
       expect(result.unwritableClosures).toEqual([{
-        githubIssueId: 101,
-        kind: "SETTLEMENT_EVIDENCE_REJECTED",
-        githubPullRequestId: 201,
-        reason: NO_STANDING_REASON,
+        githubIssueId: 101, kind: "SETTLEMENT_EVIDENCE_REJECTED",
+        githubPullRequestId: 201, reason: NO_STANDING_REASON,
       }]);
       expect(result.policyViolations).toEqual([]);
     },
@@ -375,10 +365,8 @@ describe("same-instant settled label standing", () => {
         status: "UNSETTLED", settledPoints: null, credits: 0, settledLabelEventId: null,
       });
       expect(result.unwritableClosures).toEqual([{
-        githubIssueId: 101,
-        kind: "SETTLEMENT_EVIDENCE_REJECTED",
-        githubPullRequestId: 201,
-        reason: NO_STANDING_REASON,
+        githubIssueId: 101, kind: "SETTLEMENT_EVIDENCE_REJECTED",
+        githubPullRequestId: 201, reason: NO_STANDING_REASON,
       }]);
       expect(result.policyViolations).toEqual([]);
     },
@@ -407,9 +395,7 @@ describe("same-instant settled label standing", () => {
       status: "UNSETTLED", settledPoints: null, credits: 0, settledLabelEventId: null,
     });
     expect(result.unwritableClosures).toEqual([{
-      githubIssueId: 101,
-      kind: "SETTLEMENT_EVIDENCE_REJECTED",
-      githubPullRequestId: 201,
+      githubIssueId: 101, kind: "SETTLEMENT_EVIDENCE_REJECTED", githubPullRequestId: 201,
       reason: NO_STANDING_REASON,
     }]);
     expect(result.policyViolations).toEqual([]);
@@ -483,11 +469,8 @@ describe("policy audit across participation eligibility", () => {
 describe("rating authority", () => {
   it("does not let an outsider who filed, priced and closed an issue earn credit against the sponsor", () => {
     const snapshot = evidenceFixture({
-      issueAuthor: "contributor",
-      opener: "contributor",
-      settler: "contributor",
-      commenter: "contributor",
-      pullRequestAuthor: "contributor",
+      issueAuthor: "contributor", opener: "contributor", settler: "contributor",
+      commenter: "contributor", pullRequestAuthor: "contributor",
     });
 
     const result = foldRepository(snapshot);
@@ -498,9 +481,7 @@ describe("rating authority", () => {
     // The `M` label is on the issue; what the outsider lacks is the authority to
     // have applied it, and the row says which label and which account.
     expect(result.policyViolations).toEqual([{
-      code: "OPENING_LABEL_UNAUTHORIZED",
-      githubIssueId: 101,
-      openingLabel: "M",
+      code: "OPENING_LABEL_UNAUTHORIZED", githubIssueId: 101, openingLabel: "M",
       openingSourceActorLogin: "contributor",
       reason: "The application of the opening label `M` by `contributor` could not be attributed to the repository sponsor `sponsor`.",
     }]);
@@ -508,11 +489,8 @@ describe("rating authority", () => {
 
   it("does not let two outsiders price and close an issue between them", () => {
     const snapshot = evidenceFixture({
-      issueAuthor: "maintainer",
-      opener: "maintainer",
-      settler: "maintainer",
-      commenter: "maintainer",
-      pullRequestAuthor: "contributor",
+      issueAuthor: "maintainer", opener: "maintainer", settler: "maintainer",
+      commenter: "maintainer", pullRequestAuthor: "contributor",
     });
 
     const result = foldRepository(snapshot);
@@ -520,9 +498,7 @@ describe("rating authority", () => {
     expect(result.issues).toEqual([]);
     expect(result.settlements).toEqual([]);
     expect(result.policyViolations).toEqual([{
-      code: "OPENING_LABEL_UNAUTHORIZED",
-      githubIssueId: 101,
-      openingLabel: "M",
+      code: "OPENING_LABEL_UNAUTHORIZED", githubIssueId: 101, openingLabel: "M",
       openingSourceActorLogin: "maintainer",
       reason: "The application of the opening label `M` by `maintainer` could not be attributed to the repository sponsor `sponsor`.",
     }]);
@@ -537,10 +513,8 @@ describe("rating authority", () => {
       expect.objectContaining({ status: "SETTLED", creditorId: "contributor", debtorId: "sponsor", credits: 6 }),
     ]);
     expect(result.issues[0]).toMatchObject({
-      ownerGitHubLogin: "contributor",
-      openingSourceActorLogin: "sponsor",
-      settledLabelActorLogin: "sponsor",
-      settledRationaleActorLogin: "sponsor",
+      ownerGitHubLogin: "contributor", openingSourceActorLogin: "sponsor",
+      settledLabelActorLogin: "sponsor", settledRationaleActorLogin: "sponsor",
     });
     expect(result.policyViolations).toEqual([]);
   });
@@ -635,9 +609,7 @@ describe("rationale comment edits", () => {
     const result = foldRepository(snapshot);
 
     expect(result.settlements[0]).toMatchObject({
-      status: "UNSETTLED",
-      settledPoints: null,
-      credits: 0,
+      status: "UNSETTLED", settledPoints: null, credits: 0,
       settledRationaleCommentId: null,
     });
     expect(result.policyViolations).toEqual([{ code: "SETTLED_RATIONALE_EDITED", githubIssueId: 101 }]);
@@ -658,21 +630,15 @@ describe("rationale comment edits", () => {
     const issue = snapshot.issues[0]!;
     issue.comments[0]!.lastEditedAt = "2026-09-02T09:00:00.000Z";
     issue.comments.push({
-      id: "comment-2",
-      databaseId: 402,
-      authorLogin: "sponsor",
-      authorGitHubUserId: null,
+      id: "comment-2", databaseId: 402, authorLogin: "sponsor", authorGitHubUserId: null,
       body: "Confirming delivered/6.",
-      createdAt: "2026-09-01T11:45:00.000Z",
-      lastEditedAt: null,
+      createdAt: "2026-09-01T11:45:00.000Z", lastEditedAt: null,
     });
 
     const result = foldRepository(snapshot);
 
     expect(result.settlements[0]).toMatchObject({
-      status: "SETTLED",
-      settledPoints: 6,
-      settledRationaleCommentId: "comment-2",
+      status: "SETTLED", settledPoints: 6, settledRationaleCommentId: "comment-2",
       settledRationaleCommentedAt: "2026-09-01T11:45:00.000Z",
     });
     expect(result.policyViolations).toEqual([]);
@@ -691,9 +657,7 @@ describe("rationale comment edits", () => {
     expect(result.settlements[0]).toMatchObject({ status: "UNSETTLED", settledPoints: null });
     expect(result.policyViolations).toEqual([{ code: "SETTLED_RATIONALE_EDITED", githubIssueId: 101 }]);
     expect(result.unwritableClosures).toEqual([{
-      githubIssueId: 101,
-      kind: "SETTLEMENT_EVIDENCE_REJECTED",
-      githubPullRequestId: 201,
+      githubIssueId: 101, kind: "SETTLEMENT_EVIDENCE_REJECTED", githubPullRequestId: 201,
       reason: "Every nonblank rationale comment by the repository sponsor's account (login `sponsor`) inside the window was edited after the settlement evidence window closed at 2026-09-01T12:15:00.000Z.",
     }]);
   });
@@ -711,10 +675,8 @@ describe("settled label authority boundaries", () => {
     const result = foldRepository(snapshot);
 
     expect(result.settlements[0]).toMatchObject({
-      status: accepted ? "SETTLED" : "UNSETTLED",
-      settledPoints: accepted ? 6 : null,
-      credits: accepted ? 6 : 0,
-      settledLabelEventId: accepted ? "actual-1" : null,
+      status: accepted ? "SETTLED" : "UNSETTLED", settledPoints: accepted ? 6 : null,
+      credits: accepted ? 6 : 0, settledLabelEventId: accepted ? "actual-1" : null,
     });
     expect(result.policyViolations).toEqual([]);
     if (!accepted) {
@@ -791,15 +753,11 @@ describe("review rounds at merge", () => {
     const snapshot = evidenceFixture();
     snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
       {
-        id: 401,
-        state: "DISMISSED",
-        submittedAt: "2026-09-01T10:30:00.000Z",
+        id: 401, state: "DISMISSED", submittedAt: "2026-09-01T10:30:00.000Z",
         dismissal: { at: "2026-09-01T13:00:00.000Z", previousState: "CHANGES_REQUESTED" },
       },
       {
-        id: 402,
-        state: "DISMISSED",
-        submittedAt: "2026-09-01T10:40:00.000Z",
+        id: 402, state: "DISMISSED", submittedAt: "2026-09-01T10:40:00.000Z",
         dismissal: { at: "2026-09-01T11:00:00.000Z", previousState: "CHANGES_REQUESTED" },
       },
     ];
@@ -816,9 +774,7 @@ describe("review rounds at merge", () => {
     const snapshot = evidenceFixture();
     snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
       {
-        id: 401,
-        state: "DISMISSED",
-        submittedAt: "2026-09-01T10:30:00.000Z",
+        id: 401, state: "DISMISSED", submittedAt: "2026-09-01T10:30:00.000Z",
         dismissal: { at: "2026-09-01T13:00:00.000Z", previousState: "COMMENTED" },
       },
     ];
@@ -833,9 +789,7 @@ describe("review rounds at merge", () => {
     const snapshot = evidenceFixture();
     snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
       {
-        id: 401,
-        state: "CHANGES_REQUESTED",
-        submittedAt: "2026-09-01T10:30:00.000Z",
+        id: 401, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T10:30:00.000Z",
         dismissal: { at: "2026-09-01T11:00:00.000Z", previousState: "CHANGES_REQUESTED" },
       },
       { id: 402, state: "DISMISSED", submittedAt: "2026-09-01T10:40:00.000Z", dismissal: null },
@@ -855,9 +809,7 @@ describe("review rounds at merge", () => {
   ])("counts $rounds rounds when dismissal is at $at", ({ at, rounds, credits }) => {
     const snapshot = evidenceFixture();
     snapshot.issues[0]!.closingPullRequests[0]!.reviews = [{
-      id: 310,
-      state: "DISMISSED",
-      submittedAt: "2026-09-01T10:30:00.000Z",
+      id: 310, state: "DISMISSED", submittedAt: "2026-09-01T10:30:00.000Z",
       dismissal: { at, previousState: "CHANGES_REQUESTED" },
     }];
 
@@ -903,9 +855,7 @@ describe("review rounds at merge", () => {
     const snapshot = evidenceFixture();
     snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
       {
-        id: 301,
-        state: "DISMISSED",
-        submittedAt: "2026-09-01T10:30:00.000Z",
+        id: 301, state: "DISMISSED", submittedAt: "2026-09-01T10:30:00.000Z",
         dismissal: { at: "2026-09-01T13:00:00.000Z", previousState: "CHANGES_REQUESTED" },
       },
     ];
@@ -920,9 +870,7 @@ describe("review rounds at merge", () => {
     const snapshot = evidenceFixture();
     snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
       {
-        id: 301,
-        state: "DISMISSED",
-        submittedAt: "2026-09-01T10:30:00.000Z",
+        id: 301, state: "DISMISSED", submittedAt: "2026-09-01T10:30:00.000Z",
         dismissal: { at: "2026-09-01T11:00:00.000Z", previousState: "CHANGES_REQUESTED" },
       },
     ];
@@ -936,16 +884,12 @@ describe("review rounds at merge", () => {
     const snapshot = evidenceFixture();
     snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
       {
-        id: 301,
-        state: "DISMISSED",
-        submittedAt: "2026-09-01T10:30:00.000Z",
+        id: 301, state: "DISMISSED", submittedAt: "2026-09-01T10:30:00.000Z",
         dismissal: { at: "2026-09-01T13:00:00.000Z", previousState: "APPROVED" },
       },
       { id: 302, state: "DISMISSED", submittedAt: "2026-09-01T10:40:00.000Z", dismissal: null },
       {
-        id: 303,
-        state: "DISMISSED",
-        submittedAt: "2026-09-01T10:50:00.000Z",
+        id: 303, state: "DISMISSED", submittedAt: "2026-09-01T10:50:00.000Z",
         dismissal: { at: "2026-09-01T13:00:00.000Z", previousState: null },
       },
     ];
@@ -960,9 +904,7 @@ describe("review rounds at merge", () => {
     snapshot.issues[0]!.closingPullRequests[0]!.reviews = [
       { id: 301, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T12:00:00.000Z", dismissal: null },
       {
-        id: 302,
-        state: "DISMISSED",
-        submittedAt: "2026-09-01T12:30:00.000Z",
+        id: 302, state: "DISMISSED", submittedAt: "2026-09-01T12:30:00.000Z",
         dismissal: { at: "2026-09-01T13:00:00.000Z", previousState: "CHANGES_REQUESTED" },
       },
     ];
@@ -985,10 +927,8 @@ describe("rationale selection boundaries", () => {
     const result = foldRepository(snapshot);
 
     expect(result.settlements[0]).toMatchObject({
-      status: accepted ? "SETTLED" : "UNSETTLED",
-      settledPoints: accepted ? 6 : null,
-      credits: accepted ? 6 : 0,
-      settledRationaleCommentId: accepted ? "comment-1" : null,
+      status: accepted ? "SETTLED" : "UNSETTLED", settledPoints: accepted ? 6 : null,
+      credits: accepted ? 6 : 0, settledRationaleCommentId: accepted ? "comment-1" : null,
     });
     expect(result.policyViolations).toEqual(
       accepted ? [] : [{ code: "SETTLED_RATIONALE_EDITED", githubIssueId: 101 }],
@@ -1008,10 +948,8 @@ describe("rationale selection boundaries", () => {
     const result = foldRepository(snapshot);
 
     expect(result.settlements[0]).toMatchObject({
-      status: accepted ? "SETTLED" : "UNSETTLED",
-      settledPoints: accepted ? 6 : null,
-      credits: accepted ? 6 : 0,
-      settledRationaleCommentId: accepted ? "comment-1" : null,
+      status: accepted ? "SETTLED" : "UNSETTLED", settledPoints: accepted ? 6 : null,
+      credits: accepted ? 6 : 0, settledRationaleCommentId: accepted ? "comment-1" : null,
     });
     expect(result.policyViolations).toEqual([]);
     if (!accepted) {
@@ -1026,9 +964,7 @@ describe("rationale selection boundaries", () => {
     const result = foldRepository(snapshot);
 
     expect(result.settlements[0]).toMatchObject({
-      status: "SETTLED",
-      settledPoints: 6,
-      credits: 6,
+      status: "SETTLED", settledPoints: 6, credits: 6,
       settledRationaleCommentId: "comment-1",
     });
     expect(result.policyViolations).toEqual([]);
@@ -1041,9 +977,7 @@ describe("rationale selection boundaries", () => {
     const result = foldRepository(snapshot);
 
     expect(result.settlements[0]).toMatchObject({
-      status: "SETTLED",
-      settledPoints: 6,
-      credits: 6,
+      status: "SETTLED", settledPoints: 6, credits: 6,
       settledRationaleCommentId: "comment-1",
     });
     expect(result.policyViolations).toEqual([]);
@@ -1053,17 +987,13 @@ describe("rationale selection boundaries", () => {
     const snapshot = evidenceFixture();
     snapshot.issues[0]!.comments.push({
       ...snapshot.issues[0]!.comments[0]!,
-      id: "comment-2",
-      databaseId: 402,
-      createdAt: "2026-09-01T11:45:00.000Z",
+      id: "comment-2", databaseId: 402, createdAt: "2026-09-01T11:45:00.000Z",
     });
 
     const result = foldRepository(snapshot);
 
     expect(result.settlements[0]).toMatchObject({
-      status: "SETTLED",
-      settledPoints: 6,
-      credits: 6,
+      status: "SETTLED", settledPoints: 6, credits: 6,
       settledRationaleCommentId: "comment-1",
     });
     expect(result.policyViolations).toEqual([]);
@@ -1078,16 +1008,13 @@ describe("rationale selection boundaries", () => {
     );
     issue.comments.push({
       ...issue.comments[0]!,
-      id: "comment-2",
-      databaseId: 402,
-      createdAt: "2026-09-01T11:34:00.000Z",
+      id: "comment-2", databaseId: 402, createdAt: "2026-09-01T11:34:00.000Z",
     });
 
     const result = foldRepository(snapshot);
 
     expect(result.settlements[0]).toMatchObject({
-      status: "SETTLED",
-      settledPoints: 6,
+      status: "SETTLED", settledPoints: 6,
       credits: 6,
       settledLabelEventId: "actual-2",
       settledRationaleCommentId: "comment-1",
