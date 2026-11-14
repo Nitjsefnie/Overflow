@@ -307,9 +307,10 @@ describe("landing page", () => {
 //     writing-mode and generated content are also unbounded. These can change
 //     placement or wrapping without violating the table; re-measure in a
 //     browser when changing them.
-//   - It cannot evaluate a media, supports or container condition at the width
-//     under test (jsdom 30 applies none, 31 evaluates them at a fixed
-//     1024x768); those are pinned as declarations instead.
+//   - It cannot evaluate a condition at the width under test (jsdom 30 applies
+//     only media-type queries, 31 evaluates @media at 1024x768, container
+//     queries never match, @supports ignores width); those are pinned as
+//     declarations instead.
 //     A @layer block is exempt, because an unlayered declaration always beats
 //     a layered one and nothing here is layered - which stops holding the day
 //     anything is.
@@ -401,8 +402,8 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["form", "font-size", "atMost", 16, 16],
   ["form", "line-height", "atMost", 24, 24],
   // The button's own box: 49px tall under a 24px margin, its top and bottom
-  // borders the 2px solid Chrome measured at both widths. Its raw widths are
-  // bounded too; under jsdom 30 its var() shorthand reads 0px in both.
+  // borders the 2px solid Chrome measured at both widths. Both jsdom versions
+  // read an unstyled edge as 0px wide, so the raw widths add nothing to that.
   ["button", "margin-top", "atMost", 24, 24],
   ["button", "padding-top", "atMost", 10.4, 10.4],
   ["button", "padding-bottom", "atMost", 10.4, 10.4],
@@ -438,7 +439,8 @@ const NO_BORDER = new Set(["none", "hidden", ""]);
 
 const BASE_WIDTH = 1440;
 const NARROW_WIDTH = 390;
-const VIEWPORT_HEIGHT = 800;
+// The 1366x625 target, no shorter than the x600 measurements the bounds come from.
+const VIEWPORT_HEIGHT = 625;
 const ROOT_FONT_SIZE = 16;
 
 type ParsedRule = { selectorText: string; condition: string | null; style: CSSStyleDeclaration; cssText: string };
@@ -472,9 +474,8 @@ function atViewport(css: string, width: number): string {
   return resolved;
 }
 
-// A fresh mount and stylesheet per width: jsdom 30 memoises the computed
-// declaration per element (document._styleCache), so re-reading an element
-// already read at another width returns the earlier answer.
+// A fresh mount and stylesheet per width: each width's sheet carries its own
+// rewritten viewport lengths.
 function withLandingPageAt<T>(width: number, read: (sheet: CSSStyleSheet) => T): T {
   const style = document.createElement("style");
   style.textContent = atViewport(readFileSync("src/app/globals.css", "utf8") + "\n" + readFileSync("src/app/landing.css", "utf8"), width);
@@ -581,9 +582,9 @@ describe("landing hero fold budget", () => {
           const read: Record<string, string> = { "font-size": computed.fontSize };
           for (const [owner, property] of FOLD_BUDGET) {
             if (owner !== label) continue;
-            // A border only occupies space if it has a style, and jsdom reports
-            // `medium` - 16px - for a width nobody declared. Reading the pair
-            // together is what tells a declared 15px border from an absent one.
+            // A border only occupies space if it has a style; both jsdom
+            // versions read an unstyled edge as 0px and a styled one with no
+            // declared width as 3px.
             const edge = EFFECTIVE_BORDERS[property];
             read[property] = edge
               ? NO_BORDER.has(computed.getPropertyValue(`${edge}-style`))
@@ -605,7 +606,7 @@ describe("landing hero fold budget", () => {
         // thousandth of a pixel above its own bound in binary floating point.
         const pixels =
           Math.round(toPixels(raw, Number.parseFloat(computed["font-size"]), property, direction, term) * 1000) / 1000;
-        const hint = `${term}: raising this lowers the sign-in button, so measure the fold in a browser at ${width}x600 before changing the bound`;
+        const hint = `${term}: raising this lowers the sign-in button, so measure the fold in a browser at ${width}x${VIEWPORT_HEIGHT} before changing the bound`;
         // Soft, so one run names every term that moved rather than only the first.
         if (direction === "atMost") expect.soft(pixels, hint).toBeLessThanOrEqual(bound);
         else expect.soft(pixels, hint).toBeGreaterThanOrEqual(bound);
