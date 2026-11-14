@@ -323,9 +323,9 @@ type SubtreeElement = "page" | "hero" | "eyebrow" | "h1" | "lede" | "trade" | "f
 
 // element, property, direction, and the bound at 1440px and at 390px, from the
 // browser measurement above, except the h1 and lede max-width: jsdom's 0.5em
-// reading of their ch measures, faithful only to a ch declaration (any other is
-// refused); the geometry check measures the wrap. Infinity is `none` or
-// `auto`: an unconstrained measure cannot wrap the text into another line.
+// reading of their ch measures, faithful only to a ch declaration: a non-ch
+// max-width in their stylesheet rules is refused, max-inline-size and inline
+// styles are not (the geometry check's 1366x625 row catches those). Infinity is `none` or `auto`.
 type BudgetRow = [SubtreeElement, string, "atMost" | "atLeast", number, number];
 
 const FOLD_BUDGET: BudgetRow[] = [
