@@ -41,8 +41,7 @@ function fixture(options: { provider?: string; instanceUrl?: string | null; look
         if (pending !== null) pending = { ...pending, configuredAt: new Date("2026-01-01T00:00:00Z") };
         return true;
       },
-      markWebhookRederivationOwed: async () => { const was = owed; owed = true; return was; },
-      clearWebhookRederivationOwed: async () => { owed = false; },
+      markWebhookRederivationOwed: async () => { const was = owed; owed = true; return was; }, clearWebhookRederivationOwed: async () => { owed = false; },
       listActiveRepositoryIds: async () => registrations.map((entry) => entry.id),
       findActiveRepositoryById: async (id) => registrations.find((entry) => entry.id === id) ?? null,
       findActiveRepositoryForgeById: async (id) => registrations.some((entry) => entry.id === id)
@@ -119,11 +118,12 @@ describe("existing registration webhook upgrade", () => {
     expect(f.outcomes).toEqual([outcome("VERIFIED", change === "unchanged" ? "NOT_NEEDED" : "QUEUED", null), outcome("VERIFIED", "NOT_NEEDED", null)]);
   });
 
-  it.each(["github", "gitlab"] as const)("refuses stale %s finalization without queueing repair", async (provider) => {
-    const f = fixture({ provider, instanceUrl: provider === "gitlab" ? "https://gitlab.example.com" : null });
-    f.dependencies.store.finalizeWebhookCredential = async () => false;
+  // A finalized hook's row that moved on before its debt is recorded is refused before the forge is asked.
+  it.each([["github", "finalization"], ["gitlab", "finalization"], ["github", "owed marker"], ["gitlab", "owed marker"]] as const)("refuses a stale %s %s without queueing repair", async (provider, stale) => {
+    const f = fixture({ provider, instanceUrl: provider === "gitlab" ? "https://gitlab.example.com" : null, configuredAt: stale === "owed marker" ? new Date("2026-01-01T00:00:00Z") : null });
+    Object.assign(f.dependencies.store, stale === "finalization" ? { finalizeWebhookCredential: async () => false } : { markWebhookRederivationOwed: async () => null });
     expect(await upgradeRepositoryWebhooks(f.dependencies)).toEqual({ succeeded: 0, failed: 1, gone: 0 });
-    expect(f.queued).toEqual([]);
+    expect([f.queued, f.requests.filter((request) => ["PATCH", "PUT"].includes(request.method)).length]).toEqual([[], stale === "owed marker" ? 0 : 1]);
     expect(f.outcomes).toEqual([outcome("FAILED", "NOT_ATTEMPTED", "SUBSCRIPTION_FAILED")]);
   });
 
