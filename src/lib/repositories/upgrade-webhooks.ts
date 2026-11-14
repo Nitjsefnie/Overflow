@@ -37,15 +37,14 @@ export type WebhookUpgradeDependencies = {
   writeError(line: string): void;
 };
 
-/**
- * The stage code and the cause as describeErrorCause renders it: one capped,
- * redacted line. Total, so a catch that writes it still writes its outcome.
- */
+/** The stage code and its cause (describeErrorCause, or a fallback): one capped, redacted line. */
 export function failureCauseLine(failure: WebhookUpgradeOutcome["failure"] | "UPGRADE_FAILED", error: unknown, repositoryId?: string): string {
-  let cause = "unrenderable thrown value";
+  let cause: string;
   try {
     cause = describeErrorCause(error);
-  } catch { /* a value String() cannot convert, such as a null-prototype object */ }
+  } catch {
+    cause = "unrenderable thrown value";
+  }
   return JSON.stringify({ repositoryId, failure, cause });
 }
 
@@ -180,12 +179,7 @@ async function upgradeGitLabRegistration(
   ), outcome);
 }
 
-/**
- * A first finalization queues inside its own transaction. For a finalized
- * hook the re-derivation is owed durably before the forge is asked (a lost
- * response looks like a refused update) and cleared only once queued or found
- * unneeded, so a later run queues one whose queue write or response was lost.
- */
+/** A finalized hook owes its re-derivation from before the forge is asked until queued or unneeded. */
 async function finishUpgrade(
   { store }: Pick<WebhookUpgradeDependencies, "store">,
   credential: WebhookCredentialRecord,
@@ -209,7 +203,6 @@ async function finishUpgrade(
   }
   const owes = changed || owed;
   if (owes) await queueRederivation({ store }, credential.repositoryId, outcome);
-  // Until the clear lands the debt stands and the next run queues again, so a failed clear reports it unpaid.
   [outcome.queue, outcome.failure] = ["FAILED", "QUEUE_FAILED"];
   await store.clearWebhookRederivationOwed(credential);
   [outcome.queue, outcome.failure] = [owes ? "QUEUED" : "NOT_NEEDED", null];
