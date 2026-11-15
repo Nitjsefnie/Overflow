@@ -1202,7 +1202,8 @@ async function main() {
     // the child is alive and its DevTools endpoint is known.
     const { child, browserUrl } = await launchChromeWithRetry({
       command: chrome,
-      spawnChild: owner.spawn.bind(owner),
+      // Chrome's TMPDIR scratch, org.chromium.Chromium.*, dies with workDir even on SIGKILL.
+      spawnChild: (command, args, options) => owner.spawn(command, args, { ...options, env: { ...process.env, TMPDIR: workDir } }),
       stopChild: owner.stop.bind(owner),
       args: [
         "--headless=new",
