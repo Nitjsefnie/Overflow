@@ -78,14 +78,9 @@ async function registerRepository(sealingKey: string, sponsorId: string, secret:
   const githubRepositoryId = externalId++;
   const credentialId = randomUUID();
   const created = await new PostgresRepositoryStore(sql, sealingKey, "").createRepository({
-    githubRepositoryId,
-    ownerName: `reencrypt/repo-${githubRepositoryId}`,
-    sponsorId,
-    visibility: "PUBLIC",
-    githubWebhookId: externalId++,
-    registrationMethod: "oauth_hook" as const,
-    webhookCredential: secret === null ? null : { id: credentialId, secret },
-    difficultyScheme: validDifficultyScheme(),
+    githubRepositoryId, ownerName: `reencrypt/repo-${githubRepositoryId}`, sponsorId, visibility: "PUBLIC",
+    githubWebhookId: externalId++, registrationMethod: "oauth_hook" as const,
+    webhookCredential: secret === null ? null : { id: credentialId, secret }, difficultyScheme: validDifficultyScheme(),
   });
   return { id: created!.id, credentialId };
 }
@@ -93,10 +88,8 @@ async function registerRepository(sealingKey: string, sponsorId: string, secret:
 /** One of every stored shape: v1, v2 under the previous key, v2 under the current key, and NULL. */
 async function seedMixedRows() {
   const legacyUser = await insertUser(() => legacyV1Envelope);
-  const previousUser = await insertUser((id) =>
-    encryptToken("previous-oauth", previousKey, credentialBinding.userOAuthToken(id)));
-  const currentUser = await insertUser((id) =>
-    encryptToken("current-oauth", currentKey, credentialBinding.userOAuthToken(id)));
+  const previousUser = await insertUser((id) => encryptToken("previous-oauth", previousKey, credentialBinding.userOAuthToken(id)));
+  const currentUser = await insertUser((id) => encryptToken("current-oauth", currentKey, credentialBinding.userOAuthToken(id)));
   const emptyUser = await insertUser(null);
   const legacyForge = await insertForgeIdentity(legacyUser.id, () => legacyV1Envelope);
   const previousForge = await insertForgeIdentity(previousUser.id, (forgeUserId) =>
@@ -107,22 +100,15 @@ async function seedMixedRows() {
   const legacyRepository = await registerRepository(currentKey, currentUser.id, "replaced-by-legacy");
   await sql`update registered_repositories set encrypted_webhook_secret = ${Buffer.from(legacyV1Envelope, "utf8")}
     where id = ${legacyRepository.id}`;
-  return {
-    legacyUser, previousUser, currentUser, emptyUser, legacyForge, previousForge,
-    previousRepository, currentRepository, emptyRepository, legacyRepository,
-  };
+  return { legacyUser, previousUser, currentUser, emptyUser, legacyForge, previousForge,
+    previousRepository, currentRepository, emptyRepository, legacyRepository };
 }
 
-async function run(
-  argumentsList: readonly string[],
-  options: { keys?: TokenKeySet; store?: CredentialStore; batchSize?: number } = {},
-) {
+async function run(argumentsList: readonly string[], options: { keys?: TokenKeySet; store?: CredentialStore; batchSize?: number } = {}) {
   const lines: string[] = [];
   const code = await runCredentialReencryptionCli(argumentsList, {
-    store: options.store ?? postgresCredentialStore(sql),
-    keys: options.keys ?? keys,
-    batchSize: options.batchSize,
-    write: (line) => { lines.push(line); },
+    store: options.store ?? postgresCredentialStore(sql), keys: options.keys ?? keys,
+    batchSize: options.batchSize, write: (line) => { lines.push(line); },
   });
   return { code, lines, output: lines.map((line) => JSON.parse(line) as Record<string, unknown>) };
 }
@@ -163,11 +149,8 @@ describe("re-encrypting stored credentials under the current key", () => {
     const checked = await run(["--check"], { batchSize: 1 });
 
     expect(checked.code).toBe(1);
-    expect(checked.output).toEqual([
-      checkSummary("users", "encrypted_oauth_token", 1, 2),
-      checkSummary("user_forge_identities", "encrypted_token", 0, 2),
-      checkSummary("registered_repositories", "encrypted_webhook_secret", 1, 2),
-    ]);
+    expect(checked.output).toEqual([checkSummary("users", "encrypted_oauth_token", 1, 2),
+      checkSummary("user_forge_identities", "encrypted_token", 0, 2), checkSummary("registered_repositories", "encrypted_webhook_secret", 1, 2)]);
     expect(await snapshot()).toEqual(before);
   });
 
@@ -179,12 +162,9 @@ describe("re-encrypting stored credentials under the current key", () => {
 
     expect(result.code).toBe(1);
     expect(result.output).toEqual(expect.arrayContaining([
-      { table: "users", id: seeded.legacyUser.id, failure: "UNDECRYPTABLE" },
-      { table: "user_forge_identities", id: seeded.legacyForge.id, failure: "UNDECRYPTABLE" },
-      { table: "registered_repositories", id: seeded.legacyRepository.id, failure: "UNDECRYPTABLE" },
-      summary("users", "encrypted_oauth_token", 1, 1, 0, 1),
-      summary("user_forge_identities", "encrypted_token", 1, 0, 0, 1),
-      summary("registered_repositories", "encrypted_webhook_secret", 1, 1, 0, 1),
+      { table: "users", id: seeded.legacyUser.id, failure: "UNDECRYPTABLE" }, { table: "user_forge_identities", id: seeded.legacyForge.id, failure: "UNDECRYPTABLE" },
+      { table: "registered_repositories", id: seeded.legacyRepository.id, failure: "UNDECRYPTABLE" }, summary("users", "encrypted_oauth_token", 1, 1, 0, 1),
+      summary("user_forge_identities", "encrypted_token", 1, 0, 0, 1), summary("registered_repositories", "encrypted_webhook_secret", 1, 1, 0, 1),
     ]));
     expect(result.output).toHaveLength(6);
     const legacyRows = [
@@ -233,11 +213,8 @@ describe("re-encrypting stored credentials under the current key", () => {
 
     const checked = await run(["--check"]);
     expect(checked.code).toBe(1);
-    expect(checked.output).toEqual([
-      checkSummary("users", "encrypted_oauth_token", 2, 1),
-      checkSummary("user_forge_identities", "encrypted_token", 1, 1),
-      checkSummary("registered_repositories", "encrypted_webhook_secret", 2, 1),
-    ]);
+    expect(checked.output).toEqual([checkSummary("users", "encrypted_oauth_token", 2, 1),
+      checkSummary("user_forge_identities", "encrypted_token", 1, 1), checkSummary("registered_repositories", "encrypted_webhook_secret", 2, 1)]);
   });
 
   it("changes nothing on a second run", async () => {
@@ -249,12 +226,9 @@ describe("re-encrypting stored credentials under the current key", () => {
 
     expect(second.code).toBe(1);
     expect(second.output).toEqual([
-      { table: "users", id: seeded.legacyUser.id, failure: "UNDECRYPTABLE" },
-      summary("users", "encrypted_oauth_token", 0, 2, 0, 1),
-      { table: "user_forge_identities", id: seeded.legacyForge.id, failure: "UNDECRYPTABLE" },
-      summary("user_forge_identities", "encrypted_token", 0, 1, 0, 1),
-      { table: "registered_repositories", id: seeded.legacyRepository.id, failure: "UNDECRYPTABLE" },
-      summary("registered_repositories", "encrypted_webhook_secret", 0, 2, 0, 1),
+      { table: "users", id: seeded.legacyUser.id, failure: "UNDECRYPTABLE" }, summary("users", "encrypted_oauth_token", 0, 2, 0, 1),
+      { table: "user_forge_identities", id: seeded.legacyForge.id, failure: "UNDECRYPTABLE" }, summary("user_forge_identities", "encrypted_token", 0, 1, 0, 1),
+      { table: "registered_repositories", id: seeded.legacyRepository.id, failure: "UNDECRYPTABLE" }, summary("registered_repositories", "encrypted_webhook_secret", 0, 2, 0, 1),
     ]);
     expect(await snapshot()).toEqual(afterFirst);
   });
@@ -265,20 +239,15 @@ describe("re-encrypting stored credentials under the current key", () => {
     const checked = await run(["--check"], { keys: { current: legacyV1Key } });
 
     expect(checked.code).toBe(1);
-    expect(checked.output).toEqual([
-      checkSummary("users", "encrypted_oauth_token", 0, 1),
-      checkSummary("user_forge_identities", "encrypted_token", 0, 0),
-      checkSummary("registered_repositories", "encrypted_webhook_secret", 0, 0),
-    ]);
+    expect(checked.output).toEqual([checkSummary("users", "encrypted_oauth_token", 0, 1),
+      checkSummary("user_forge_identities", "encrypted_token", 0, 0), checkSummary("registered_repositories", "encrypted_webhook_secret", 0, 0)]);
 
     const result = await run([], { keys: { current: legacyV1Key } });
 
     expect(result.code).toBe(1);
     expect(result.output).toEqual([
-      { table: "users", id: user.id, failure: "UNDECRYPTABLE" },
-      summary("users", "encrypted_oauth_token", 0, 0, 0, 1),
-      summary("user_forge_identities", "encrypted_token", 0, 0, 0, 0),
-      summary("registered_repositories", "encrypted_webhook_secret", 0, 0, 0, 0),
+      { table: "users", id: user.id, failure: "UNDECRYPTABLE" }, summary("users", "encrypted_oauth_token", 0, 0, 0, 1),
+      summary("user_forge_identities", "encrypted_token", 0, 0, 0, 0), summary("registered_repositories", "encrypted_webhook_secret", 0, 0, 0, 0),
     ]);
     expect((await snapshot()).get(`users:${user.id}`)).toBe(legacyV1Envelope);
     await expect(new PostgresRepositoryStore(sql, legacyV1Key, "").getGitHubAccessToken(user.id))
@@ -385,8 +354,7 @@ describe("re-encrypting stored credentials under the current key", () => {
 
     expect(result.code).toBe(1);
     expect(result.output).toEqual(expect.arrayContaining([
-      { table: "users", id: copied.id, failure: "UNDECRYPTABLE" },
-      { table: "users", id: foreign.id, failure: "UNDECRYPTABLE" },
+      { table: "users", id: copied.id, failure: "UNDECRYPTABLE" }, { table: "users", id: foreign.id, failure: "UNDECRYPTABLE" },
       summary("users", "encrypted_oauth_token", 1, 0, 0, 2),
     ]));
     expect(result.output).toHaveLength(5);
@@ -430,12 +398,9 @@ describe("re-encrypting stored credentials under the current key", () => {
     const reencryptedLines = linesOf(reencrypted);
     expect(reencryptedLines, diagnostics(reencrypted)).toHaveLength(6);
     expect(reencryptedLines, diagnostics(reencrypted)).toEqual(expect.arrayContaining([
-      { table: "users", id: seeded.legacyUser.id, failure: "UNDECRYPTABLE" },
-      { table: "user_forge_identities", id: seeded.legacyForge.id, failure: "UNDECRYPTABLE" },
-      { table: "registered_repositories", id: seeded.legacyRepository.id, failure: "UNDECRYPTABLE" },
-      summary("users", "encrypted_oauth_token", 1, 1, 0, 1),
-      summary("user_forge_identities", "encrypted_token", 1, 0, 0, 1),
-      summary("registered_repositories", "encrypted_webhook_secret", 1, 1, 0, 1),
+      { table: "users", id: seeded.legacyUser.id, failure: "UNDECRYPTABLE" }, { table: "user_forge_identities", id: seeded.legacyForge.id, failure: "UNDECRYPTABLE" },
+      { table: "registered_repositories", id: seeded.legacyRepository.id, failure: "UNDECRYPTABLE" }, summary("users", "encrypted_oauth_token", 1, 1, 0, 1),
+      summary("user_forge_identities", "encrypted_token", 1, 0, 0, 1), summary("registered_repositories", "encrypted_webhook_secret", 1, 1, 0, 1),
     ]));
     const settled = invoke(["--check"], "");
     expect(settled.status, diagnostics(settled)).toBe(1);

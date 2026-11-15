@@ -144,9 +144,7 @@ describe("credential re-encryption CLI failure paths", () => {
     expect(checked.code).toBe(1);
     expect(checked.lines).toEqual([
       JSON.stringify({ table: "users", column: "encrypted_oauth_token", current: 0, notCurrent: 1 }),
-      JSON.stringify({
-        table: "user_forge_identities", column: "encrypted_token", current: 0, notCurrent: 0,
-      }),
+      JSON.stringify({ table: "user_forge_identities", column: "encrypted_token", current: 0, notCurrent: 0 }),
       JSON.stringify({ table: "registered_repositories", column: "encrypted_webhook_secret", current: 0, notCurrent: 0 }),
     ]);
 
@@ -155,16 +153,10 @@ describe("credential re-encryption CLI failure paths", () => {
     expect(result.code).toBe(1);
     expect(result.lines).toEqual([
       JSON.stringify({ table: "users", id: legacyRow.id, failure: "UNDECRYPTABLE" }),
-      JSON.stringify({
-        table: "users", column: "encrypted_oauth_token", reencrypted: 0, alreadyCurrent: 0, skipped: 0, failed: 1,
-      }),
-      JSON.stringify({
-        table: "user_forge_identities", column: "encrypted_token", reencrypted: 0, alreadyCurrent: 0, skipped: 0, failed: 0,
-      }),
-      JSON.stringify({
-        table: "registered_repositories", column: "encrypted_webhook_secret",
-        reencrypted: 0, alreadyCurrent: 0, skipped: 0, failed: 0,
-      }),
+      JSON.stringify({ table: "users", column: "encrypted_oauth_token", reencrypted: 0, alreadyCurrent: 0, skipped: 0, failed: 1 }),
+      JSON.stringify({ table: "user_forge_identities", column: "encrypted_token", reencrypted: 0, alreadyCurrent: 0, skipped: 0, failed: 0 }),
+      JSON.stringify({ table: "registered_repositories", column: "encrypted_webhook_secret",
+        reencrypted: 0, alreadyCurrent: 0, skipped: 0, failed: 0 }),
     ]);
     expectNoSecrets(result.lines);
     expect(result.lines.join("\n")).not.toContain(legacyV1Envelope);
