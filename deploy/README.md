@@ -173,11 +173,13 @@ Before a recovery or credential-maintenance block that uses the database,
 paste this block into the same shell. Repeat it after editing the environment
 file. It exports the canonical database URL for direct clients and derived
 restore URLs: a set canonical value wins, including an empty string; only an
-unset canonical variable falls back to the legacy value. The file itself is
-unchanged.
+unset canonical variable falls back to the legacy value. The file is read the
+way the service's `EnvironmentFile=` reads it, by the deploy script's own
+reader, so a value holding `$` or quotes loads exactly as the service sees it.
+The file itself is unchanged.
 
 ```bash
-set -a; . /etc/overflow/overflow.env; set +a
+. /srv/overflow/scripts/systemd-env-file.sh; export_env_file /etc/overflow/overflow.env
 export OVERFLOW_DATABASE_URL="${OVERFLOW_DATABASE_URL-${DATABASE_URL-}}"
 ```
 
@@ -278,7 +280,7 @@ set -e
 git clone https://github.com/Nitjsefnie/Overflow.git /srv/overflow
 cd /srv/overflow
 npm_config_package_import_method=copy pnpm install --frozen-lockfile
-set -a; . /etc/overflow/overflow.env; set +a
+. /srv/overflow/scripts/systemd-env-file.sh; export_env_file /etc/overflow/overflow.env
 pnpm db:migrate
 release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=7 HEAD)"
 mkdir "$release"
@@ -762,7 +764,8 @@ the exact fetched SHA (below), and only after both gates pass the
 skip that compares the resolved SHA against the serving release's `REVISION`
 record and, on a match — the run that built the serving release migrated at that
 same commit — exits without installing, migrating or building, the copy-import
-install, the environment load, `db:migrate`, a grammar-named release directory
+install, the environment load (the file read as systemd's `EnvironmentFile=`
+reads it, never run; below), `db:migrate`, a grammar-named release directory
 created with a collision-aborting `mkdir`, generated-config preparation, the
 build, whose clean step wipes the release directory (everything outside
 `cache|dev|lock|trace`), the ownership reset excluding the serving cache, the
@@ -894,15 +897,16 @@ naming the skip and the SHA, and is reserved for rollback or recovery deploys
 when main's CI is red; unset or empty enforces the gate, and any other value
 refuses.
 
-The script takes no arguments and reads exactly seven environment overrides
+The script takes no arguments and reads exactly eight environment overrides
 for the test harness; production sets none of them and runs on the defaults:
 `OVERFLOW_DEPLOY_TREE` (default `/srv/overflow`),
 `OVERFLOW_DEPLOY_ENV_FILE` (default `/etc/overflow/overflow.env`),
 `OVERFLOW_DEPLOY_LOCK` (default `/run/overflow-deploy.lock`),
 `OVERFLOW_DEPLOY_UNIT` (default `overflow.service`),
 `OVERFLOW_DEPLOY_URL` (default `http://127.0.0.1:3000/api/readiness`),
-`OVERFLOW_DEPLOY_LOG_DIR` (default `/var/log/overflow`) and
-`OVERFLOW_DEPLOY_CI_TIMEOUT` (default `900`). The deployment URL must name the
+`OVERFLOW_DEPLOY_LOG_DIR` (default `/var/log/overflow`),
+`OVERFLOW_DEPLOY_CI_TIMEOUT` (default `900`) and
+`OVERFLOW_DEPLOY_ENV_READ_TIMEOUT` (default `5`, seconds). The deployment URL must name the
 readiness endpoint: the sign-in smoke derives its own URL from
 `OVERFLOW_DEPLOY_URL` by replacing the trailing `/api/readiness` with
 `/api/auth/providers`, so any other target derives a wrong smoke URL and
@@ -944,17 +948,25 @@ reconciliation running normally, but missed deliveries may remain unrecovered
 until a later reconciliation.
 
 `scripts/deploy-revision.sh` reads the environment file, not the deploy terminal,
-and says what it holds. Before the restart it prints one line: that the
-immediate startup sweep will be skipped when the file sets exactly `1`, or that
-it will run when the variable is unset or blank. Any other value, such as
-`true`, is named in that line as not exactly `1`, so an override that does not
-skip is visible before the restart. Once the service is active again, a file
-that still holds `1` is reported as still set, with a reminder that every later
-restart will skip the sweep until the line is removed. That reminder is the
-prompt for the removal below. If the file cannot be read when either line is
-printed (it is missing or unreadable, or ends the read with `exit`), that line
-says the value could not be read, rather than reporting the variable as unset or
-saying nothing, and the deploy carries on.
+and reads it the way systemd's `EnvironmentFile=` does, without running it:
+single and double quotes, backslash escapes, line continuations and `#` or `;`
+comment lines, with no `$` expansion and no commands, so the migration check,
+the migrations, the build and both lines below see exactly the values the
+service will see. Every name the file sets is exported to those steps over any
+value the deploy terminal exported; a name the file does not set keeps the
+terminal's value. If the file cannot be read at that first read (it is missing,
+unreadable, or not read within the deadline), the deploy refuses before the
+migration check. The script then says what the file holds. Before the restart
+it prints one line: that the immediate startup sweep will be skipped when the
+file sets exactly `1`, or that it will run when the variable is unset or blank.
+Any other value, such as `true`, is named in that line as not exactly `1`, so an
+override that does not skip is visible before the restart. Once the service is
+active again, a file that still holds `1` is reported as still set, with a
+reminder that every later restart will skip the sweep until the line is
+removed. That reminder is the prompt for the removal below. If the file cannot
+be read when either line is printed (it is missing or unreadable, or not read
+within the deadline), that line says the value could not be read, rather than
+reporting the variable as unset or saying nothing, and the deploy carries on.
 
 After restart, verify the warning naming `OVERFLOW_SKIP_STARTUP_RECONCILIATION`
 in the service journal. An authenticated moderator can also read
@@ -1304,7 +1316,7 @@ if [ "${serving_release}" != absent ] && [ -f "${serving_release}/REVISION" ]; t
   fi
 fi
 npm_config_package_import_method=copy pnpm install --frozen-lockfile
-set -a; . /etc/overflow/overflow.env; set +a
+. /srv/overflow/scripts/systemd-env-file.sh; export_env_file /etc/overflow/overflow.env
 pnpm db:migrate
 release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=7 HEAD)"
 mkdir "$release"
@@ -1375,13 +1387,23 @@ A nonzero upgrade leaves the new release serving but the deployment incomplete;
 inspect each sanitized `failure` code, restore sponsor credentials or hook admin
 access as needed, and rerun the `webhooks:upgrade` package script with the same
 environment.
+An exception behind a failure also writes one stderr line to the same log,
+`{"repositoryId":…,"failure":…,"cause":…}` (no `repositoryId` for
+`UPGRADE_FAILED`): its class and message on one capped line, with connection
+string credentials, `password` values and GitHub and Overflow token prefixes
+redacted. Other token shapes in a message are not redacted, so keep the log private.
 `subscription: VERIFIED` and `queue: NOT_NEEDED` means the subscription was
-unchanged and the credential was already finalized, so no repair was requested.
-`subscription: VERIFIED` and `queue: FAILED` is partial completion. A rerun
-retries repair when the credential was not yet finalized. If an already-finalized
-hook changed and its update response was lost or queueing failed, the rerun may
-see the updated subscription and skip the repair; request a rederivation for
-that repository through moderation instead. Do not report the upgrade as
+unchanged, the credential was already finalized and no earlier run left a repair
+owed, so no repair was requested.
+`subscription: VERIFIED` and `queue: FAILED` is partial completion; a rerun
+queues the repair. For a credential not yet finalized the rerun retries the
+finalization and its repair. Before updating an already-finalized hook the
+upgrade records that the repository owes a repair and clears the record only
+once the repair is queued (or the hook proved unchanged with nothing owed), so
+the rerun queues it once even when the earlier run's queue write failed or the
+forge's response to the update was lost (reported as `SUBSCRIPTION_FAILED`). A
+hook update the forge refused leaves the record too: the next run queues one
+full rederivation it may not have needed. Do not report the upgrade as
 successful from a restart or startup sweep. Queue acceptance does not establish
 that reconciliation has finished; check the worker's outcomes afterwards.
 
@@ -1496,14 +1518,14 @@ key, which seals every new write and opens what it sealed, and the optional
 `OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS` only opens. While both are configured, every
 row opens under whichever of the two sealed it.
 
-Run every block as root from a fresh shell. Sourcing the environment file sets
+Run every block as root from a fresh shell. Loading the environment file sets
 variables and never unsets them, so a shell that loaded the file before an edit
 keeps the values the edit removed. `pnpm` is on root's `PATH` and deliberately
 not on the service's (section 3).
 
 **Do not deploy (section 10) between step 3's edit and step 6's restart.** A
 deploy restarts the service and runs the webhook upgrade with whatever the
-environment file holds at that moment, or, from a shell sourced earlier, with
+environment file holds at that moment, or, from a shell loaded earlier, with
 keys the file no longer holds. Finish or roll back the rotation first.
 
 Before each database command block in this section, run the

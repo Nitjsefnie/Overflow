@@ -1,15 +1,15 @@
 {
   "trees": {
-    "tests/": 199628
+    "tests/": 199329
   },
   "schema_version": 1,
   "baseline": {
-    "scripts/check-page-geometry.mjs": 1379,
+    "scripts/check-page-geometry.mjs": 1378,
     "src/app/globals.css": 1233,
     "src/components/repository-form.tsx": 833,
     "src/lib/dashboard/queries.ts": 1526,
     "src/lib/fold/repository-fold.ts": 1420,
-    "src/lib/github/client.ts": 1438,
+    "src/lib/github/client.ts": 1434,
     "src/lib/moderation/credit-adjustment-store.ts": 827,
     "src/lib/repositories/register.ts": 1974,
     "tests/db/schema.test.ts": 5074,

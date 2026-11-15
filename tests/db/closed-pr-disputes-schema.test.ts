@@ -89,8 +89,8 @@ describe("closed PR dispute schema", () => {
       await runMigrations({ upTo: "073_dispute_credit_limit_replay.sql" });
       // Today's materializer writes the fixture, so it gets the columns later migrations add; dropped
       // again before the upgrade runs, the schema is 073's exactly.
-      await sql`alter table issues add column asks_outside_repository boolean not null default false`;
-      await sql`alter table issues add column done_when text`;
+      await sql`alter table issues add column asks_outside_repository boolean not null default false, add column done_when text`;
+      await sql`alter table unwritable_closures add column unlabelled_self_work boolean not null default false`;
       await sql`alter table settlements add column donation_comment_id text`;
       await sql`alter table registered_repositories add column first_listed_issue_id bigint,
         add column second_issue_listed boolean not null default false,
@@ -105,8 +105,8 @@ describe("closed PR dispute schema", () => {
         const surplus = await insertRequest(fixture, { ...grantFields(fixture), pull_request_id: otherPrId });
         surplusRequestIds.push(surplus.id as string);
       }
-      await sql`alter table issues drop column asks_outside_repository`;
-      await sql`alter table issues drop column done_when`;
+      await sql`alter table issues drop column asks_outside_repository, drop column done_when`;
+      await sql`alter table unwritable_closures drop column unlabelled_self_work`;
       await sql`alter table settlements drop column donation_comment_id`;
       await sql`alter table registered_repositories drop column first_listed_issue_id,
         drop column second_issue_listed, drop column contributor_review_received`;
@@ -223,9 +223,10 @@ describe("closed PR dispute schema", () => {
     await expect(insertEvent(fixture, randomUUID())).rejects.toMatchObject({ code: "23503" });
   });
 
-  it("keeps award and reversal lines on one adjustment, balances both legs, and rejects zero lines", async () => {
+  // A stored reversal line is inert history: the views derive the landing's reversal from the grant alone.
+  it("keeps award and reversal lines on one adjustment, balances both legs once, and rejects zero lines", async () => {
     const fixture = await buildFixture();
-    const request = await insertRequest(fixture, grantFields(fixture));
+    const request = await insertRequest(fixture, { ...grantFields(fixture), landed_pull_request_id: fixture.landingId, landed_commit_url: null });
     const eventId = await insertEvent(fixture, request.id as string);
     const adjustment = {
       moderation_event_id: eventId, dispute_id: request.id as string,
@@ -247,19 +248,22 @@ describe("closed PR dispute schema", () => {
       values (${applied.id}, ${fixture.contributorId}, 0)
     `).rejects.toMatchObject({ code: "23514" });
 
-    const legs = await sql`
+    const legs = () => sql`
       select settlement_id, account_id, counterparty_id, amount, created_at from ledger_entries
       where created_at = ${adjustmentCreatedAt}
         and account_id = any(${[fixture.sponsorId, fixture.contributorId, fixture.landingCreditorId]}::uuid[])
       order by amount
     `;
-    expect(legs).toEqual([
-      { settlement_id: fixture.settlementId, account_id: fixture.landingCreditorId,
-        counterparty_id: fixture.sponsorId, amount: -6, created_at: new Date(adjustmentCreatedAt) },
+    const award = [
       { settlement_id: null, account_id: fixture.sponsorId,
         counterparty_id: fixture.contributorId, amount: -3, created_at: new Date(adjustmentCreatedAt) },
       { settlement_id: null, account_id: fixture.contributorId,
         counterparty_id: fixture.sponsorId, amount: 3, created_at: new Date(adjustmentCreatedAt) },
+    ];
+    expect(await legs()).toEqual([
+      { settlement_id: fixture.settlementId, account_id: fixture.landingCreditorId,
+        counterparty_id: fixture.sponsorId, amount: -6, created_at: new Date(adjustmentCreatedAt) },
+      ...award,
       { settlement_id: fixture.settlementId, account_id: fixture.sponsorId,
         counterparty_id: fixture.landingCreditorId, amount: 6, created_at: new Date(adjustmentCreatedAt) },
     ]);
@@ -270,6 +274,10 @@ describe("closed PR dispute schema", () => {
     expect(new Map(balances.map((row) => [row.account_id, row.balance]))).toEqual(new Map([
       [fixture.sponsorId, -3], [fixture.contributorId, 3], [fixture.landingCreditorId, 0],
     ]));
+    // The settlement can go (migration 091) and both lines stay; the reversal line stays inert, never an award.
+    await sql`delete from settlements where id = ${fixture.settlementId}`;
+    expect(await sql`select count(*)::int as n from dispute_credit_adjustment_lines where adjustment_id = ${applied.id}`).toEqual([{ n: 2 }]);
+    expect(await legs()).toEqual(award);
   });
 });
 

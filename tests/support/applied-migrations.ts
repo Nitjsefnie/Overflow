@@ -94,4 +94,11 @@ export const appliedMigrationNames: readonly string[] = [
   "087_donated_settlement_status_check.sql",
   "088_registration_attempt_counts.sql",
   "089_repository_progress_markers.sql",
+  "090_dispute_reversal_follows_settlement.sql",
+  "091_adjustment_lines_outlive_settlements.sql",
+  "092_sweep_pass_failed_runs.sql",
+  "093_drop_retired_sweep_round.sql",
+  "094_webhook_rederivation_owed.sql",
+  "095_unwritable_closure_unlabelled_self_work.sql",
+  "096_drop_sweep_pass_walk_cursor.sql",
 ];

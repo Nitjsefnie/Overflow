@@ -865,7 +865,7 @@ describe("reconciliation budget holds under the repository lock", () => {
   it("defaults to the shared budget and configured reserve", async () => {
     const { fold, budgetStore, store, worker } = fixture(600);
     vi.spyOn(budgets, "gitHubGraphqlBudget").mockReturnValue(budgetStore);
-    vi.stubEnv("GITHUB_GRAPHQL_BUDGET_RESERVE", "700");
+    vi.stubEnv("OVERFLOW_GITHUB_GRAPHQL_BUDGET_RESERVE", "700");
     fold.budget = createReconciliationBudgetGate();
     await expect(runNextReconciliationJob(worker)).resolves.toBe("BUDGET_HELD");
     expect(store.deferReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", resetAt);
@@ -926,7 +926,6 @@ describe("reconciliation budget holds under the repository lock", () => {
     await expect(schedule.drain()).resolves.toEqual([]);
     expect(informed).not.toHaveBeenCalled();
   });
-
 });
 
 describe("reconciliation drains concurrent GitHub reads before recording failure cost", () => {
@@ -977,7 +976,7 @@ async function assertDrainedFailure(
       version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, omittedOversizedFacts: 0,
       checkpoint: now, lastFullPassAt: now, issues: [], pullRequests: [],
     });
-    f.fold.store.getDirtyReconciliationSubjects = async () => [{ kind: "ISSUE", id: 101, number: 1, generation: 1 }];
+    f.fold.store.getDirtyReconciliationSubjects = async () => [{ kind: "ISSUE", id: 101, number: 1, generation: "1" }];
   }
   const fail = async () => {
     await lateStarted;

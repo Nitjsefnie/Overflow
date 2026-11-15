@@ -50,7 +50,7 @@ describe("durable reconciliation evidence", () => {
     expect(latest.map(({ kind, id, number }) => ({ kind, id, number }))).toEqual([
       { kind: "ISSUE", id: 101, number: 1 }, { kind: "PULL_REQUEST", id: 201, number: 1 },
     ]);
-    expect(latest[1]!.generation).toBeGreaterThan(captured[1]!.generation);
+    expect(BigInt(latest[1]!.generation)).toBeGreaterThan(BigInt(captured[1]!.generation));
     expect(await sql`select repository_id, reason from repository_reconciliation_jobs order by repository_id`)
       .toEqual([one.repositoryId, two.repositoryId].sort().map((repository_id) => ({ repository_id, reason: "WEBHOOK" })));
     await one.store.withRepositoryReconciliation(one.repositoryId, async () => one.store.materialize({ repositoryId: one.repositoryId, runId: await one.store.beginRun(one.repositoryId),
@@ -283,13 +283,13 @@ describe("durable reconciliation evidence", () => {
     await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold,
       synchronization: { ...synchronization(), dirtySubjects: captured } }));
     expect((await store.getDirtyReconciliationSubjects(repositoryId)).map(({ id, generation }) => ({ id, generation })))
-      .toEqual([{ id: 101, generation: newer }, { id: 103, generation: newer + 1 }]);
+      .toEqual([{ id: 101, generation: newer }, { id: 103, generation: String(BigInt(newer) + 1n) }]);
     // Delete/reinsert must not recycle a generation an older pass still holds.
     const current = await store.getDirtyReconciliationSubjects(repositoryId);
     await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold,
       synchronization: { ...synchronization(), expectedVersion: 1, dirtySubjects: current } }));
     const reinserted = await dirty(repositoryId, 101);
-    expect(reinserted).toBeGreaterThan(newer);
+    expect(BigInt(reinserted)).toBeGreaterThan(BigInt(newer));
     await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold,
       synchronization: { ...synchronization(), expectedVersion: 2, dirtySubjects: current } }));
     expect(await store.getDirtyReconciliationSubjects(repositoryId)).toEqual([
@@ -333,7 +333,7 @@ describe("durable reconciliation evidence", () => {
 function synchronization() {
   return { expectedVersion: null as number | null, scanStartedAt: first, full: true,
     issues: [rawIssue()], pullRequests: [{ id: 201, reviews: [], rawDiff: "retained diff" }],
-    dirtySubjects: [] as Array<{ kind: "ISSUE" | "PULL_REQUEST"; id: number; number: number; generation: number }> };
+    dirtySubjects: [] as Array<{ kind: "ISSUE" | "PULL_REQUEST"; id: number; number: number; generation: string }> };
 }
 
 function rawIssue(): GitHubIssue {
@@ -344,12 +344,12 @@ function rawIssue(): GitHubIssue {
     history: [], comments: [], closingPullRequests: [] };
 }
 
-async function dirty(repositoryId: string, id: number): Promise<number> {
+async function dirty(repositoryId: string, id: number): Promise<string> {
   const [row] = await sql`insert into repository_reconciliation_dirty_subjects
     (repository_id, kind, github_subject_id, subject_number) values (${repositoryId}, 'ISSUE', ${id}, 1)
     on conflict (repository_id, kind, github_subject_id) do update
     set generation = nextval('repository_reconciliation_dirty_generation') returning generation`;
-  return Number(row.generation);
+  return row.generation;
 }
 
 async function delivery(repositoryId: string, kind: "ISSUE" | "PULL_REQUEST"): Promise<GitHubWebhookDelivery> {

@@ -136,6 +136,25 @@ describe("fold revision stamps", () => {
     expect(await rowsFor(table, repositoryId)).toEqual([{ ...row, fold_revision: FOLD_REVISION }]);
   });
 
+  it("writes an unwritable closure's unlabelled self-work mark on insert and rewrites a change of the mark alone", async () => {
+    const { repositoryId, store, fold } = await materializeRepositoryFixture(sql);
+    const [row] = await rowsFor("unwritable_closures", repositoryId);
+    await sql`delete from unwritable_closures where id = ${row.id}`;
+    const unmarked = { ...fold.unwritableClosures[0]! };
+    const marked = { ...fold, unwritableClosures: [{ ...unmarked, unlabelledSelfWork: true as const }] };
+    const materialize = async (input: typeof fold) => {
+      const runId = await store.beginRun(repositoryId);
+      const deltas = await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId, fold: input }));
+      return { deltas, changes: await changesFor(runId), marks: (await rowsFor("unwritable_closures", repositoryId)).map((closure) => closure.unlabelled_self_work) };
+    };
+
+    expect(await materialize(marked)).toEqual({ deltas: { adds: 1, changes: 0, removals: 0 }, marks: [true], changes: [{
+      entity_kind: "UNWRITABLE_CLOSURE", change_kind: "ADD", before_state: null, after_state: expect.objectContaining({ unlabelledSelfWork: true }) }] });
+    expect(await materialize(fold)).toEqual({ deltas: { adds: 0, changes: 1, removals: 0 }, marks: [false], changes: [{ entity_kind: "UNWRITABLE_CLOSURE", change_kind: "CHANGE",
+      before_state: { ...unmarked, unlabelledSelfWork: true }, after_state: { ...unmarked, unlabelledSelfWork: false } }] });
+    expect((await materialize(marked)).deltas).toEqual({ adds: 0, changes: 1, removals: 0 });
+  });
+
   it("rewrites a calibration whose issue's closing pull request changed, in place", async () => {
     const { repositoryId, store, fold } = await materializeRepositoryFixture(sql);
     const [existingRow] = await rowsFor("self_work_calibrations", repositoryId);

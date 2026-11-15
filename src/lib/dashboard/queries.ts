@@ -1126,6 +1126,9 @@ export async function listUnwritableClosures(
       order by settlement_override_requests.created_at desc, settlement_override_requests.id desc
       limit 1
     ) as latest_correction on true
+    -- An unlabelled self-work closure leaves a moderator nothing to price until an actual-catalog label is applied,
+    -- so it is kept out of the queue; once a correction is granted it reaches history like any other.
+    where not unwritable_closures.unlabelled_self_work or latest_correction.state = 'GRANTED'
     order by unwritable_closures.created_at desc, issues.github_issue_id asc
   `;
 
@@ -1149,10 +1152,7 @@ export async function listUnwritableClosures(
       debtorLogin: readText(row.debtor_login, "Debtor login"),
     },
     calibrationId: row.calibration_id === null ? null : readText(row.calibration_id, "Calibration identifier"),
-    calibrationOwnerLogin:
-      row.calibration_owner_login === null
-        ? null
-        : readText(row.calibration_owner_login, "Calibration owner login"),
+    calibrationOwnerLogin: row.calibration_owner_login === null ? null : readText(row.calibration_owner_login, "Calibration owner login"),
     viewerCanRequestCorrection: row.viewer_can_request_correction,
     latestCorrection: row.correction_state === null ? null : {
       state: row.correction_state,

@@ -67,7 +67,7 @@ describe("unwritable closure correction eligibility in PostgreSQL", () => {
       create table settlements (id text, issue_id text, creditor_id text, debtor_id text);
       create table self_work_calibrations (id text, issue_id text, user_id text);
       create table settlement_override_requests (id text, issue_id text, state text, created_at timestamptz);
-      create table unwritable_closures (id text, issue_id text, pull_request_id text, kind text, reason text, created_at timestamptz);
+      create table unwritable_closures (id text, issue_id text, pull_request_id text, kind text, reason text, created_at timestamptz, unlabelled_self_work boolean not null default false);
       insert into users values ('creditor', 'mira'), ('debtor', 'quinn'), ('sponsor', 'grace');
       insert into registered_repositories values ('repo', 'co-op/harbour');
       insert into issues
@@ -101,6 +101,28 @@ describe("unwritable closure correction eligibility in PostgreSQL", () => {
       "settlement", "null-creditor", "calibration", "neither", "both",
     ]);
     expect(closures.queue.map((row) => row.viewerCanRequestCorrection)).toEqual(eligible);
+  });
+
+  it("mutes an unlabelled self-work closure from the queue, keeps a granted one in history, and lists it again once unmarked", async () => {
+    const rolledBack = new Error("rolled back");
+    await expect(sql.begin(async (transaction) => {
+      await transaction.unsafe(`
+        insert into issues select id, 'repo', n, n, 'Issue ' || n, 'https://github.com/co-op/harbour/issues/' || n
+          from (values ('muted', 6), ('muted-open', 7), ('muted-declined', 8), ('muted-granted', 9)) as cases(id, n);
+        insert into unwritable_closures select id, id, null, 'SETTLEMENT_EVIDENCE_REJECTED', 'Rejected evidence', now(), true from issues where issue_number > 5;
+        insert into settlement_override_requests values ('open', 'muted-open', 'OPEN', now()), ('declined', 'muted-declined', 'DECLINED', now()), ('granted', 'muted-granted', 'GRANTED', now());
+      `);
+      const listed = async () => {
+        const { queue, history } = await listUnwritableClosures("sponsor", { sql: transaction as unknown as DashboardSql });
+        return { queue: queue.map((row) => row.id), history: history.map((row) => row.id) };
+      };
+      const unmuted = ["settlement", "null-creditor", "calibration", "neither", "both"];
+
+      expect(await listed()).toEqual({ queue: unmuted, history: ["muted-granted"] });
+      await transaction`update unwritable_closures set unlabelled_self_work = false where id = 'muted'`;
+      expect(await listed()).toEqual({ queue: ["muted", ...unmuted], history: ["muted-granted"] });
+      throw rolledBack;
+    })).rejects.toBe(rolledBack);
   });
 });
 
@@ -1823,12 +1845,12 @@ describe("ambiguous claim sentinel against PostgreSQL", () => {
         creditor_id text,
         amount integer
       );
-      create table closed_pr_dispute_requests (id text primary key, pull_request_id text, issue_id text);
+      create table closed_pr_dispute_requests (id text primary key, pull_request_id text, issue_id text, landed_pull_request_id text, decision text, decided_at timestamptz);
       create table dispute_credit_adjustments (
         id text primary key, dispute_id text, target_account_id text, created_at timestamptz
       );
       create table dispute_credit_adjustment_lines (
-        id text primary key, adjustment_id text, creditor_id text, amount integer
+        id text primary key, adjustment_id text, settlement_id text, creditor_id text, amount integer
       );
       create table repository_reconciliation_jobs (repository_id text, state text, last_failure_at timestamptz);
       create table moderation_events (

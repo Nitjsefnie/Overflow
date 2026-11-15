@@ -1,5 +1,5 @@
-import { withFreshSweepReads, type SweepPass } from "@/lib/fold/sweep-pass";
-import { readStagedRows, stagedIdentity } from "@/lib/fold/staged-pass-data";
+import type { SweepPass } from "@/lib/fold/sweep-pass";
+import { readListedSubjects, readStagedRows, recordListedSubjects, stagedIdentity, type ListedSubject } from "@/lib/fold/staged-pass-data";
 import type { WalkSubject } from "@/lib/forge/subject-listing";
 import { sanitizeForgeStrings } from "@/lib/forge/sanitize-forge-strings";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
@@ -45,14 +45,12 @@ export type CompletedReconciliationWalk = {
 };
 
 /** A hold rejects with SweepBudgetSpent; staging remains durable and no fold is returned. */
-export function walkReconciliation(input: ReconciliationWalkInput): Promise<CompletedReconciliationWalk> {
-  return withFreshSweepReads(() => walk(input));
-}
-
-async function walk({ pass, listing, gateway, repository, onDiscard }: ReconciliationWalkInput): Promise<CompletedReconciliationWalk> {
+export async function walkReconciliation({ pass, listing, gateway, repository, onDiscard }: ReconciliationWalkInput): Promise<CompletedReconciliationWalk> {
   const staged = new Map((await readStagedRows(pass)).map((row) => [rowKey(row.kind, row.subjectKey), row]));
-  const issues = () => [...staged.values()].flatMap((row) => row.kind === "issue" && row.payload !== null
-    && typeof row.payload === "object" && "number" in row.payload ? [row.payload as GitHubIssue] : []);
+  // A discarded gather stages a bare identity placeholder, which is no gathered issue.
+  const gathered = (row: { kind: WalkSubject["kind"]; payload: unknown }) => row.kind === "issue" && row.payload !== null
+    && typeof row.payload === "object" && "number" in row.payload ? row.payload as GitHubIssue : null;
+  const issues = () => [...staged.values()].flatMap((row) => gathered(row) ?? []);
   const referenced = (facts: GitHubIssue[]) => facts.flatMap((issue) => issue.closingPullRequests).filter((pr) =>
     (pr.state === "CLOSED" || (pr.state === "MERGED" && pr.mergedAt !== null)) && belongsToRegisteredRepository(repository, pr));
   const discard = async (error: unknown, kind: WalkSubject["kind"], subject: GitHubSubject, disputed = false, closing = false) => {
@@ -105,48 +103,60 @@ async function walk({ pass, listing, gateway, repository, onDiscard }: Reconcili
     await stage(anchor, subject, { subject: { id: subject.id, number: subject.number }, evidence });
   };
   await visitWalkListing(listing, pass.walkAnchors(), async (subject, anchor) => {
-    const saved = pass.walkAnchors()[anchor];
-    if (saved !== undefined && compareSubject(subject, saved) <= 0 && staged.has(rowKey(subject.kind, subject.id))) return;
+    const saved = pass.walkAnchors()[anchor], row = staged.get(rowKey(subject.kind, subject.id));
+    // A related read may have staged an issue ahead of the anchor; its gathered fact serves unless the listing is newer.
+    if (row !== undefined && ((saved !== undefined && compareSubject(subject, saved) <= 0)
+      || (gathered(row) !== null && row.updatedAt >= subject.updatedAt))) return;
     await gather(subject, anchor);
   });
 
-  // Absence may restart: ceil(size/100) data pages plus boundary/tie pages and drift
-  // gathers; the expensive PR refreshes retain their progress across holds below.
-  // A held run restarts this listing from its first page, so a budget-bound pass
-  // completes only while one run's verify, resumed walk listing and this whole listing
-  // fit in its repository's share of the sweep budget; above that it walks every
-  // window and never completes. Even the walk needs a share above a run's verify and
-  // first listing page, which are spent before anything stages.
-  const listed = new Map<string, WalkSubject>();
-  await visitWalkListing(listing, {}, async (subject) => {
-    const key = rowKey(subject.kind, subject.id), previous = listed.get(key);
+  // Absence lists the whole repository again: ceil(size/100) data pages plus boundary/tie
+  // pages and drift gathers; the expensive PR refreshes retain their progress across holds
+  // below. A held run keeps what this listing saw, so the next run resumes it from its last
+  // listed point; a subject deleted behind that point is dropped by the next pass. Even the
+  // walk needs a share above a run's verify and first listing page, which are spent before
+  // anything stages; once walked, every run spends them again before this listing resumes.
+  const earlier = await readListedSubjects(pass);
+  const listed = new Map<string, WalkSubject>(), progress: Record<string, { updatedAt: Date; key: number }> = {};
+  const fresh: ListedSubject[] = [];
+  const list = (subject: WalkSubject, anchor: string, recorded = false) => {
+    const key = rowKey(subject.kind, subject.id), previous = listed.get(key), point = progress[anchor];
     if (previous === undefined || previous.updatedAt <= subject.updatedAt) listed.set(key, subject);
-  });
-  const refreshTargets = new Set([...referenced(issues().filter((issue) => listed.has(rowKey("issue", issue.id)))),
-    ...repository.disputePullRequests].map(({ id }) => id));
-  // References/disputes may name an unlisted PR; retain its completed refresh outcome for resume.
-  const omitted = [...staged.values()].filter((row) => !listed.has(rowKey(row.kind, row.subjectKey))
-    && !(row.kind === "pull_request" && refreshTargets.has(row.subjectKey) && isRefreshedPr(row.payload) && !row.payload.listed));
-  const absent: typeof omitted = [];
-  // The rare pagination-drift set costs one fresh, kind-aware lookup per omitted row.
-  for (const row of omitted) {
-    const subject = stagedIdentity(row.payload);
-    let fact: GitHubIssue | GitHubSubject | null;
-    try {
-      fact = row.kind === "issue" ? await gateway.gatherIssue(subject) : await gateway.getPullRequest(subject);
-    } catch (error) {
-      if (walkSubjectDiscardReason(error, row.kind, true, false) !== "NOT_FOUND") throw error;
-      fact = null;
+    if (point === undefined || compareSubject(subject, point) > 0) progress[anchor] = { updatedAt: subject.updatedAt, key: subject.id };
+    if (!recorded) fresh.push({ ...subject, anchor });
+  };
+  for (const { anchor, ...subject } of earlier.subjects) list(subject, anchor, true);
+  // Recorded after a completed listing too: the lookups, gathers and refreshes below can still be held.
+  try {
+    await visitWalkListing(listing, { ...progress }, async (subject, anchor) => list(subject, anchor));
+    const refreshTargets = new Set([...referenced(issues().filter((issue) => listed.has(rowKey("issue", issue.id)))),
+      ...repository.disputePullRequests].map(({ id }) => id));
+    // References/disputes may name an unlisted PR; retain its completed refresh outcome for resume.
+    const omitted = [...staged.values()].filter((row) => !listed.has(rowKey(row.kind, row.subjectKey))
+      && !(row.kind === "pull_request" && refreshTargets.has(row.subjectKey) && isRefreshedPr(row.payload) && !row.payload.listed));
+    // The rare pagination-drift set costs one fresh, kind-aware lookup per omitted row. Each verdict
+    // survives a hold: an absent row is deleted at once, a present one is recorded as listed.
+    for (const row of omitted) {
+      const subject = stagedIdentity(row.payload);
+      let fact: GitHubIssue | GitHubSubject | null;
+      try {
+        fact = row.kind === "issue" ? await gateway.gatherIssue(subject) : await gateway.getPullRequest(subject);
+      } catch (error) {
+        if (walkSubjectDiscardReason(error, row.kind, true, false) !== "NOT_FOUND") throw error;
+        fact = null;
+      }
+      if (fact === null) {
+        await pass.deleteStaged([{ kind: row.kind, subjectKey: row.subjectKey }]);
+        staged.delete(rowKey(row.kind, row.subjectKey));
+        continue;
+      }
+      const observed: WalkSubject = { ...subject, kind: row.kind,
+        updatedAt: row.kind === "issue" ? new Date((fact as GitHubIssue).updatedAt) : row.updatedAt };
+      if (row.kind === "issue") await stageIssue(subject, "repair", fact as GitHubIssue);
+      else await gather(observed, "repair");
+      list(observed, "repair");
     }
-    if (fact === null) { absent.push(row); continue; }
-    const observed: WalkSubject = { ...subject, kind: row.kind,
-      updatedAt: row.kind === "issue" ? new Date((fact as GitHubIssue).updatedAt) : row.updatedAt };
-    if (row.kind === "issue") await stageIssue(subject, "repair", fact as GitHubIssue);
-    else await gather(observed, "repair");
-    listed.set(rowKey(row.kind, row.subjectKey), observed);
-  }
-  await pass.deleteStaged(absent.map(({ kind, subjectKey }) => ({ kind, subjectKey })));
-  for (const row of absent) staged.delete(rowKey(row.kind, row.subjectKey));
+  } finally { await recordListedSubjects(pass, earlier.records, fresh); }
   for (const [key, subject] of listed) {
     const previous = staged.get(key);
     if (previous === undefined || previous.updatedAt < subject.updatedAt) await gather(subject, "repair");

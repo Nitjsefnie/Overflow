@@ -11,7 +11,6 @@ import { ForgeCredentialRejectedError } from "@/lib/forge/gateway";
 import type { FoldResult } from "@/lib/fold/repository-fold";
 import { RECONCILIATION_EVIDENCE_FORMAT } from "@/lib/fold/reconciliation-evidence";
 import { DATA_SUBJECT_TOMBSTONE_LOGIN, scrubPublicationForSuppressions } from "@/lib/fold/data-subject-suppression";
-import { GitHubGateway } from "@/lib/github/client";
 import { CLOSING_PULL_REQUESTS_FIELD_PATH } from "@/lib/github/drain-issue-reads";
 import type { GitHubRepository, GitHubRepositoryReference, GitHubSubject } from "@/lib/github/types";
 import { createHash } from "node:crypto";
@@ -21,8 +20,6 @@ import { GitLabApiError, GitLabGateway } from "@/lib/gitlab/client";
 import { errorLogToken, logField } from "@/lib/webhooks/log-field";
 import { runReconciliationCli } from "../../scripts/reconcile";
 import { reconciliationDependencies, reconciliationIssue, reconciliationPullRequest, pagedReconciliationGateway, verifiedRepository } from "../support/reconciliation-fixtures";
-import { assertClosingPullRequestQuery } from "../support/closing-pull-request-query";
-import { verifiedRepositoryPayload } from "../support/verified-repository";
 import { inspect, format } from "node:util";
 import { walkReconciliation } from "@/lib/fold/reconciliation-walk";
 import { fixture, instant, issue, pullRequest, subject } from "./reconciliation-walk-fixture";
@@ -74,20 +71,20 @@ describe("reconcileRepository", () => {
     const failGathering = (f: Run, id: number, failure: Error) => {
       const gather = f.gateway.gatherIssue;
       let failing = true;
-      f.gateway.gatherIssue = async (target) => {
-        if (failing && target.id === id) throw failure;
-        return gather(target);
-      };
+      f.gateway.gatherIssue = async (target) => { if (failing && target.id === id) throw failure; return gather(target); };
       return () => { failing = false; };
     };
     const failStaging = (f: Run, id: number, failure: Error) => {
       const stage = f.pass.stage;
       let failing = true;
-      f.pass.stage = vi.fn(async (input) => {
-        if (failing && input.subjectKey === id) throw failure;
-        return stage(input);
-      });
+      f.pass.stage = vi.fn(async (input) => { if (failing && input.subjectKey === id) throw failure; return stage(input); });
       return () => { failing = false; };
+    };
+
+    /** Stages a refreshed pull request row the walk reuses for a merged closing pull request of staged issue 9. */
+    const stageReused = async (f: Run, payload: unknown) => {
+      for (const anchor of ["subjects", "refresh"]) await f.pass.stage({ anchor, kind: "pull_request", subjectKey: 19, updatedAt: instant(19), payload });
+      await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: 9, updatedAt: instant(9), payload: { ...reconciliationIssue({ id: 9, number: 9 }), closingPullRequests: [reconciliationPullRequest({ id: 19, number: 19 })] } });
     };
 
     it.each<[string, (f: Run) => () => void, number]>([
@@ -119,45 +116,30 @@ describe("reconcileRepository", () => {
     const withoutField = (record: object, field: string) => Object.fromEntries(Object.entries(record).filter(([key]) => key !== field));
     const closing = (bad: unknown) => ({ ...issue(9), closingPullRequests: [pullRequest(5), bad, pullRequest(6)] });
     const historied = (history: unknown[]) => ({ ...issue(9), authorLogin: "author", history });
-    it("builds history rows for issue 9 under a non-blank author", () => {
-      expect(historied([])).toMatchObject({ id: 9, number: 9, authorLogin: "author" });
-    });
+    it("builds history rows for issue 9 under a non-blank author", () => { expect(historied([])).toMatchObject({ id: 9, number: 9, authorLogin: "author" }); });
     const commented = (comments: unknown[]) => ({ ...reconciliationIssue({ id: 9, number: 9 }), closingPullRequests: [], comments });
-    it("builds comment rows for issue 9 under a non-blank author", () => {
-      expect(commented([null])).toMatchObject({ id: 9, number: 9, authorLogin: "sponsor", closingPullRequests: [], comments: [null] });
-    });
+    it("builds comment rows for issue 9 under a non-blank author", () => { expect(commented([null])).toMatchObject({ id: 9, number: 9, authorLogin: "sponsor", closingPullRequests: [], comments: [null] }); });
     const wrongType: Record<string, unknown> = { id: "5", number: "5", state: 1, mergedAt: 1, repositoryGitHubId: "1" };
-    const sponsorComment = { id: "comment-9", createdAt: "2026-09-01T08:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: null, body: "Done when it works." };
+    const sponsorComment = { id: "comment-9", createdAt: "2026-09-01T08:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: null, body: "Done when it works.", lastEditedAt: null };
     const unreadableComments = [[null], [1], ["x"], [false], [sponsorComment, null], [null, sponsorComment], [sponsorComment, sponsorComment, null]];
     const bodyless = withoutField(sponsorComment, "body");
     const loginless = withoutField(sponsorComment, "authorLogin");
     const unreadableBodies: Array<[string, unknown[]]> = [
-      ["no body", [bodyless]],
-      ["a null body", [{ ...sponsorComment, body: null }]],
-      ["a numeric body", [{ ...sponsorComment, body: 1 }]],
-      ["a boolean body", [{ ...sponsorComment, body: false }]],
-      ["an object body", [{ ...sponsorComment, body: {} }]],
-      ["an array body", [{ ...sponsorComment, body: [] }]],
-      ["no body after a readable comment", [sponsorComment, bodyless]],
-      ["no body before a readable comment", [bodyless, sponsorComment]],
-      ["no body after two readable comments", [sponsorComment, sponsorComment, bodyless]],
-      ["no body, the sponsor's numeric id", [{ ...bodyless, authorGitHubUserId: 1001 }]],
+      ["no body", [bodyless]], ["a null body", [{ ...sponsorComment, body: null }]], ["a numeric body", [{ ...sponsorComment, body: 1 }]],
+      ["a boolean body", [{ ...sponsorComment, body: false }]], ["an object body", [{ ...sponsorComment, body: {} }]], ["an array body", [{ ...sponsorComment, body: [] }]],
+      ["no body after a readable comment", [sponsorComment, bodyless]], ["no body before a readable comment", [bodyless, sponsorComment]],
+      ["no body after two readable comments", [sponsorComment, sponsorComment, bodyless]], ["no body, the sponsor's numeric id", [{ ...bodyless, authorGitHubUserId: 1001 }]],
     ];
     const unreadableLogins: Array<[string, unknown[]]> = [
-      ["no author login", [loginless]],
-      ["a numeric author login", [{ ...sponsorComment, authorLogin: 1 }]],
-      ["a boolean author login", [{ ...sponsorComment, authorLogin: false }]],
-      ["an object author login", [{ ...sponsorComment, authorLogin: {} }]],
-      ["an array author login", [{ ...sponsorComment, authorLogin: [] }]],
-      ["no author login after a readable comment", [sponsorComment, loginless]],
+      ["no author login", [loginless]], ["a numeric author login", [{ ...sponsorComment, authorLogin: 1 }]],
+      ["a boolean author login", [{ ...sponsorComment, authorLogin: false }]], ["an object author login", [{ ...sponsorComment, authorLogin: {} }]],
+      ["an array author login", [{ ...sponsorComment, authorLogin: [] }]], ["no author login after a readable comment", [sponsorComment, loginless]],
       ["no author login before a readable comment", [loginless, sponsorComment]],
       ["no author login after two readable comments", [sponsorComment, sponsorComment, loginless]],
     ];
     const unreadableSponsorComments = [...unreadableBodies, ...unreadableLogins];
-    const settled = (authorLogin: unknown) => ({
-      ...commented([{ ...sponsorComment, createdAt: "2026-09-01T11:30:00.000Z", authorLogin, authorGitHubUserId: 1001 }]),
-      closingPullRequests: [reconciliationPullRequest({ id: 201, number: 11 })],
-    });
+    const settled = (authorLogin: unknown) => ({ ...commented([{ ...sponsorComment, createdAt: "2026-09-01T11:30:00.000Z", authorLogin, authorGitHubUserId: 1001 }]),
+      closingPullRequests: [reconciliationPullRequest({ id: 201, number: 11 })] });
     const sponsorHistory = reconciliationIssue({ id: 9, number: 9 }).history;
     const [opening, assigned, actual] = sponsorHistory;
     const labelled = (history: unknown[]) => ({ ...commented([]), history });
@@ -191,10 +173,7 @@ describe("reconcileRepository", () => {
     })));
     const suppressing = (dependencies: ReconciliationDependencies) => {
       const materialize = dependencies.store.materialize;
-      dependencies.store.materialize = vi.fn(async (publication) => {
-        scrubPublicationForSuppressions(publication, [suppressed]);
-        return materialize(publication);
-      });
+      dependencies.store.materialize = vi.fn(async (publication) => { scrubPublicationForSuppressions(publication, [suppressed]); return materialize(publication); });
     };
     const settledEvent = (event: object) => ({ ...settled("sponsor"), history: [opening, assigned, event] });
     const settledLabel = (actorLogin: unknown, actorGitHubUserId: number | null = 1001) => settledEvent({ ...actual, actorLogin, actorGitHubUserId });
@@ -210,6 +189,27 @@ describe("reconcileRepository", () => {
       ["settled label event has an empty actor login on the sponsor's numeric id", settledLabel(""), [["opening-9", "sponsor", null], ["assigned-9", "sponsor", null], ["actual-9", "", 1001]], [201]],
       ["settled label event has a null actor login on another account's numeric id", settledLabel(null, 2001), [["opening-9", "sponsor", null], ["assigned-9", "sponsor", null], ["actual-9", null, 2001]], [201]],
     ];
+    const refreshed = (evidence: unknown) => ({ subject: identity, refreshed: true, missing: false, listed: true, evidence });
+    const changesRequested = { id: 1, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T10:00:00.000Z", dismissal: null };
+    const dismissed = { ...changesRequested, id: 4, dismissal: { at: "2026-09-01T10:30:00.000Z", previousState: null } };
+    // One row per field a staged-row consumer reads, each a readable row with only that field replaced: by an unconvertible
+    // object, and for each time and each stored enum also by a string no reader can parse or the enum does not hold.
+    const wrongTyped: Array<["issue" | "pull_request", string, string]> = [
+      ["issue", "", "title body url state createdAt updatedAt closedAt authorLogin authorGitHubUserId claimAssigneeGitHubLogin claimAssigneeGitHubUserId"],
+      ["issue", "history.2.", "actorLogin actorGitHubUserId createdAt"], ["issue", "comments.0.", "body authorLogin authorGitHubUserId createdAt lastEditedAt"],
+      ["issue", "closingPullRequests.0.", "id number title url state mergedAt mergeCommitOid finalCommitAt authorLogin authorGitHubUserId repositoryGitHubId repositoryNameWithOwner"],
+      ["pull_request", "", "evidence missing listed"], ["pull_request", "evidence.", "reviews rawDiff"],
+      ["pull_request", "evidence.reviews.0.", "id submittedAt dismissal"], ["pull_request", "evidence.reviews.0.dismissal.", "at"],
+    ];
+    const wrongValued: Array<["issue" | "pull_request", string, string]> = [["issue", "state", "LOCKED"], ["issue", "closingPullRequests.0.state", "DRAFT"],
+      ...["createdAt", "updatedAt", "closedAt", "history.2.createdAt", "comments.0.createdAt", "comments.0.lastEditedAt", "closingPullRequests.0.mergedAt",
+        "closingPullRequests.0.finalCommitAt"].map((path): ["issue", string, string] => ["issue", path, "garbage"]),
+      ["pull_request", "evidence.reviews.0.submittedAt", "garbage"], ["pull_request", "evidence.reviews.0.dismissal.at", "garbage"]];
+    const poisoned = (row: object, path: string, value: unknown) => {
+      const copy = structuredClone(row) as Record<string, unknown>, keys = path.split(".");
+      keys.slice(0, -1).reduce((node, key) => node[key] as Record<string, unknown>, copy)[keys.at(-1)!] = value;
+      return copy;
+    };
     const unreadableRows: Array<[string, "issue" | "pull_request", unknown]> = [
       ["an unavailable subject identity", "issue", null],
       ["a string id", "issue", { ...issue(9), id: "9" }],
@@ -236,6 +236,10 @@ describe("reconcileRepository", () => {
       ["a settled label event with no actor login, the sponsor's numeric id", "issue", unlogged(1001)],
       ["a settled label event with no actor login, another account's numeric id", "issue", unlogged(2001)],
       ["a settled label event with no actor login, no actor id", "issue", unlogged(null)],
+      ["a history entry with an unconvertible createdAt", "issue", historied([{ id: "event", actorLogin: null, createdAt: { toString: 1 } }])],
+      ...[["a number", 5], ["an object", {}]].map(([label, authorLogin]): [string, "issue", unknown] => [`an author login that is ${label}`, "issue", { ...issue(9), authorLogin }]),
+      ["a claim assignee login that is a number, on a suppressed account's id", "issue", { ...commented([]), claimAssigneeGitHubLogin: 1, claimAssigneeGitHubUserId: suppressed.forgeId }],
+      ["a closing pull request whose author login is a number, on a suppressed account's id", "issue", { ...commented([]), closingPullRequests: [{ ...reconciliationPullRequest({ id: 201, number: 11 }), authorLogin: 1, authorGitHubUserId: suppressed.forgeId }] }],
       ["a null closing pull request", "issue", closing(null)],
       ["a closing pull request with an unsafe id", "issue", closing({ ...pullRequest(7), id: 2 ** 53 })],
       ["a closing pull request with an unsafe number", "issue", closing({ ...pullRequest(7), number: 2 ** 53 })],
@@ -253,6 +257,11 @@ describe("reconcileRepository", () => {
       ["a refreshed pull request row with a string missing", "pull_request", { subject: identity, evidence: null, refreshed: true, missing: "no", listed: true }],
       ["a refreshed pull request row without listed", "pull_request", { subject: identity, evidence: null, refreshed: true, missing: false }],
       ["a refreshed pull request row with a string listed", "pull_request", { subject: identity, evidence: null, refreshed: true, missing: false, listed: "yes" }],
+      ...[["a null review", null], ["a review without a dismissal", withoutField(changesRequested, "dismissal")], ["a review with an unconvertible submittedAt", { ...changesRequested, submittedAt: { toString: 1 } }],
+        ["a review with an unconvertible dismissal time", { ...changesRequested, dismissal: { at: { toString: 1 }, previousState: null } }]].map(([label, review]): [string, "pull_request", unknown] => [`a refreshed pull request row with ${label}`, "pull_request", refreshed({ reviews: [review], rawDiff: "" })]),
+      ...[...wrongTyped.flatMap(([kind, at, fields]) => fields.split(" ").map((field) => [kind, `${at}${field}`, { toString: 1 }] as const)), ...wrongValued]
+        .map(([kind, path, value]): [string, "issue" | "pull_request", unknown] => [typeof value === "string" ? `"${value}" as ${path}` : `a wrong-typed ${path}`, kind,
+          poisoned(kind === "issue" ? settled("sponsor") : refreshed({ reviews: [dismissed], rawDiff: "" }), path, value)]),
     ];
 
     it("stages each unreadable comments row in comments, beside a readable history", () => {
@@ -265,8 +274,8 @@ describe("reconcileRepository", () => {
       expect(unreadableRows.filter(([label]) => label.startsWith("a sponsor comment with ")))
         .toStrictEqual(unreadableSponsorComments.map(([label, comments]) => [`a sponsor comment with ${label}`, "issue", commented(comments)]));
       const rows = unreadableRows.filter(([label]) => label.startsWith("a sponsor comment with ")).map(([, , payload]) => payload as { comments: Array<Record<string, unknown>>; history: unknown[] });
-      expect(bodyless).toEqual({ id: "comment-9", createdAt: "2026-09-01T08:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: null });
-      expect(loginless).toEqual({ id: "comment-9", createdAt: "2026-09-01T08:30:00.000Z", authorGitHubUserId: null, body: "Done when it works." });
+      expect(bodyless).toEqual({ id: "comment-9", createdAt: "2026-09-01T08:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: null, lastEditedAt: null });
+      expect(loginless).toEqual({ id: "comment-9", createdAt: "2026-09-01T08:30:00.000Z", authorGitHubUserId: null, body: "Done when it works.", lastEditedAt: null });
       expect(rows.map((payload) => payload.comments)).toEqual(unreadableSponsorComments.map(([, comments]) => comments));
       const plain = (comment: Record<string, unknown>) => withoutField(withoutField(withoutField(comment, "body"), "authorLogin"), "authorGitHubUserId");
       for (const { comments, history, ...row } of rows) {
@@ -276,13 +285,11 @@ describe("reconcileRepository", () => {
         expect(history.every((entry) => entry !== null && typeof entry === "object")).toBe(true);
       }
       expect(rows.map(({ comments }) => comments.map((comment) => ["body" in comment ? comment.body : "absent", "authorLogin" in comment ? comment.authorLogin : "absent"])
-        .filter(([body, login]) => body !== "Done when it works." || login !== "sponsor")))
-        .toEqual([
+        .filter(([body, login]) => body !== "Done when it works." || login !== "sponsor"))).toEqual([
           [["absent", "sponsor"]], [[null, "sponsor"]], [[1, "sponsor"]], [[false, "sponsor"]], [[{}, "sponsor"]], [[[], "sponsor"]],
           [["absent", "sponsor"]], [["absent", "sponsor"]], [["absent", "sponsor"]], [["absent", "sponsor"]],
           [["Done when it works.", "absent"]], [["Done when it works.", 1]], [["Done when it works.", false]], [["Done when it works.", {}]], [["Done when it works.", []]],
-          [["Done when it works.", "absent"]], [["Done when it works.", "absent"]], [["Done when it works.", "absent"]],
-        ]);
+          [["Done when it works.", "absent"]], [["Done when it works.", "absent"]], [["Done when it works.", "absent"]]]);
       expect(rows.map(({ comments }) => comments.filter((comment) => comment.body === "Done when it works." && comment.authorLogin === "sponsor").length))
         .toEqual([0, 0, 0, 0, 0, 0, 1, 1, 2, 0, 0, 0, 0, 0, 0, 1, 1, 2]);
       expect(rows.map(({ comments }) => comments.findIndex((comment) => comment.body !== "Done when it works." || comment.authorLogin !== "sponsor")))
@@ -296,7 +303,7 @@ describe("reconcileRepository", () => {
       expect(rows).toStrictEqual([["a settled issue whose sponsor rationale has a numeric author login on the sponsor's numeric id", "issue", settled(1)]]);
       expect(rows[0][2]).not.toHaveProperty("subject");
       const { comments, closingPullRequests } = rows[0][2] as { comments: unknown[]; closingPullRequests: Array<Record<string, unknown>> };
-      expect(comments).toEqual([{ id: "comment-9", createdAt: "2026-09-01T11:30:00.000Z", authorLogin: 1, authorGitHubUserId: 1001, body: "Done when it works." }]);
+      expect(comments).toEqual([{ id: "comment-9", createdAt: "2026-09-01T11:30:00.000Z", authorLogin: 1, authorGitHubUserId: 1001, body: "Done when it works.", lastEditedAt: null }]);
       expect(closingPullRequests.map(({ state, mergedAt }) => [state, mergedAt])).toEqual([["MERGED", "2026-09-01T12:00:00.000Z"]]);
     });
 
@@ -307,10 +314,8 @@ describe("reconcileRepository", () => {
         .toStrictEqual(unreadableActors.map(([label, history]) => [`${prefix}${label}`, "issue", labelled(history)]));
       const rows = unreadableRows.filter(([label]) => label.startsWith(prefix)).map(([, , payload]) => payload as { history: Array<Record<string, unknown>> });
       expect(sponsorHistory.map(({ id, kind, actorLogin, actorGitHubUserId, createdAt }) => [id, kind, actorLogin, actorGitHubUserId, createdAt])).toEqual([
-        ["opening-9", "LABELED", "sponsor", null, "2026-09-01T08:01:00.000Z"],
-        ["assigned-9", "ASSIGNED", "sponsor", null, "2026-09-01T09:00:00.000Z"],
-        ["actual-9", "LABELED", "sponsor", null, "2026-09-01T11:00:00.000Z"],
-      ]);
+        ["opening-9", "LABELED", "sponsor", null, "2026-09-01T08:01:00.000Z"], ["assigned-9", "ASSIGNED", "sponsor", null, "2026-09-01T09:00:00.000Z"],
+        ["actual-9", "LABELED", "sponsor", null, "2026-09-01T11:00:00.000Z"]]);
       const plain = (event: Record<string, unknown>) => withoutField(withoutField(event, "actorLogin"), "actorGitHubUserId");
       const wrong = (event: Record<string, unknown>) => event.actorLogin !== "sponsor";
       for (const { history, ...row } of rows) {
@@ -333,18 +338,11 @@ describe("reconcileRepository", () => {
       const histories = unreadableRows.filter(([label]) => label.startsWith(prefix)).map(([, , payload]) => (payload as { history: unknown[] }).history);
       expect(histories.map((history) => history.slice(0, 3))).toEqual(histories.map(() => sponsorHistory));
       const late = { createdAt: "2026-09-01T11:05:00.000Z" };
-      const lateEntryLiterals = [
-        { kind: "ASSIGNED", id: "assigned-9-again", assigneeLogin: "contributor", ...late },
-        { kind: "UNASSIGNED", id: "unassigned-9", assigneeLogin: "contributor", ...late },
-        { kind: "UNLABELED", id: "unlabeled-9", label: "delivered/6", ...late },
-      ];
-      const wrongActors = [
-        { actorLogin: 1, actorGitHubUserId: 3001 }, { actorLogin: 1, actorGitHubUserId: null },
-        { actorLogin: false, actorGitHubUserId: 3001 }, { actorLogin: false, actorGitHubUserId: null },
-        { actorLogin: {}, actorGitHubUserId: 3001 }, { actorLogin: {}, actorGitHubUserId: null },
-        { actorLogin: [], actorGitHubUserId: 3001 }, { actorLogin: [], actorGitHubUserId: null },
-        { actorGitHubUserId: 3001 }, { actorGitHubUserId: null },
-      ];
+      const lateEntryLiterals = [{ kind: "ASSIGNED", id: "assigned-9-again", assigneeLogin: "contributor", ...late },
+        { kind: "UNASSIGNED", id: "unassigned-9", assigneeLogin: "contributor", ...late }, { kind: "UNLABELED", id: "unlabeled-9", label: "delivered/6", ...late }];
+      const wrongActors = [{ actorLogin: 1, actorGitHubUserId: 3001 }, { actorLogin: 1, actorGitHubUserId: null }, { actorLogin: false, actorGitHubUserId: 3001 },
+        { actorLogin: false, actorGitHubUserId: null }, { actorLogin: {}, actorGitHubUserId: 3001 }, { actorLogin: {}, actorGitHubUserId: null },
+        { actorLogin: [], actorGitHubUserId: 3001 }, { actorLogin: [], actorGitHubUserId: null }, { actorGitHubUserId: 3001 }, { actorGitHubUserId: null }];
       expect(histories.map((history) => history.slice(3)))
         .toStrictEqual(lateEntryLiterals.flatMap((entry) => wrongActors.map((wrong) => [{ ...entry, ...wrong }])));
     });
@@ -365,8 +363,7 @@ describe("reconcileRepository", () => {
         ["a settled label event with no actor login, no actor id", "issue", unlogged(null)],
       ]);
       const settledAt = { createdAt: "2026-09-01T11:00:00.000Z", label: "delivered/6" };
-      const wrongEvents = [
-        { kind: "LABELED", id: "actual-9", actorLogin: 1, actorGitHubUserId: 1001, ...settledAt },
+      const wrongEvents = [{ kind: "LABELED", id: "actual-9", actorLogin: 1, actorGitHubUserId: 1001, ...settledAt },
         { kind: "LABELED", id: "actual-9", actorLogin: 1, actorGitHubUserId: null, ...settledAt },
         { kind: "LABELED", id: "actual-9", actorLogin: false, actorGitHubUserId: 2001, ...settledAt },
         { kind: "LABELED", id: "actual-9", actorLogin: false, actorGitHubUserId: null, ...settledAt },
@@ -376,8 +373,7 @@ describe("reconcileRepository", () => {
         { kind: "LABELED", id: "actual-9", actorLogin: [], actorGitHubUserId: null, ...settledAt },
         { kind: "LABELED", id: "actual-9", actorGitHubUserId: 1001, ...settledAt },
         { kind: "LABELED", id: "actual-9", actorGitHubUserId: 2001, ...settledAt },
-        { kind: "LABELED", id: "actual-9", actorGitHubUserId: null, ...settledAt },
-      ];
+        { kind: "LABELED", id: "actual-9", actorGitHubUserId: null, ...settledAt }];
       for (const [index, [, , payload]] of rows.entries()) {
         expect(payload).not.toHaveProperty("subject");
         expect(payload).toMatchObject({ id: 9, number: 9, state: "CLOSED", createdAt: "2026-09-01T08:00:00.000Z", closedAt: "2026-09-01T12:05:00.000Z", authorLogin: "sponsor", labels: ["M", "delivered/6"] });
@@ -387,7 +383,7 @@ describe("reconcileRepository", () => {
           { kind: "ASSIGNED", id: "assigned-9", actorLogin: "sponsor", actorGitHubUserId: null, createdAt: "2026-09-01T09:00:00.000Z", assigneeLogin: "contributor" },
           wrongEvents[index],
         ]);
-        expect(comments).toEqual([{ id: "comment-9", createdAt: "2026-09-01T11:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: 1001, body: "Done when it works." }]);
+        expect(comments).toEqual([{ id: "comment-9", createdAt: "2026-09-01T11:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: 1001, body: "Done when it works.", lastEditedAt: null }]);
         expect(closingPullRequests).toMatchObject([{ id: 201, number: 11, state: "MERGED", mergedAt: "2026-09-01T12:00:00.000Z", finalCommitAt: "2026-09-01T10:00:00.000Z", repositoryGitHubId: 5001 }]);
       }
     });
@@ -396,13 +392,12 @@ describe("reconcileRepository", () => {
       const { f, dependencies, walk } = sweepRun();
       suppressing(dependencies);
       await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: 8, updatedAt: instant(8), payload: stub(8) });
-      const key = kind === "issue" ? 9 : 19;
-      await f.pass.stage({ anchor: "subjects", kind, subjectKey: key, updatedAt: instant(key), payload });
+      if (kind === "issue") await f.pass.stage({ anchor: "subjects", kind, subjectKey: 9, updatedAt: instant(9), payload });
+      else await stageReused(f, payload);
       await f.pass.stage({ anchor: "subjects", kind: "pull_request", subjectKey: 10, updatedAt: instant(10), payload: { ...stub(10), evidence: null } });
       const logged = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
-        await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).rejects
-          .toHaveProperty("cause.message", "Staged sweep pass data is unreadable.");
+        await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).rejects.toHaveProperty("cause.message", "Staged sweep pass data is unreadable.");
       } finally { logged.mockRestore(); }
       expect(walk).toHaveBeenCalledOnce();
       expect(f.pass.complete).toHaveBeenCalledOnce();
@@ -414,10 +409,11 @@ describe("reconcileRepository", () => {
 
     it("resumes a pass whose staged rows are all readable", async () => {
       const { f, dependencies } = sweepRun();
-      const open = { ...pullRequest(5), state: "OPEN" as const, mergedAt: null };
+      const open = { ...pullRequest(5), state: "OPEN" as const, mergedAt: null }, closed = { ...pullRequest(6), state: "CLOSED" as const, mergedAt: null };
       const readableHistory = [{ ...opening, actorLogin: null }, { ...assigned, actorLogin: "" }, { ...actual, actorLogin: "", actorGitHubUserId: 1001 }];
       const rows = [
-        { kind: "issue" as const, subjectKey: 9, payload: { ...commented([{ ...sponsorComment, body: "" }, sponsorComment, { ...sponsorComment, authorLogin: null }, { ...sponsorComment, authorLogin: "" }, { ...sponsorComment, authorGitHubUserId: 1001 }]), history: readableHistory, closingPullRequests: [open] } },
+        { kind: "issue" as const, subjectKey: 9, payload: { ...commented([{ ...sponsorComment, body: "" }, sponsorComment, { ...sponsorComment, authorLogin: null }, { ...sponsorComment, authorLogin: "" },
+          { ...sponsorComment, authorGitHubUserId: 1001 }, { ...sponsorComment, lastEditedAt: "2026-09-01T08:40:00.000Z" }]), authorGitHubUserId: 1001, claimAssigneeGitHubUserId: 2001, history: readableHistory, closingPullRequests: [open, closed] } },
         { kind: "issue" as const, subjectKey: 10, payload: { subject: { id: 10, number: 10 } } },
         { kind: "pull_request" as const, subjectKey: 11, payload: { subject: { id: 11, number: 11 }, evidence: null } },
         { kind: "pull_request" as const, subjectKey: 12, payload: { subject: { id: 12, number: 12 }, evidence: { reviews: [], rawDiff: "diff" } } },
@@ -429,9 +425,19 @@ describe("reconcileRepository", () => {
         { kind: "ASSIGNED", id: "assigned-9", actorLogin: "", actorGitHubUserId: null, createdAt: "2026-09-01T09:00:00.000Z", assigneeLogin: "contributor" },
         { kind: "LABELED", id: "actual-9", actorLogin: "", actorGitHubUserId: 1001, createdAt: "2026-09-01T11:00:00.000Z", label: "delivered/6" },
       ]);
-      expect((rows[0].payload as { comments: unknown[] }).comments).toEqual([{ ...sponsorComment, body: "" }, sponsorComment, { ...sponsorComment, authorLogin: null }, { ...sponsorComment, authorLogin: "" }, { ...sponsorComment, authorGitHubUserId: 1001 }]);
+      expect((rows[0].payload as { comments: unknown[] }).comments).toEqual([{ ...sponsorComment, body: "" }, sponsorComment, { ...sponsorComment, authorLogin: null }, { ...sponsorComment, authorLogin: "" },
+        { ...sponsorComment, authorGitHubUserId: 1001 }, { ...sponsorComment, lastEditedAt: "2026-09-01T08:40:00.000Z" }]);
       for (const row of rows) await f.pass.stage({ anchor: "subjects", updatedAt: instant(row.subjectKey), ...row });
       await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
+    });
+
+    it("resumes a pass whose reused refreshed pull request holds the reviews its producers emit", async () => {
+      const { f, dependencies } = sweepRun();
+      const dismissal = { ...dismissed.dismissal, previousState: "CHANGES_REQUESTED" };
+      const reviews = [changesRequested, { id: 2, state: "COMMENTED", submittedAt: null, dismissal: null }, { id: 3, state: "DISMISSED", submittedAt: changesRequested.submittedAt, dismissal }, dismissed];
+      await stageReused(f, refreshed({ reviews, rawDiff: "diff" }));
+      await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
+      expect(f.requests).not.toContain("reviews:19");
     });
 
     it("resumes a pass whose staged sponsor comment has an empty body", async () => {
@@ -445,7 +451,7 @@ describe("reconcileRepository", () => {
     it("resumes a pass whose settled issue has a string author login on the sponsor's numeric id", async () => {
       const { f, dependencies } = sweepRun();
       const payload = settled("sponsor");
-      expect(payload.comments).toEqual([{ id: "comment-9", createdAt: "2026-09-01T11:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: 1001, body: "Done when it works." }]);
+      expect(payload.comments).toEqual([{ id: "comment-9", createdAt: "2026-09-01T11:30:00.000Z", authorLogin: "sponsor", authorGitHubUserId: 1001, body: "Done when it works.", lastEditedAt: null }]);
       expect(payload.closingPullRequests.map(({ state, mergedAt }) => [state, mergedAt])).toEqual([["MERGED", "2026-09-01T12:00:00.000Z"]]);
       await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: 9, updatedAt: instant(9), payload });
       await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
@@ -479,8 +485,7 @@ describe("reconcileRepository", () => {
       expect(f.counts.has(9)).toBe(false);
       const { issues } = published.mock.calls[0][0].synchronization as { issues: Array<{ id: number; history: Array<Record<string, unknown>> }> };
       expect(issues.find(({ id }) => id === 9)!.history.map(({ id, actorLogin, actorGitHubUserId }) => [id, actorLogin, actorGitHubUserId])).toEqual([
-        ["opening-9", "sponsor", null], ["assigned-9", "sponsor", null], ["actual-9", "sponsor", null], [entry.id, DATA_SUBJECT_TOMBSTONE_LOGIN, null],
-      ]);
+        ["opening-9", "sponsor", null], ["assigned-9", "sponsor", null], ["actual-9", "sponsor", null], [entry.id, DATA_SUBJECT_TOMBSTONE_LOGIN, null]]);
     });
 
     it("settles an unregistered repository's pass only after the failed run released coordination", async () => {
@@ -500,20 +505,21 @@ describe("reconcileRepository", () => {
       expect(f.pass.complete).not.toHaveBeenCalled();
     });
 
-    it("does not settle the pass of a run that succeeded and keeps the failure when settling fails", async () => {
+    it("settles the pass of a run that succeeded too and keeps each outcome when settling fails", async () => {
       const { f, dependencies, discardIfInactive } = sweepRun();
       await reconcileRepository(dependencies, "repository", { reason: "SWEEP" });
-      expect(discardIfInactive).not.toHaveBeenCalled();
+      expect(discardIfInactive).toHaveBeenCalledExactlyOnceWith("repository");
 
-      failGathering(f, 2, new GitHubApiError(500));
       discardIfInactive.mockRejectedValue(new Error("database unavailable"));
       const logged = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
+        expect((await reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).skipped).toBe(false);
+        failGathering(f, 2, new GitHubApiError(500));
         await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).rejects.toThrow("Unable to reconcile repository.");
-        expect(logged.mock.calls).toContainEqual(["Could not discard reconciliation sweep checkpoints."]);
+        expect(logged.mock.calls.filter((call) => call[0] === "Could not discard reconciliation sweep checkpoints.")).toHaveLength(2);
         expect(logged.mock.calls.flat().map(String).join("\n")).not.toContain("database unavailable");
       } finally { logged.mockRestore(); }
-      expect(discardIfInactive).toHaveBeenCalledOnce();
+      expect(discardIfInactive).toHaveBeenCalledTimes(3);
     });
 
     it("ends the sweep pass when the fold completes", async () => {
@@ -566,9 +572,7 @@ describe("reconcileRepository", () => {
     });
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({
-        runId: "run-1", skipped: false, adds: 1,
-      });
+      await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ runId: "run-1", skipped: false, adds: 1 });
       expect(dependencies.github.getPullRequestReviews).toHaveBeenCalledTimes(2);
       expect(dependencies.store.materialize).toHaveBeenCalledWith(expect.objectContaining({
         synchronization: expect.objectContaining({ pullRequests: [{ id: 201, reviews, rawDiff: "diff" }] }),
@@ -579,9 +583,7 @@ describe("reconcileRepository", () => {
 
   it("fails the run immediately when a review read rejects the credential", async () => {
     const failure = new GitHubApiError(401);
-    const dependencies = reconciliationDependencies({
-      github: { getPullRequestReviews: vi.fn().mockRejectedValue(failure) },
-    });
+    const dependencies = reconciliationDependencies({ github: { getPullRequestReviews: vi.fn().mockRejectedValue(failure) } });
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ cause: failure });
@@ -593,9 +595,7 @@ describe("reconcileRepository", () => {
 
   it.each(["cause", "deadline", "headers"] as const)("records an ordinary failure when %s guidance is unreadable", async (field) => {
     const upstream = field === "cause" ? new Error("Upstream failure") : new GitHubApiError(403, true, 120);
-    Object.defineProperty(upstream, field === "deadline" ? "notBefore" : field, {
-      get: () => { throw new Error("error field refused"); },
-    });
+    Object.defineProperty(upstream, field === "deadline" ? "notBefore" : field, { get: () => { throw new Error("error field refused"); } });
     const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockRejectedValue(upstream) } });
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
@@ -1242,11 +1242,7 @@ describe("reconcileRepository", () => {
 
   it("records a sanitized failed run while logging and propagating the cause", async () => {
     const upstream = new Error("token=secret should not be persisted");
-    const dependencies = reconciliationDependencies({
-      github: {
-        listIssues: vi.fn().mockRejectedValue(upstream),
-      },
-    });
+    const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockRejectedValue(upstream) } });
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
@@ -1272,12 +1268,8 @@ describe("reconcileRepository", () => {
 
   it("fails the whole run without discarding or materializing when the issue list exceeds the response cap", async () => {
     const overCap = new GitHubResponseTooLargeError(MAX_SUCCESS_BODY_BYTES);
-    const dependencies = reconciliationDependencies({
-      github: { listIssues: vi.fn().mockRejectedValue(overCap) },
-    });
-    dependencies.store.getDirtyReconciliationSubjects = async () => [
-      { kind: "ISSUE", id: 999, number: 42, generation: 7 },
-    ];
+    const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockRejectedValue(overCap) } });
+    dependencies.store.getDirtyReconciliationSubjects = async () => [{ kind: "ISSUE", id: 999, number: 42, generation: "7" }];
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
@@ -1327,9 +1319,7 @@ describe("reconcileRepository", () => {
   it("keeps a GitHub response body on the rethrown cause and out of the stored failure", async () => {
     const body = "secondary rate limit at https://github.com/?token=sponsor-secret";
     const upstream = new GitHubApiError(403, true, null, body);
-    const dependencies = reconciliationDependencies({
-      github: { listIssues: vi.fn().mockRejectedValue(upstream) },
-    });
+    const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockRejectedValue(upstream) } });
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
@@ -1349,15 +1339,11 @@ describe("reconcileRepository", () => {
 
   it("records the credential as the cause when the fold died on a rejected GitLab credential", async () => {
     const rejection = new ForgeCredentialRejectedError();
-    const dependencies = reconciliationDependencies({
-      github: { listIssues: vi.fn().mockRejectedValue(rejection) },
-    });
+    const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockRejectedValue(rejection) } });
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
-      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
-        cause: rejection,
-      });
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ cause: rejection });
       expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE, null);
       // The cause still reaches the service log as the encoded token, exactly
       // as on the generic path (issue 1042).
@@ -1403,8 +1389,8 @@ describe("reconcileRepository", () => {
     [new GitHubGraphqlInvalidResponseError("GitHub GraphQL response was invalid. labels.nodes was not a list.", "labels.nodes"), "UNREADABLE_FIELD", " field=labels.nodes"],
     [new GitHubGraphqlInvalidResponseError("GitHub GraphQL response was invalid. timelineItems.nodes contained a null entry.", "timelineItems.nodes"), "UNREADABLE_FIELD", " field=timelineItems.nodes"],
   ])("completes the run when a dirty issue read answers %s, discarding only that subject", async (failure, reason, field) => {
-    const poison = { kind: "ISSUE" as const, id: 999, number: 42, generation: 7 };
-    const good = { kind: "ISSUE" as const, id: 555, number: 43, generation: 8 };
+    const poison = { kind: "ISSUE" as const, id: 999, number: 42, generation: "7" };
+    const good = { kind: "ISSUE" as const, id: 555, number: 43, generation: "8" };
     const dependencies = reconciliationDependencies({
       github: {
         getIssue: vi.fn(async (_reference: GitHubRepositoryReference, subject: GitHubSubject) => {
@@ -1430,9 +1416,7 @@ describe("reconcileRepository", () => {
     try {
       await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
       expect(discard).toHaveBeenCalledTimes(1);
-      expect(discard).toHaveBeenCalledWith({
-        repositoryId: "repository", kind: "ISSUE", githubSubjectId: 999, generation: 7,
-      });
+      expect(discard).toHaveBeenCalledWith({ repositoryId: "repository", kind: "ISSUE", githubSubjectId: 999, generation: "7" });
       expect(dependencies.store.failRun).not.toHaveBeenCalled();
       expect(errorLog).toHaveBeenCalledTimes(1);
       expect(errorLog).toHaveBeenCalledWith(
@@ -1455,8 +1439,8 @@ describe("reconcileRepository", () => {
     // then answer GitLab's fixed 404, which the GitHub-shaped classifier never
     // matched. The discard is keyed with the subject's generation, so a
     // genuine re-enqueue (bumped generation) still reconciles.
-    const poison = { kind: "ISSUE" as const, id: 999, number: 42, generation: 7 };
-    const good = { kind: "ISSUE" as const, id: 555, number: 43, generation: 8 };
+    const poison = { kind: "ISSUE" as const, id: 999, number: 42, generation: "7" };
+    const good = { kind: "ISSUE" as const, id: 555, number: 43, generation: "8" };
     const notFound = new GitLabApiError(404);
     const dependencies = reconciliationDependencies({
       github: {
@@ -1485,9 +1469,7 @@ describe("reconcileRepository", () => {
     try {
       await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
       expect(discard).toHaveBeenCalledTimes(1);
-      expect(discard).toHaveBeenCalledWith({
-        repositoryId: "repository", kind: "ISSUE", githubSubjectId: 999, generation: 7,
-      });
+      expect(discard).toHaveBeenCalledWith({ repositoryId: "repository", kind: "ISSUE", githubSubjectId: 999, generation: "7" });
       expect(dependencies.store.failRun).not.toHaveBeenCalled();
       expect(errorLog).toHaveBeenCalledTimes(1);
       expect(errorLog).toHaveBeenCalledWith(
@@ -1527,15 +1509,13 @@ describe("reconcileRepository", () => {
       pullRequests: [],
     });
     dependencies.store.getDirtyReconciliationSubjects = async () => [
-      { kind: "ISSUE" as const, id: 999, number: 42, generation: 7 },
-      { kind: "ISSUE" as const, id: 555, number: 43, generation: 8 },
+      { kind: "ISSUE" as const, id: 999, number: 42, generation: "7" },
+      { kind: "ISSUE" as const, id: 555, number: 43, generation: "8" },
     ];
     dependencies.store.discardDirtyReconciliationSubject = vi.fn().mockResolvedValue(undefined);
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
-        message: "Unable to reconcile repository.",
-      });
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ message: "Unable to reconcile repository." });
       expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
     } finally {
@@ -1547,7 +1527,7 @@ describe("reconcileRepository", () => {
     [new Error("GitHub GraphQL request failed. NOT_FOUND: Could not resolve to a PullRequest with the number of '44'."), "NOT_FOUND"],
     [new GitHubResponseTooLargeError(MAX_SUCCESS_BODY_BYTES), "RESPONSE_TOO_LARGE"],
   ])("completes the run when dirty pull request closing references answer %s, discarding only that subject", async (failure, reason) => {
-    const subject = { kind: "PULL_REQUEST" as const, id: 777, number: 44, generation: 9 };
+    const subject = { kind: "PULL_REQUEST" as const, id: 777, number: 44, generation: "9" };
     const dependencies = reconciliationDependencies({
       github: {
         getPullRequestClosingIssues: vi.fn(async () => {
@@ -1572,9 +1552,7 @@ describe("reconcileRepository", () => {
     try {
       await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
       expect(discard).toHaveBeenCalledTimes(1);
-      expect(discard).toHaveBeenCalledWith({
-        repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 777, generation: 9,
-      });
+      expect(discard).toHaveBeenCalledWith({ repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 777, generation: "9" });
       expect(dependencies.store.failRun).not.toHaveBeenCalled();
       expect(errorLog).toHaveBeenCalledTimes(1);
       expect(errorLog).toHaveBeenCalledWith(
@@ -1616,7 +1594,7 @@ describe("reconcileRepository", () => {
         },
       });
       dependencies.store.getDirtyReconciliationSubjects = async () => [
-        { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: 7 },
+        { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" },
       ];
       const discard = vi.fn().mockResolvedValue(undefined);
       dependencies.store.discardDirtyReconciliationSubject = discard;
@@ -1625,9 +1603,7 @@ describe("reconcileRepository", () => {
       try {
         await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
         expect(discard).toHaveBeenCalledTimes(1);
-        expect(discard).toHaveBeenCalledWith({
-          repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: 7,
-        });
+        expect(discard).toHaveBeenCalledWith({ repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: "7" });
         expect(dependencies.store.failRun).not.toHaveBeenCalled();
         expect(errorLog).toHaveBeenCalledTimes(1);
         expect(errorLog).toHaveBeenCalledWith(
@@ -1672,7 +1648,7 @@ describe("reconcileRepository", () => {
         },
       });
       dependencies.store.getDirtyReconciliationSubjects = vi.fn(async () => [
-        { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: 7 },
+        { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" },
       ]);
       const discard = vi.fn().mockResolvedValue(undefined);
       dependencies.store.discardDirtyReconciliationSubject = discard;
@@ -1681,9 +1657,7 @@ describe("reconcileRepository", () => {
       try {
         await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
         expect(discard).toHaveBeenCalledTimes(1);
-        expect(discard).toHaveBeenCalledWith({
-          repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: 7,
-        });
+        expect(discard).toHaveBeenCalledWith({ repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: "7" });
         expect(dependencies.store.failRun).not.toHaveBeenCalled();
         expect(errorLog).toHaveBeenCalledTimes(1);
         expect(errorLog).toHaveBeenCalledWith(
@@ -1741,7 +1715,7 @@ describe("reconcileRepository", () => {
         },
       });
       dependencies.store.getDirtyReconciliationSubjects = vi.fn(async () => [
-        { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: 7 },
+        { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" },
       ]);
       const discard = vi.fn().mockResolvedValue(undefined);
       dependencies.store.discardDirtyReconciliationSubject = discard;
@@ -1750,9 +1724,7 @@ describe("reconcileRepository", () => {
       try {
         await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
         expect(discard).toHaveBeenCalledTimes(1);
-        expect(discard).toHaveBeenCalledWith({
-          repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: 7,
-        });
+        expect(discard).toHaveBeenCalledWith({ repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: "7" });
         expect(dependencies.store.failRun).not.toHaveBeenCalled();
         expect(errorLog).toHaveBeenCalledTimes(1);
         expect(errorLog).toHaveBeenCalledWith(
@@ -1806,16 +1778,14 @@ describe("reconcileRepository", () => {
         },
       });
       dependencies.store.getDirtyReconciliationSubjects = async () => [
-        { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: 7 },
+        { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" },
       ];
       const discard = vi.fn().mockResolvedValue(undefined);
       dependencies.store.discardDirtyReconciliationSubject = discard;
       const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
 
       try {
-        await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
-          message: "Unable to reconcile repository.",
-        });
+        await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ message: "Unable to reconcile repository." });
         expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
         expect(discard).not.toHaveBeenCalled();
       } finally {
@@ -1846,15 +1816,11 @@ describe("reconcileRepository", () => {
       issues: [],
       pullRequests: [],
     });
-    dependencies.store.getDirtyReconciliationSubjects = async () => [
-      { kind: "ISSUE" as const, id: 999, number: 42, generation: 7 },
-    ];
+    dependencies.store.getDirtyReconciliationSubjects = async () => [{ kind: "ISSUE" as const, id: 999, number: 42, generation: "7" }];
     dependencies.store.discardDirtyReconciliationSubject = vi.fn().mockResolvedValue(undefined);
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
-        message: "Unable to reconcile repository.",
-      });
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ message: "Unable to reconcile repository." });
       expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
     } finally {
@@ -1885,7 +1851,7 @@ describe("reconcileRepository", () => {
     // Pull request 12 fails while carrying no dirty row at all: nothing is
     // discarded, and pull request 11's healthy row is not touched either.
     dependencies.store.getDirtyReconciliationSubjects = async () => [
-      { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: 7 },
+      { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" },
     ];
     const discard = vi.fn().mockResolvedValue(undefined);
     dependencies.store.discardDirtyReconciliationSubject = discard;
@@ -1935,7 +1901,7 @@ describe("reconcileRepository", () => {
       pullRequests: [{ id: 201, reviews: [cachedReview], rawDiff: "cached diff" }],
     });
     dependencies.store.getDirtyReconciliationSubjects = async () => [
-      { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: 7 },
+      { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" },
     ];
     const discard = vi.fn().mockResolvedValue(undefined);
     dependencies.store.discardDirtyReconciliationSubject = discard;
@@ -1944,18 +1910,14 @@ describe("reconcileRepository", () => {
     try {
       await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
       expect(discard).toHaveBeenCalledTimes(1);
-      expect(discard).toHaveBeenCalledWith({
-        repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: 7,
-      });
+      expect(discard).toHaveBeenCalledWith({ repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: "7" });
       expect(dependencies.store.failRun).not.toHaveBeenCalled();
       expect(errorLog).toHaveBeenCalledTimes(1);
       expect(errorLog).toHaveBeenCalledWith(
         "Reconciliation of repository repository discarded unresolvable subject kind=PULL_REQUEST number=11 reason=NOT_FOUND",
       );
       const materializeInput = vi.mocked(dependencies.store.materialize).mock.calls[0]![0];
-      expect(materializeInput.synchronization?.pullRequests).toEqual([
-        { id: 201, reviews: [cachedReview], rawDiff: "cached diff" },
-      ]);
+      expect(materializeInput.synchronization?.pullRequests).toEqual([{ id: 201, reviews: [cachedReview], rawDiff: "cached diff" }]);
       expect(vi.mocked(dependencies.github.getPullRequestDiff).mock.calls.map(([, number]) => number)).toEqual([11]);
     } finally {
       errorLog.mockRestore();
@@ -2004,7 +1966,7 @@ describe("reconcileRepository", () => {
       ],
     });
     dependencies.store.getDirtyReconciliationSubjects = async () => [
-      { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: 7 },
+      { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" },
     ];
     const discard = vi.fn().mockResolvedValue(undefined);
     dependencies.store.discardDirtyReconciliationSubject = discard;
@@ -2013,9 +1975,7 @@ describe("reconcileRepository", () => {
     try {
       await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
       expect(discard).toHaveBeenCalledTimes(1);
-      expect(discard).toHaveBeenCalledWith({
-        repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: 7,
-      });
+      expect(discard).toHaveBeenCalledWith({ repositoryId: "repository", kind: "PULL_REQUEST", githubSubjectId: 201, generation: "7" });
       expect(errorLog).toHaveBeenCalledTimes(1);
       expect(errorLog).toHaveBeenCalledWith(
         "Reconciliation of repository repository discarded unresolvable subject kind=PULL_REQUEST number=11 reason=NOT_FOUND",
@@ -2045,9 +2005,7 @@ describe("reconcileRepository", () => {
     });
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
-        message: "Unable to reconcile repository.",
-      });
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ message: "Unable to reconcile repository." });
       expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
     } finally {
@@ -2069,13 +2027,11 @@ describe("reconcileRepository", () => {
       },
     });
     dependencies.store.getDirtyReconciliationSubjects = async () => [
-      { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: 7 },
+      { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" },
     ];
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
-        message: "Unable to reconcile repository.",
-      });
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ message: "Unable to reconcile repository." });
       expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
       expect(errorLog).toHaveBeenCalledTimes(1);
@@ -2104,15 +2060,13 @@ describe("reconcileRepository", () => {
       pullRequests: [],
     });
     dependencies.store.getDirtyReconciliationSubjects = async () => [
-      { kind: "ISSUE" as const, id: 999, number: 42, generation: 7 },
-      { kind: "ISSUE" as const, id: 555, number: 43, generation: 8 },
+      { kind: "ISSUE" as const, id: 999, number: 42, generation: "7" },
+      { kind: "ISSUE" as const, id: 555, number: 43, generation: "8" },
     ];
     dependencies.store.discardDirtyReconciliationSubject = vi.fn().mockResolvedValue(undefined);
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
-        message: "Unable to reconcile repository.",
-      });
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ message: "Unable to reconcile repository." });
       expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
     } finally {
@@ -2171,9 +2125,7 @@ describe("reconcileRepository", () => {
     { reason: "NOT_PUBLIC", verified: verifiedRepository({ visibility: "PRIVATE" }) },
   ] as const)("declines the crawl and records $reason instead of materializing another repository", async ({ reason, verified }) => {
     const now = () => new Date("2030-01-02T03:04:05.678Z");
-    const dependencies = reconciliationDependencies({
-      github: { getRepositoryById: vi.fn().mockResolvedValue(verified) },
-    });
+    const dependencies = reconciliationDependencies({ github: { getRepositoryById: vi.fn().mockResolvedValue(verified) } });
 
     const summary = await reconcileRepository({ ...dependencies, now }, "repository");
 
@@ -2227,9 +2179,7 @@ describe("reconcileRepository", () => {
     const upstream = new GitHubApiError(403, rateLimited, 120);
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      const dependencies = reconciliationDependencies({
-        github: { getRepositoryById: vi.fn().mockRejectedValue(upstream) },
-      });
+      const dependencies = reconciliationDependencies({ github: { getRepositoryById: vi.fn().mockRejectedValue(upstream) } });
 
       await expect(reconcileRepository({ ...dependencies, now }, "repository")).rejects.toMatchObject({ cause: upstream });
 
@@ -2282,9 +2232,7 @@ describe("reconcileRepository", () => {
     vi.mocked(dependencies.store.getReconciliationCooldown)
       .mockResolvedValue(new Date(now().getTime() + 1));
     const githubReads = vi.fn(() => dependencies.github);
-    const lazyDependencies = Object.defineProperty({ ...dependencies, now }, "github", {
-      get: githubReads, enumerable: true,
-    });
+    const lazyDependencies = Object.defineProperty({ ...dependencies, now }, "github", { get: githubReads, enumerable: true });
 
     const summary = await reconcileRepository(lazyDependencies, "repository");
 
@@ -2467,4 +2415,3 @@ class StatefulSettlementMaterializer {
     return [...this.state.entries()].sort(([left], [right]) => left - right);
   }
 }
-

@@ -30,15 +30,16 @@ export class PostgresReconciliationPacingStore {
     }[]>`select kind, github_subject_id, subject_number, generation
       from repository_reconciliation_dirty_subjects where repository_id = ${repositoryId}
       order by kind, github_subject_id`;
+    // The generation stays text: a number rounds past 2 ** 53, and the maximum bigint out of bigint range.
     return rows.map((row) => ({ kind: row.kind, id: Number(row.github_subject_id),
-      number: row.subject_number, generation: Number(row.generation) }));
+      number: row.subject_number, generation: row.generation }));
   }
 
   public async discardDirtyReconciliationSubject(input: {
     repositoryId: string;
     kind: DirtyReconciliationSubject["kind"];
     githubSubjectId: number;
-    generation: number;
+    generation: string;
   }): Promise<void> {
     // Keyed with the generation the same way the materialize-time delete is: a
     // webhook that re-enqueued the subject with a fresh generation mid-run must

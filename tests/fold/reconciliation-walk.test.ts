@@ -10,8 +10,7 @@ describe("last-update reconciliation walk", () => {
     expect((await f.window(20)).issues.map(({ id }) => id)).toEqual([1, 2, 3, 4]);
     expect(f.listed[1]).toEqual({ since: instant(2).toISOString(), cursor: null });
     expect([...f.counts]).toEqual([[1, 1], [2, 1], [3, 1], [4, 1]]);
-    expect(f.pass.read).not.toHaveBeenCalled();
-    expect(f.pass.write).not.toHaveBeenCalled();
+    for (const io of [f.pass.read, f.pass.write]) expect(vi.mocked(io).mock.calls.every(([key]) => key.startsWith("absence-listing:"))).toBe(true);
   });
 
   it("gathers an unstaged timestamp tie behind the anchor and skips staged repeats across pages", async () => {
@@ -25,11 +24,8 @@ describe("last-update reconciliation walk", () => {
 
   it("gathers a subject updated during the walk again before returning the document", async () => {
     const f = fixture([subject(1), subject(2)]);
-    f.onGather((id) => {
-      if (id !== 2) return;
-      f.live.get(1)!.updatedAt = instant(10);
-      Object.assign(f.issues.get(1)!, { updatedAt: instant(10).toISOString(), title: "Updated during walk" });
-    });
+    f.onGather((id) => { if (id !== 2) return; f.live.get(1)!.updatedAt = instant(10);
+      Object.assign(f.issues.get(1)!, { updatedAt: instant(10).toISOString(), title: "Updated during walk" }); });
     const result = await f.window(20);
     expect(result.issues.find(({ id }) => id === 1)?.title).toBe("Updated during walk");
     expect(f.counts.get(1)).toBe(2);
@@ -42,8 +38,7 @@ describe("last-update reconciliation walk", () => {
     expect(f.pass.walkAnchors().subjects).toEqual({ updatedAt: instant(1), key: 3 });
     await expect(f.window(2)).rejects.toBeInstanceOf(SweepBudgetSpent);
     expect((await f.pass.readStaged()).map(({ subjectKey }) => subjectKey)).toEqual([3, 1]);
-    expect(f.counts.get(3)).toBe(1);
-    expect(f.counts.get(1)).toBe(1);
+    expect([f.counts.get(3), f.counts.get(1)]).toEqual([1, 1]);
   });
 
   it("keeps the newest absence witness when a subject repeats on a later page", async () => {
@@ -99,8 +94,7 @@ describe("last-update reconciliation walk", () => {
 
   it("completes a repository beyond 1000 subjects over many small budget windows", async () => {
     const f = fixture(Array.from({ length: 1005 }, (_, i) => subject(i + 1)), 50);
-    let windows = 0;
-    let result;
+    let windows = 0, result;
     for (; windows < 100; windows += 1) {
       try { result = await f.window(50); break; }
       catch (error) { if (!(error instanceof SweepBudgetSpent)) throw error; }
@@ -114,10 +108,8 @@ describe("last-update reconciliation walk", () => {
     const f = fixture([subject(1), subject(2), subject(3)]);
     const stage = f.pass.stage;
     let failed = false;
-    f.pass.stage = async (input) => {
-      if (input.subjectKey === 2 && !failed) { failed = true; throw new Error("Staging commit failed"); }
-      await stage(input);
-    };
+    f.pass.stage = async (input) => { if (input.subjectKey === 2 && !failed) { failed = true; throw new Error("Staging commit failed"); }
+      await stage(input); };
     await expect(f.window(20)).rejects.toThrow("Staging commit failed");
     expect(failed).toBe(true);
     expect(f.pass.walkAnchors().subjects).toEqual({ updatedAt: instant(1), key: 1 });
@@ -129,8 +121,7 @@ describe("last-update reconciliation walk", () => {
   it("restarts completion correctly after a hold during the absence sweep", async () => {
     const f = fixture([subject(1), subject(2)]);
     await expect(f.window(3)).rejects.toBeInstanceOf(SweepBudgetSpent);
-    f.live.delete(1);
-    f.issues.delete(1);
+    f.live.delete(1); f.issues.delete(1);
     expect((await f.window(20)).issues.map(({ id }) => id)).toEqual([2]);
     expect((await f.window(20)).issues.map(({ id }) => id)).toEqual([2]);
     expect(f.counts.get(2)).toBe(1);

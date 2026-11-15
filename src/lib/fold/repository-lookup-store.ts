@@ -1,5 +1,7 @@
 import type { EnforcementState, SqlClient } from "@/lib/db/types";
 import type { DifficultyScheme, DifficultySchemeVersion } from "@/lib/domain/difficulty-scheme";
+import { suppressionScope } from "@/lib/fold/data-subject-suppression";
+import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import { moderationEventsFromJson } from "@/lib/fold/moderation-history";
 import { timestampToIso, toSafeInteger } from "@/lib/fold/postgres-row-mapping";
 import type { ReconciliationRepository, RepositoryUnavailableReason } from "@/lib/fold/reconcile";
@@ -22,6 +24,8 @@ type RepositoryRow = {
   sponsor_github_login: string;
   sponsor_enforcement_state: EnforcementState;
   sponsor_moderation_events: unknown;
+  sponsor_forge_identities: { instanceUrl: string; forgeUserId: string }[];
+  sponsor_suppressions: { provider: string; instanceUrl: string; forgeId: string }[];
   dispute_pull_requests: { id: string; number: number }[];
 };
 
@@ -118,6 +122,19 @@ export class PostgresRepositoryLookupStore {
           where events.target_user_id = sponsors.id
         ), '[]'::jsonb) as sponsor_moderation_events,
         coalesce((
+          select jsonb_agg(jsonb_build_object('instanceUrl', identities.instance_url, 'forgeUserId', identities.forge_user_id::text))
+          from user_forge_identities as identities
+          where identities.user_id = sponsors.id and identities.provider = repositories.provider
+        ), '[]'::jsonb) as sponsor_forge_identities,
+        coalesce((
+          select jsonb_agg(jsonb_build_object('provider', suppressions.provider, 'instanceUrl', suppressions.instance_url,
+            'forgeId', suppressions.forge_id::text))
+          from data_subject_suppressions as suppressions
+          where suppressions.forge_id = sponsors.github_user_id or suppressions.forge_id in (
+            select identities.forge_user_id from user_forge_identities as identities
+            where identities.user_id = sponsors.id and identities.provider = repositories.provider)
+        ), '[]'::jsonb) as sponsor_suppressions,
+        coalesce((
           select jsonb_agg(jsonb_build_object('id', pr.github_pull_request_id::text, 'number', pr.pull_request_number)
             order by pr.github_pull_request_id)
           from pull_requests pr
@@ -133,7 +150,18 @@ export class PostgresRepositoryLookupStore {
       return null;
     }
     const difficultySchemeVersions = await this.listDifficultySchemeVersions(row.github_repository_id);
-    return toReconciliationRepository(row, difficultySchemeVersions);
+    // The sponsor is suppressed when a suppression in the repository's scope names
+    // the id the evidence carries for them (the GitHub id on GitHub, the linked
+    // identity on the repository's origin elsewhere). Each publication then
+    // tombstones their cached label actors, so reconcile never folds that cache.
+    const scope = suppressionScope(row.provider ?? "github", row.instance_url);
+    const sponsorForgeIds = scope.provider === "github" ? [toSafeInteger(row.sponsor_github_user_id)]
+      : row.sponsor_forge_identities.filter((identity) => normalizeInstanceUrl(identity.instanceUrl) === scope.instanceUrl)
+        .map((identity) => toSafeInteger(identity.forgeUserId));
+    // The select reads candidates by the sponsor's forge ids only; the scope decides.
+    const sponsorSuppressed = row.sponsor_suppressions.some((suppression) => suppression.provider === scope.provider
+      && suppression.instanceUrl === scope.instanceUrl && sponsorForgeIds.includes(toSafeInteger(suppression.forgeId)));
+    return { ...toReconciliationRepository(row, difficultySchemeVersions), sponsorSuppressed };
   }
 
   private async listDifficultySchemeVersions(

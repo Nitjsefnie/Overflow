@@ -2,6 +2,7 @@ import type { GitHubGateway } from "@/lib/github/client";
 import type { GitLabGateway } from "@/lib/gitlab/client";
 import type { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import type { PostgresRepositoryStore } from "@/lib/repositories/postgres-store";
+import { describeErrorCause } from "@/lib/repositories/register";
 import { webhookCallbackUrl, type WebhookCredentialRecord } from "@/lib/webhooks/credentials";
 
 export type WebhookUpgradeOutcome = {
@@ -17,7 +18,8 @@ export type WebhookUpgradeOutcome = {
 export type WebhookUpgradeDependencies = {
   store: Pick<PostgresFoldStore, "listActiveRepositoryIds" | "requestRepositoryRederivation">
     & Pick<PostgresRepositoryStore, "findActiveRepositoryById" | "findActiveRepositoryForgeById" | "getGitHubAccessToken"
-      | "stageWebhookCredential" | "finalizeWebhookCredential" | "withWebhookUpgradeLock">
+      | "stageWebhookCredential" | "finalizeWebhookCredential" | "markWebhookRederivationOwed" | "clearWebhookRederivationOwed"
+      | "withWebhookUpgradeLock">
     & {
       /**
        * The sponsor's decrypted GitLab PAT for a normalized instance, or null
@@ -31,7 +33,20 @@ export type WebhookUpgradeDependencies = {
   createGitLabGateway(instanceUrl: string, token: string): Pick<GitLabGateway, "getRepositoryById" | "configureWebhook">;
   webhookUrls: Record<"github" | "gitlab", string>;
   report(outcome: WebhookUpgradeOutcome): void;
+  /** The operator's sink (the CLI's stderr) for one failureCauseLine per caught failure. */
+  writeError(line: string): void;
 };
+
+/** The stage code and its cause (describeErrorCause, or a fallback): one capped, redacted line. */
+export function failureCauseLine(failure: WebhookUpgradeOutcome["failure"] | "UPGRADE_FAILED", error: unknown, repositoryId?: string): string {
+  let cause: string;
+  try {
+    cause = describeErrorCause(error);
+  } catch {
+    cause = "unrenderable thrown value";
+  }
+  return JSON.stringify({ repositoryId, failure, cause });
+}
 
 /** Explicit administration followed by durable repair; neither belongs in the fold. */
 export async function upgradeRepositoryWebhooks(
@@ -41,9 +56,10 @@ export async function upgradeRepositoryWebhooks(
   const summary = { succeeded: 0, failed: 0, gone: 0 };
   for (const repositoryId of repositoryIds) {
     const outcome = await dependencies.store.withWebhookUpgradeLock(repositoryId,
-      () => upgradeRegistration(dependencies, repositoryId)).catch((): WebhookUpgradeOutcome => ({
-      repositoryId, subscription: "FAILED", queue: "NOT_ATTEMPTED", failure: "REGISTRATION_FAILED",
-    }));
+      () => upgradeRegistration(dependencies, repositoryId)).catch((error: unknown): WebhookUpgradeOutcome => {
+      dependencies.writeError(failureCauseLine("REGISTRATION_FAILED", error, repositoryId));
+      return { repositoryId, subscription: "FAILED", queue: "NOT_ATTEMPTED", failure: "REGISTRATION_FAILED" };
+    });
     dependencies.report(outcome);
     if (outcome.failure === "REPOSITORY_GONE") summary.gone++;
     else if (outcome.failure === null) summary.succeeded++;
@@ -53,7 +69,7 @@ export async function upgradeRepositoryWebhooks(
 }
 
 async function upgradeRegistration(
-  { store, createGateway, createGitLabGateway, webhookUrls }: WebhookUpgradeDependencies,
+  { store, createGateway, createGitLabGateway, webhookUrls, writeError }: WebhookUpgradeDependencies,
   repositoryId: string,
 ): Promise<WebhookUpgradeOutcome> {
   const outcome: WebhookUpgradeOutcome = {
@@ -106,13 +122,14 @@ async function upgradeRegistration(
       repositoryId, provider: "github", instanceUrl: null, projectId: repository.id, webhookId: registration.githubWebhookId,
     });
     if (credential === null) return outcome;
-    const changed = await github.configureWebhook(repository, registration.githubWebhookId, {
+    const webhookId = registration.githubWebhookId;
+    return await finishUpgrade({ store }, credential, () => github.configureWebhook(repository, webhookId, {
       callbackUrl: webhookCallbackUrl(webhookUrls.github, credential.credentialId), secret: credential.secret,
-    });
-    return await finishUpgrade({ store }, credential, changed, outcome);
-  } catch {
-    // Only the fixed stage code escapes. Credentials, upstream bodies and DB
-    // diagnostics can appear in any exception along this path.
+    }), outcome);
+  } catch (error) {
+    // Only the stage code reaches the outcome: any exception here can carry
+    // credentials, upstream bodies or DB diagnostics, so its cause is sanitized.
+    writeError(failureCauseLine(outcome.failure, error, repositoryId));
   }
   return outcome;
 }
@@ -155,21 +172,24 @@ async function upgradeGitLabRegistration(
     repositoryId, provider: "gitlab", instanceUrl: forge.instanceUrl, projectId: repository.id, webhookId,
   });
   if (credential === null) return outcome;
-  const changed = await gitlab.configureWebhook(
+  return await finishUpgrade({ store }, credential, () => gitlab.configureWebhook(
     { owner: repository.owner, name: repository.name },
     webhookId,
     { callbackUrl: webhookCallbackUrl(webhookUrls.gitlab, credential.credentialId), secret: credential.secret },
-  );
-  return await finishUpgrade({ store }, credential, changed, outcome);
+  ), outcome);
 }
 
+/** A finalized hook owes its re-derivation from before the forge is asked until queued or unneeded. */
 async function finishUpgrade(
   { store }: Pick<WebhookUpgradeDependencies, "store">,
   credential: WebhookCredentialRecord,
-  changed: boolean,
+  configure: () => Promise<boolean>,
   outcome: WebhookUpgradeOutcome,
 ): Promise<WebhookUpgradeOutcome> {
   const firstUpgrade = credential.configuredAt === null;
+  const owed = firstUpgrade ? false : await store.markWebhookRederivationOwed(credential);
+  if (owed === null) return outcome;
+  const changed = await configure();
   if (!await store.finalizeWebhookCredential(credential, firstUpgrade ? async () => {
     outcome.subscription = "VERIFIED";
     await queueRederivation({ store }, credential.repositoryId, outcome);
@@ -177,9 +197,15 @@ async function finishUpgrade(
     outcome.failure = "SUBSCRIPTION_FAILED";
   } : undefined)) return outcome;
   outcome.subscription = "VERIFIED";
-  if (!firstUpgrade && changed) return await queueRederivation({ store }, credential.repositoryId, outcome);
-  if (!firstUpgrade) outcome.queue = "NOT_NEEDED";
-  outcome.failure = null;
+  if (firstUpgrade) {
+    outcome.failure = null;
+    return outcome;
+  }
+  const owes = changed || owed;
+  if (owes) await queueRederivation({ store }, credential.repositoryId, outcome);
+  [outcome.queue, outcome.failure] = ["FAILED", "QUEUE_FAILED"];
+  await store.clearWebhookRederivationOwed(credential);
+  [outcome.queue, outcome.failure] = [owes ? "QUEUED" : "NOT_NEEDED", null];
   return outcome;
 }
 

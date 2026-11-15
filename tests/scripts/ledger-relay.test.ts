@@ -2482,5 +2482,4 @@ describe("runRelay", () => {
       expect(delay.delays).toEqual([1000, 2000]);
     });
   });
-
 });

@@ -12,6 +12,11 @@ import type { DashboardSql } from "../src/lib/dashboard/queries.ts";
 import { PostgresFoldStore } from "../src/lib/fold/postgres-store.ts";
 import { reconcileRepository, type ReconciliationGateway } from "../src/lib/fold/reconcile.ts";
 import { createReconciliationBudgetGate } from "../src/lib/fold/reconciliation-budget.ts";
+import { PostgresSponsorSweepRoundStore } from "../src/lib/fold/sponsor-sweep-round-store.ts";
+import type { ReconciliationSweepControl } from "../src/lib/fold/sweep-pass.ts";
+import { PostgresSweepPassStore } from "../src/lib/fold/sweep-pass-store.ts";
+import { readSweepRequestBudget } from "../src/lib/fold/sweep-request-budget.ts";
+import { GitHubGateway } from "../src/lib/github/client.ts";
 import { createGitHubGraphqlBudgetStore } from "../src/lib/github/rate-limit-budget.ts";
 import type { GitHubIssue } from "../src/lib/github/types.ts";
 import { PostgresRepositoryStore } from "../src/lib/repositories/postgres-store.ts";
@@ -58,6 +63,59 @@ const gateway: ReconciliationGateway = {
   getIssue: failRemoteRead, getPullRequestClosingIssues: failRemoteRead,
   getPullRequestReviews: failRemoteRead, getPullRequestDiff: failRemoteRead,
 };
+// Sweep folds drive the production GitHubGateway, whose transport charges each
+// request to the sweep budget. This fetch answers only the reads of one open
+// issue without pull requests (and one since deleted), throwing on any other.
+const deletedIssue = { id: issue.id + 1, number: issue.number + 1 };
+const page = (nodes: unknown[]) => ({ nodes, pageInfo: { hasNextPage: false, endCursor: null } });
+const account = (user: { login: string; githubUserId: number }) => ({ login: user.login, databaseId: user.githubUserId });
+const issueNode = { databaseId: issue.id, number: issue.number, title: issue.title, body: issue.body, url: issue.url,
+  state: issue.state, stateReason: issue.stateReason, createdAt: issue.createdAt, updatedAt: issue.updatedAt, closedAt: issue.closedAt,
+  author: account(author), assignees: { nodes: [] }, labels: page(issue.labels.map((name) => ({ name }))),
+  timelineItems: page(issue.history.map((event) => ({ __typename: "LabeledEvent", id: event.id, createdAt: event.createdAt,
+    actor: account(sponsor), label: { name: event.kind === "LABELED" ? event.label : "" } }))),
+  closedByPullRequestsReferences: page([]) };
+const fixtureFetch: typeof fetch = async (input, init) => {
+  const url = new URL(String(input)), repo = `/repos/${observedRepository.fullName}`;
+  if (url.pathname === "/graphql") {
+    const { query, variables } = JSON.parse(String(init?.body)) as { query: string; variables: Record<string, unknown> };
+    const operation = /query (\w+)/.exec(query)?.[1];
+    if (operation === "RepositoryIssue" && variables.issueNumber === issue.number) return Response.json({ data: { repository: { issue: issueNode } } });
+    if (operation === "RepositoryIssue" && variables.issueNumber === deletedIssue.number) return Response.json({ data: { repository: { issue: null } } });
+    if (operation === "IssueTimelineCounts") return Response.json({ data: { repository: { [`i${issue.number}`]: { databaseId: issue.id, timelineItems: { totalCount: issue.history.length } } } } });
+  } else if (url.pathname === `/repositories/${repository.githubRepositoryId}`) {
+    return Response.json({ id: observedRepository.id, name: observedRepository.name, full_name: observedRepository.fullName,
+      private: false, html_url: observedRepository.url, owner: { login: observedRepository.owner, type: "User" }, permissions: { admin: true } });
+  } else if (url.pathname === `${repo}/issues`) {
+    return Response.json([{ id: issue.id, number: issue.number, updated_at: issue.updatedAt }]);
+  } else if (url.pathname === `${repo}/issues/${issue.number}/events`) {
+    return Response.json(issue.history.map((event) => ({ node_id: event.id, event: "labeled" })));
+  } else if (url.pathname === `${repo}/issues/${issue.number}/comments`) {
+    return Response.json([]);
+  }
+  throw new Error(`Unexpected remote fixture request ${url.pathname}`);
+};
+const githubGateway = () => new GitHubGateway({ accessToken: fixtureToken, owner: sponsor.id, fetch: fixtureFetch,
+  budget: createGitHubGraphqlBudgetStore() });
+/** The production sweep control (src/instrumentation-node.ts) on the workload's own client, at an explicit request budget. */
+function sweepControl(sql: Sql, requestBudget = readSweepRequestBudget({})): ReconciliationSweepControl {
+  const rounds = new PostgresSponsorSweepRoundStore(sql), passes = new PostgresSweepPassStore(sql);
+  return { spend: (sponsorId, repositoryId) => rounds.spend(sponsorId, repositoryId, new Date(), requestBudget),
+    openPass: passes.open.bind(passes), discardPass: passes.discardByRepository.bind(passes),
+    discardIfInactive: passes.discardIfInactive.bind(passes) };
+}
+async function fold(sql: Sql, github: ReconciliationGateway, sweep?: ReconciliationSweepControl, held = false): Promise<void> {
+  const store = new PostgresFoldStore(sql, encryptionKey, sql);
+  const result = await reconcileRepository({ store, github, sweep, onBudgetChange: () => {},
+    budget: createReconciliationBudgetGate({ store: createGitHubGraphqlBudgetStore() }),
+    now: () => new Date("2025-09-02T00:00:00.000Z") }, repository.id, sweep && { reason: "SWEEP" });
+  if (held ? !(result.skipped && result.sweepHeldUntil) : result.skipped) throw new Error(`the repository fold was ${held ? "not held" : "skipped"}`);
+}
+async function verifyPublished(sql: Sql): Promise<void> {
+  const runs = await sql`select status from reconciliation_runs where repository_id = ${repository.id} and status = 'COMPLETED'`;
+  const issues = await sql`select github_issue_id from issues where repository_id = ${repository.id}`;
+  if (runs.length !== 1 || issues.length !== 1) throw new Error("repository fold publication missing");
+}
 
 async function seedMinimal(sql: Sql): Promise<void> {
   // This client can only point at the database created below, never the caller's.
@@ -106,17 +164,67 @@ const workloads: Record<string, Workload> = {
   },
   "repository-fold": {
     seed: async (_url, sql) => seedMinimal(sql),
-    run: async (sql) => {
-      const store = new PostgresFoldStore(sql, encryptionKey, sql);
-      const result = await reconcileRepository({ store, github: gateway, onBudgetChange: () => {},
-        budget: createReconciliationBudgetGate({ store: createGitHubGraphqlBudgetStore() }),
-        now: () => new Date("2025-09-02T00:00:00.000Z") }, repository.id);
-      if (result.skipped) throw new Error("repository-fold was skipped");
+    run: (sql) => fold(sql, gateway),
+    verify: verifyPublished,
+  },
+  "repository-sweep-fold": {
+    seed: async (_url, sql) => {
+      await seedMinimal(sql);
+      // Resume the pass a held fold leaves, staged with an issue since deleted, so the walk's drift lookup drops it.
+      await fold(sql, githubGateway(), sweepControl(sql, 2), true);
+      const [held] = await sql`select evidence_version, scan_started_at from reconciliation_sweep_passes`;
+      const pass = await new PostgresSweepPassStore(sql).open({ repositoryId: repository.id,
+        evidenceVersion: held!.evidence_version, scanStartedAt: held!.scan_started_at, dirtySubjects: [] });
+      await pass.stage({ anchor: "repair", kind: "issue", subjectKey: deletedIssue.id, updatedAt: new Date(issue.createdAt),
+        payload: { subject: deletedIssue } });
+      await pass.hold();
     },
+    run: (sql) => fold(sql, githubGateway(), sweepControl(sql)),
+    verify: async (sql) => {
+      await verifyPublished(sql);
+      // A completed pass is deleted (staged subjects cascade); the round and repository share each hold the charges.
+      const passes = await sql`select pass_id from reconciliation_sweep_passes`;
+      const staged = await sql`select pass_id from reconciliation_sweep_walk_subjects`;
+      const [round] = await sql`select spent from reconciliation_sweep_rounds where sponsor_id = ${sponsor.id}`;
+      const [share] = await sql`select spent from reconciliation_sweep_repository_spend where repository_id = ${repository.id}`;
+      if (passes.length !== 0 || staged.length !== 0 || !(round?.spent > 0) || share?.spent !== round?.spent) {
+        throw new Error("repository-sweep-fold did not complete its sweep pass");
+      }
+    },
+  },
+  "repository-held-sweep-fold": {
+    seed: async (_url, sql) => seedMinimal(sql),
+    // Two admissions: the repository read and the first listing page; the issue read is refused and the pass held.
+    run: (sql) => fold(sql, githubGateway(), sweepControl(sql, 2), true),
+    verify: async (sql) => {
+      const [run] = await sql`select status, held_by from reconciliation_runs where repository_id = ${repository.id}`;
+      const [pass] = await sql`select failed_runs from reconciliation_sweep_passes where repository_id = ${repository.id}`;
+      const issues = await sql`select github_issue_id from issues`;
+      if (run?.status !== "HELD" || run.held_by !== "SWEEP_REQUEST_BUDGET" || pass?.failed_runs !== 0 || issues.length !== 0) {
+        throw new Error("repository-held-sweep-fold did not hold its sweep pass");
+      }
+    },
+  },
+  "repository-inactive-fold": {
+    seed: async (_url, sql) => {
+      await seedMinimal(sql);
+      // A held sweep pass, then a sanction deactivation, which (unlike unregistration) discards no pass.
+      const pass = await new PostgresSweepPassStore(sql).open({ repositoryId: repository.id, evidenceVersion: "held",
+        scanStartedAt: new Date("2025-09-01T12:00:00.000Z"), dirtySubjects: [] });
+      await pass.stage({ anchor: "subjects", kind: "issue", subjectKey: issue.id, updatedAt: new Date(issue.updatedAt), payload: issue });
+      await pass.hold();
+      await sql`update registered_repositories set active = false, sanction_deactivated_at = now() where id = ${repository.id}`;
+    },
+    // The queued SWEEP job folds it; the inactive branch reads no forge.
+    run: (sql) => fold(sql, { ...gateway, getRepositoryById: failRemoteRead, listIssues: failRemoteRead }, sweepControl(sql)),
     verify: async (sql) => {
       const [row] = await sql`select status from reconciliation_runs where repository_id = ${repository.id}`;
-      const issues = await sql`select github_issue_id from issues where repository_id = ${repository.id}`;
-      if (row?.status !== "COMPLETED" || issues.length !== 1) throw new Error("repository-fold publication missing");
+      const issues = await sql`select github_issue_id from issues`;
+      const passes = await sql`select pass_id from reconciliation_sweep_passes`;
+      const staged = await sql`select pass_id from reconciliation_sweep_walk_subjects`;
+      if (row?.status !== "COMPLETED" || issues.length !== 0 || passes.length !== 0 || staged.length !== 0) {
+        throw new Error("repository-inactive-fold did not discard its sweep pass");
+      }
     },
   },
   "webhook-ingestion": {
@@ -180,11 +288,12 @@ async function prepareClient(sql: Sql, expectedDatabase: string): Promise<void> 
 }
 
 /** Count operation SQL after all work/coordination connections are ready. */
-export async function countOperationStatements(sql: Sql, expectedDatabase: string, operation: () => Promise<void>): Promise<number> {
+export async function countOperationStatements(sql: Sql, expectedDatabase: string, operation: () => Promise<void>,
+  record?: (statement: string) => void): Promise<number> {
   await prepareClient(sql, expectedDatabase);
   let count = 0;
   const previous = sql.options.debug;
-  sql.options.debug = () => { count += 1; };
+  sql.options.debug = (_connection: number, statement: string) => { count += 1; record?.(statement); };
   try {
     await operation();
     return count;
@@ -194,14 +303,14 @@ export async function countOperationStatements(sql: Sql, expectedDatabase: strin
 }
 
 /** Fresh seed and fresh counting client for each repeat; count only the operation. */
-async function measureTwice(url: string, workload: Workload): Promise<number[]> {
+async function measureTwice(url: string, workload: Workload, record?: (statement: string) => void): Promise<number[]> {
   const samples: number[] = [];
   for (let repeat = 0; repeat < 2; repeat += 1) {
     const sql = postgres(url, { max: 4, onnotice: () => {} });
     try {
       await prepareClient(sql, new URL(url).pathname.slice(1));
       await workload.seed(url, sql);
-      const count = await countOperationStatements(sql, new URL(url).pathname.slice(1), () => workload.run(sql));
+      const count = await countOperationStatements(sql, new URL(url).pathname.slice(1), () => workload.run(sql), record);
       await workload.verify(sql);
       samples.push(count);
     } finally {
@@ -237,7 +346,8 @@ export function scratchDatabaseUrl(databaseUrl: string, name: string): URL {
 }
 
 /** Requires CREATEDB, available to both CI service users and scratch test roles. */
-export async function measurePerfWorkloads(databaseUrl: string): Promise<Measurements> {
+export async function measurePerfWorkloads(databaseUrl: string,
+  record?: (workload: string, statement: string) => void): Promise<Measurements> {
   const parentName = new URL(databaseUrl).pathname.slice(1);
   const name = `overflow_perf_${randomUUID().replaceAll("-", "")}`;
   const scratch = scratchDatabaseUrl(databaseUrl, name);
@@ -260,7 +370,7 @@ export async function measurePerfWorkloads(databaseUrl: string): Promise<Measure
     }
     const measurements: Measurements = {};
     for (const [id, workload] of Object.entries(workloads)) {
-      measurements[id] = await measureTwice(scratch.href, workload);
+      measurements[id] = await measureTwice(scratch.href, workload, record && ((statement) => record(id, statement)));
     }
     return measurements;
   } finally {

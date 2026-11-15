@@ -357,7 +357,6 @@ describe("workflow_run orphan sweep", () => {
   });
 });
 
-
 describe("superseded verification never publishes", () => {
   it.each(["failure", "in_progress"])("newer same-SHA suite %s skips old mirror and orphan", async (state) => {
     const newer = suite({ id: 8002, status: state === "in_progress" ? state : "completed", conclusion: state === "failure" ? state : null });
@@ -402,7 +401,6 @@ describe("superseded verification never publishes", () => {
   });
 });
 
-
 describe("publication rechecks supersession after reading job results", () => {
   it.each([false, true])("a newer failure appearing just before POST suppresses publication, orphan=%s", async (orphan) => {
     let reads = 0;
@@ -423,7 +421,6 @@ describe("publication rechecks supersession after reading job results", () => {
     expect(renderRelayResult(result).join("\n")).toContain("superseded by run 8002");
   });
 });
-
 
 describe("complete listing for mirror and orphan supersession", () => {
   const newest = suite({ id: 8101 });
@@ -493,7 +490,6 @@ describe("complete listing for mirror and orphan supersession", () => {
     expect((h.posts[0].output as Record<string, unknown>).summary).toMatch(/1000 runs/);
   });
 });
-
 
 describe("superseded mirror keeps orphan recovery available", () => {
   it.each(["initial", "after-jobs"])("%s supersession skips only its own posting", async (phase) => {

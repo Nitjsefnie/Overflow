@@ -182,7 +182,7 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     repositoryId: string;
     kind: DirtyReconciliationSubject["kind"];
     githubSubjectId: number;
-    generation: number;
+    generation: string;
   }): Promise<void> {
     return this.reconciliationPacing.discardDirtyReconciliationSubject(input);
   }

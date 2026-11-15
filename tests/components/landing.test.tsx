@@ -248,53 +248,51 @@ describe("landing page", () => {
 
 // Issue 39: the sign-in button, the only control on the signed-out landing page,
 // sat below the fold. The hero h1 held its clamp ceiling at every desktop width
-// and wrapped to four lines, so the button's bottom edge landed at 897px (that
-// figure from about 1333px wide up; 891px at 1280) and the page needed a
-// viewport that tall to show the button at all. Measured in headless Chromium,
-// the shipped stylesheet brings the minimum clearing viewport height to 572px,
-// bisected at 1920, 1440, 1366 and 1280 and constant from 1037 up (571px at
-// 1024, 553px at 800). A 1366x768 laptop panel gives Chrome roughly 625px of
-// viewport once its chrome and a taskbar are subtracted.
+// and wrapped to four lines, so the button's bottom edge landed at 897px; the
+// site header and the line under the lede later held it at 690px under a 6rem
+// ceiling. Measured in headless Chromium, the shipped 4rem ceiling brings the
+// minimum clearing viewport height to 590px, constant from 1245px wide up
+// (635px from 1024 to 1240, where the site header wraps to two rows). A
+// 1366x768 laptop panel gives Chrome roughly 625px of viewport once its chrome
+// and a taskbar are subtracted, so the button clears 1366x625 by 35px.
 //
-// The 96px hero ceiling is a design decision, not a layout constraint. The wrap
-// stays at three lines all the way down to the 2.5rem floor, because the h1's
-// measure is 13ch and scales with the type wherever the ceiling binds (at 800px
-// wide and up; below that the container binds instead). A 4rem ceiling measures
-// a 472px clearing height. 96px buys the hero its presence.
+// The headline wraps to three lines at every width measured, 320 to 1920; the
+// 404 and error-fallback headlines share its selector. At 520px wide and below
+// the line under the lede sets at 14px, tight to the form: the button ends at
+// 572px at 390x600 (621px before), 28px above that fold.
 //
 // WHAT THIS GUARD IS. A proxy. jsdom does no layout, so nothing here can measure
 // where the button lands - the browser measurement above is the evidence, and
 // these are bounds on the terms it rests on. Every one is an upper bound on
 // something that pushes the button down, or a lower bound on a measure that
 // narrowing would wrap into more lines: raising one is a deliberate act, not a
-// number to copy across from a diff. jsdom resolves the cascade, clamp() and vw
-// against window.innerWidth, so the bounds are read at 1440px, where all three
-// clamps sit at their ceilings, and 390px, where all three sit at their floors.
+// number to copy across from a diff. jsdom resolves the cascade and clamp(), and
+// withLandingPageAt hands it the stylesheet with every viewport length already
+// in px, so the bounds are read at 1440px, where all three clamps sit at their
+// ceilings, and 390px, where the padding and lede clamps sit at their floors.
 //
 // WHAT IT IS NOT, in full. It is not a fold check, and cannot become one here -
 // Overflow issue 111 tracks the real fix, which is a browser in CI.
 //   - It cannot see line counts, so a copy change moves the fold silently.
 //   - It cannot see the type faces: the h1's wrap depends on the metrics behind
 //     var(--display), and pinning a font stack would be an equality, not a bound.
-//   - It covers the elements that stack above the button and no others, and the
-//     properties in the table below and no others.
-//   - A border shorthand carrying var() is invisible on any element. This is
-//     the house idiom for every border in globals.css: jsdom collapses it to
-//     style `none` and width 16px, exactly like no border. It can therefore add
-//     up to the declared width per edge to the stack without failing a bound;
-//     a raw-width ceiling of 16px cannot distinguish that collapse either.
-//     On a budgeted edge, a border without var() is caught: both
-//     `border-top: 3rem solid #8a8479` and the currentColor spelling resolve to
-//     solid and 48px. A width without a style occupies no browser space
-//     (border-top-width: 3rem alone on the hero leaves the clearing height at
-//     572px). The button already has a browser-visible style through var(), so
-//     its raw width-only edits at or below 16px remain invisible too
-//     (border-bottom-width: 1rem takes it from 49px to 63px tall).
-//   - font-weight and word-spacing are not bounded and were measured not to
-//     move the button here -
-//     Georgia has no 900 weight and the headline's wrap is measure-bound - so
-//     bounding them would only manufacture a red for a change that renders
-//     identically. white-space and text-wrap have values that could matter and
+//   - It covers the elements in main that stack above the button (the site
+//     header above main is the geometry check's) and the properties below.
+//   - A border shorthand carrying var(), the house idiom for every border in
+//     globals.css, is invisible under jsdom 30: it reads style `none` and
+//     width 0px like no border, as does a width-only edit on top of it, so it
+//     can add any width per edge without failing a bound. jsdom 31 substitutes
+//     var() and the effective bounds see it. On a budgeted edge both catch a
+//     border without var(): `border-top: 3rem solid #8a8479` and the
+//     currentColor spelling resolve to solid and 48px. A width without a style
+//     occupies no browser space (border-top-width: 3rem alone on the hero
+//     leaves the clearing height at 590px), but the button's var() border is
+//     styled (border-bottom-width: 1rem takes it from 49px to 63px tall).
+//   - font-weight is bounded on the page, hero and points line: 900 on any of
+//     them wraps the 390px points line to four lines (572 to 593px); on another
+//     element it measured no move at 1440x600 or 390x600. word-spacing
+//     is bounded wherever 0.3em-3em measured a move; the form's is not, as the
+//     button resets it. white-space and text-wrap have values that could matter and
 //     an ordering this guard cannot establish by measurement. display and
 //     font-family would each have to be pinned as an equality, which is the
 //     thing this table exists not to be.
@@ -311,18 +309,23 @@ describe("landing page", () => {
 //     writing-mode and generated content are also unbounded. These can change
 //     placement or wrapping without violating the table; re-measure in a
 //     browser when changing them.
-//   - It cannot evaluate a media, supports or container condition; those are
-//     pinned as declarations instead. A @layer block is exempt, because an
-//     unlayered declaration always beats a layered one and nothing here is
-//     layered - which stops holding the day anything is.
+//   - It cannot evaluate a condition at the width under test (jsdom 30 applies
+//     only media-type queries, 31 evaluates @media at 1024x768, container
+//     queries never match, @supports ignores width); those are pinned as
+//     declarations instead.
+//     A @layer block is exempt, because an unlayered declaration always beats
+//     a layered one and nothing here is layered - which stops holding the day
+//     anything is.
 //   - It cannot see an at-rule jsdom's parser drops entirely, and does not try.
 //   - It reads both page stylesheets, and refuses an @import rather than pretend to
 //     follow it.
-type SubtreeElement = "page" | "hero" | "eyebrow" | "h1" | "lede" | "form" | "button";
+type SubtreeElement = "page" | "hero" | "eyebrow" | "h1" | "lede" | "trade" | "form" | "button";
 
-// element, property, direction, and the bound at 1440px and at 390px - the
-// values the browser measurement above was taken over. Infinity is `none` or
-// `auto`: an unconstrained measure cannot wrap the text into another line.
+// element, property, direction, and the bound at 1440px and at 390px, from the
+// browser measurement above, except the h1 and lede max-width: jsdom's 0.5em
+// reading of their ch measures, faithful only to a ch declaration: a non-ch
+// max-width in their stylesheet rules is refused, max-inline-size and inline
+// styles are not (the geometry check measures those at its viewports). Infinity is `none` or `auto`.
 type BudgetRow = [SubtreeElement, string, "atMost" | "atLeast", number, number];
 
 const FOLD_BUDGET: BudgetRow[] = [
@@ -335,68 +338,64 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["page", "border-top", "atMost", 0, 0],
   ["page", "font-size", "atMost", 16, 16],
   ["page", "line-height", "atMost", 24, 24],
+  ["page", "word-spacing", "atMost", 0, 0],
+  ["page", "font-weight", "atMost", 400, 400],
   // The hero, whose max-width is the headline's wrap measure above ~102px of type.
   ["hero", "margin-top", "atMost", 0, 0],
   ["hero", "padding-top", "atMost", 0, 0],
   ["hero", "border-top", "atMost", 0, 0],
   ["hero", "line-height", "atMost", 24, 24],
+  ["hero", "word-spacing", "atMost", 0, 0],
+  ["hero", "font-weight", "atMost", 400, 400],
   ["hero", "max-width", "atLeast", 928, 928],
   // The eyebrow: one line of type, the box around it, and the space between it
   // and the headline.
-  ["eyebrow", "margin-top", "atMost", 0, 0],
-  ["eyebrow", "margin-bottom", "atMost", 11.2, 11.2],
-  ["eyebrow", "padding-top", "atMost", 0, 0],
-  ["eyebrow", "padding-bottom", "atMost", 0, 0],
-  ["eyebrow", "border-top", "atMost", 0, 0],
-  ["eyebrow", "border-bottom", "atMost", 0, 0],
-  ["eyebrow", "border-left", "atMost", 0, 0],
-  ["eyebrow", "border-right", "atMost", 0, 0],
-  ["eyebrow", "height", "atMost", 17.28, 17.28],
-  ["eyebrow", "min-height", "atMost", 17.28, 17.28],
-  ["eyebrow", "font-size", "atMost", 11.52, 11.52],
-  ["eyebrow", "line-height", "atMost", 17.28, 17.28],
+  ["eyebrow", "margin-top", "atMost", 0, 0], ["eyebrow", "margin-bottom", "atMost", 11.2, 11.2],
+  ["eyebrow", "padding-top", "atMost", 0, 0], ["eyebrow", "padding-bottom", "atMost", 0, 0],
+  ["eyebrow", "border-top", "atMost", 0, 0], ["eyebrow", "border-bottom", "atMost", 0, 0], ["eyebrow", "border-left", "atMost", 0, 0], ["eyebrow", "border-right", "atMost", 0, 0],
+  ["eyebrow", "height", "atMost", 17.28, 17.28], ["eyebrow", "min-height", "atMost", 17.28, 17.28],
+  ["eyebrow", "font-size", "atMost", 11.52, 11.52], ["eyebrow", "line-height", "atMost", 17.28, 17.28],
   ["eyebrow", "letter-spacing", "atMost", 0.2304, 0.2304],
+  ["eyebrow", "word-spacing", "atMost", 0, 0],
   ["eyebrow", "text-transform", "atMost", 2, 2],
   ["eyebrow", "width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
   ["eyebrow", "max-width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
   // The headline: the measured line box and the terms bounded for wrapping.
-  ["h1", "margin-top", "atMost", 0, 0],
-  ["h1", "margin-bottom", "atMost", 16, 16],
-  ["h1", "padding-top", "atMost", 0, 0],
-  ["h1", "padding-bottom", "atMost", 0, 0],
-  ["h1", "border-top", "atMost", 0, 0],
-  ["h1", "border-bottom", "atMost", 0, 0],
-  ["h1", "border-left", "atMost", 0, 0],
-  ["h1", "border-right", "atMost", 0, 0],
-  ["h1", "height", "atMost", 302.4, 176.4],
-  ["h1", "min-height", "atMost", 302.4, 176.4],
-  ["h1", "font-size", "atMost", 96, 56],
-  ["h1", "line-height", "atMost", 100.8, 58.8],
-  // The 390px values were re-measured after the issue-1067 clamp floor
-  // change: the floor no longer holds the 390px font at 56px (12vw = 46.8px
-  // there), and the button sat at 569px against the 600px fold when measured
-  // in a browser at 390x600 — higher than before, never lower.
-  ["h1", "letter-spacing", "atMost", -4.32, -2.106],
+  ["h1", "margin-top", "atMost", 0, 0], ["h1", "margin-bottom", "atMost", 16, 16],
+  ["h1", "padding-top", "atMost", 0, 0], ["h1", "padding-bottom", "atMost", 0, 0],
+  ["h1", "border-top", "atMost", 0, 0], ["h1", "border-bottom", "atMost", 0, 0], ["h1", "border-left", "atMost", 0, 0], ["h1", "border-right", "atMost", 0, 0],
+  ["h1", "height", "atMost", 201.6, 147.42], ["h1", "min-height", "atMost", 201.6, 147.42],
+  ["h1", "font-size", "atMost", 64, 46.8], ["h1", "line-height", "atMost", 67.2, 49.14],
+  ["h1", "letter-spacing", "atMost", -2.88, -2.106],
+  ["h1", "word-spacing", "atMost", 0, 0],
   ["h1", "text-transform", "atMost", 0, 0],
   ["h1", "width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
-  ["h1", "max-width", "atLeast", 624, 304.2],
-  // The lede: two lines at 1440, four at 390.
-  ["lede", "margin-top", "atMost", 0, 0],
-  ["lede", "margin-bottom", "atMost", 28.8, 28.8],
-  ["lede", "padding-top", "atMost", 0, 0],
-  ["lede", "padding-bottom", "atMost", 0, 0],
-  ["lede", "border-top", "atMost", 0, 0],
-  ["lede", "border-bottom", "atMost", 0, 0],
-  ["lede", "border-left", "atMost", 0, 0],
-  ["lede", "border-right", "atMost", 0, 0],
-  ["lede", "height", "atMost", 84, 120],
-  ["lede", "min-height", "atMost", 84, 120],
-  ["lede", "font-size", "atMost", 28, 20],
-  ["lede", "line-height", "atMost", 42, 30],
+  ["h1", "max-width", "atLeast", 416, 304.2],
+  // The lede: one line at 1440, two at 390.
+  ["lede", "margin-top", "atMost", 0, 0], ["lede", "margin-bottom", "atMost", 28.8, 28.8],
+  ["lede", "padding-top", "atMost", 0, 0], ["lede", "padding-bottom", "atMost", 0, 0],
+  ["lede", "border-top", "atMost", 0, 0], ["lede", "border-bottom", "atMost", 0, 0], ["lede", "border-left", "atMost", 0, 0], ["lede", "border-right", "atMost", 0, 0],
+  ["lede", "height", "atMost", 42, 60], ["lede", "min-height", "atMost", 42, 60],
+  ["lede", "font-size", "atMost", 28, 20], ["lede", "line-height", "atMost", 42, 30],
   ["lede", "letter-spacing", "atMost", 0, 0],
+  ["lede", "word-spacing", "atMost", 0, 0],
   ["lede", "text-transform", "atMost", 0, 0],
   ["lede", "width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
   ["lede", "max-width", "atLeast", 728, 520],
+  // The points line under the lede: two lines at 1440. jsdom cannot apply the
+  // narrow-screen rule pinned below, so the 390 column is the line as measured
+  // without it (four lines of 16px type); with it the browser reads 14px, 0, 63px.
+  ["trade", "margin-top", "atMost", 0, 0], ["trade", "margin-bottom", "atMost", 16, 16],
+  ["trade", "padding-top", "atMost", 0, 0], ["trade", "padding-bottom", "atMost", 0, 0],
+  ["trade", "border-top", "atMost", 0, 0], ["trade", "border-bottom", "atMost", 0, 0], ["trade", "border-left", "atMost", 0, 0], ["trade", "border-right", "atMost", 0, 0],
+  ["trade", "height", "atMost", 48, 96], ["trade", "min-height", "atMost", 48, 96],
+  ["trade", "font-size", "atMost", 16, 16], ["trade", "line-height", "atMost", 24, 24],
+  ["trade", "letter-spacing", "atMost", 0, 0],
+  ["trade", "word-spacing", "atMost", 0, 0],
+  ["trade", "font-weight", "atMost", 400, 400],
+  ["trade", "text-transform", "atMost", 0, 0],
+  ["trade", "width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
+  ["trade", "max-width", "atLeast", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
   // The form wrapping the button contributes nothing of its own today. Its
   // padding-bottom and border-bottom are below the button, so they are absent.
   ["form", "margin-top", "atMost", 0, 0],
@@ -404,29 +403,28 @@ const FOLD_BUDGET: BudgetRow[] = [
   ["form", "border-top", "atMost", 0, 0],
   ["form", "font-size", "atMost", 16, 16],
   ["form", "line-height", "atMost", 24, 24],
-  // The button's own box: 49px tall, 24px below the lede. The raw widths are
-  // bounded here as well as the effective borders, because the shipped
-  // shorthand carries var() - jsdom reads no style through it, so a width-only
-  // change to this element is one the browser uses and the effective bound
-  // cannot see.
+  // The button's own box: 49px tall under a 24px margin, its top and bottom
+  // borders the 2px solid Chrome measured at both widths.
   ["button", "margin-top", "atMost", 24, 24],
   ["button", "padding-top", "atMost", 10.4, 10.4],
   ["button", "padding-bottom", "atMost", 10.4, 10.4],
-  ["button", "border-top", "atMost", 0, 0],
-  ["button", "border-bottom", "atMost", 0, 0],
-  ["button", "border-top-width", "atMost", 16, 16],
-  ["button", "border-bottom-width", "atMost", 16, 16],
+  ["button", "border-top", "atMost", 2, 2],
+  ["button", "border-bottom", "atMost", 2, 2],
   ["button", "min-height", "atMost", 44.8, 44.8],
   ["button", "box-sizing", "atMost", 0, 0],
   ["button", "font-size", "atMost", 16, 16],
   ["button", "line-height", "atMost", 24, 24],
+  ["button", "word-spacing", "atMost", 0, 0],
 ];
 
-// jsdom applies no condition, so a conditional declaration is pinned as text
-// rather than resolved. This one narrows the page's gutter on small screens and
-// was measured to move the button up, never down.
+// jsdom cannot evaluate a condition at the width under test, so a conditional
+// declaration is pinned as text rather than resolved. These narrow the page's
+// gutter and shrink the line under the lede; measured, they move the button up
+// (621.00 to 572.00 at 390x600), never down.
 const CONDITIONAL_OVERRIDES = [
   "page | (max-width: 520px) | .app-shell, .landing-page | width: min(100% - 1.2rem, 1180px)",
+  "trade | (max-width: 520px) | .landing-trade | margin-bottom: 0px",
+  "trade | (max-width: 520px) | .landing-trade | font-size: 0.875rem",
 ];
 
 // Two terms are keywords rather than lengths, so they are compared as a rank:
@@ -438,17 +436,15 @@ const KEYWORD_RANKS: Record<string, Record<string, number>> = {
 };
 
 // The synthetic terms above, and the border styles that occupy no space.
-const EFFECTIVE_BORDERS: Record<string, string> = {
-  "border-top": "border-top",
-  "border-bottom": "border-bottom",
-  "border-left": "border-left",
-  "border-right": "border-right",
-};
+const EFFECTIVE_BORDERS: Record<string, string> = { "border-top": "border-top", "border-bottom": "border-bottom", "border-left": "border-left", "border-right": "border-right" };
 const NO_BORDER = new Set(["none", "hidden", ""]);
+const CH_MEASURED = new Set<SubtreeElement>(["h1", "lede"]);
 
 const BASE_WIDTH = 1440;
 const NARROW_WIDTH = 390;
-const VIEWPORT_HEIGHT = 800;
+// Both columns were measured at x600; the rewrite reads vh at the 625px target.
+const MEASURED_HEIGHT = 600;
+const VIEWPORT_HEIGHT = 625;
 const ROOT_FONT_SIZE = 16;
 
 type ParsedRule = { selectorText: string; condition: string | null; style: CSSStyleDeclaration; cssText: string };
@@ -463,21 +459,31 @@ function landingSubtree(): Array<[SubtreeElement, Element]> {
     ["eyebrow", document.querySelector(".landing-hero .eyebrow")!],
     ["h1", screen.getByRole("heading", { level: 1 })],
     ["lede", document.querySelector(".landing-lede")!],
+    ["trade", document.querySelector(".landing-trade")!],
     ["form", form],
     ["button", button],
   ];
 }
 
-// A fresh mount per width: jsdom resolves vw live from innerWidth, but memoises
-// the computed declaration per element (document._styleCache), so re-reading an
-// element already read at another width returns the earlier answer.
+// jsdom 31 resolves viewport lengths at a fixed 1024x768 whatever innerWidth
+// says, so the physical ones become px at the width under test and the rest
+// (vi/vb, container units falling back to the viewport) are refused.
+const VIEWPORT_LENGTH = /(?<![\w.-])(-?(?:\d+\.?\d*|\.\d+))[sld]?(vw|vh|vmin|vmax)(?![\w-])/gi;
+const UNRESOLVED_LENGTH = /[\d.]+(?:[sld]?(?:vw|vh|vi|vb|vmin|vmax)|cq(?:w|h|i|b|min|max))(?![\w-])/i;
+
+function atViewport(css: string, width: number): string {
+  const sides: Record<string, number> = { vw: width, vh: VIEWPORT_HEIGHT, vmin: Math.min(width, VIEWPORT_HEIGHT), vmax: Math.max(width, VIEWPORT_HEIGHT) };
+  const resolved = css.replace(VIEWPORT_LENGTH, (_, value: string, unit: string) => `${(Number(value) * sides[unit.toLowerCase()]) / 100}px`);
+  const left = UNRESOLVED_LENGTH.exec(resolved);
+  if (left) throw new Error(`the fold budget cannot resolve "${left[0]}" at ${width}px wide; measure the fold in a browser and teach this guard the unit`);
+  return resolved;
+}
+
+// A fresh mount and stylesheet per width: each width's sheet carries its own
+// rewritten viewport lengths.
 function withLandingPageAt<T>(width: number, read: (sheet: CSSStyleSheet) => T): T {
-  const previousWidth = window.innerWidth;
-  const previousHeight = window.innerHeight;
-  window.innerWidth = width;
-  window.innerHeight = VIEWPORT_HEIGHT;
   const style = document.createElement("style");
-  style.textContent = readFileSync("src/app/globals.css", "utf8") + "\n" + readFileSync("src/app/landing.css", "utf8");
+  style.textContent = atViewport(readFileSync("src/app/globals.css", "utf8") + "\n" + readFileSync("src/app/landing.css", "utf8"), width);
   document.head.append(style);
   try {
     render(<LandingPage />);
@@ -485,27 +491,17 @@ function withLandingPageAt<T>(width: number, read: (sheet: CSSStyleSheet) => T):
   } finally {
     cleanup();
     style.remove();
-    window.innerWidth = previousWidth;
-    window.innerHeight = previousHeight;
   }
 }
 
-function toPixels(
-  value: string,
-  fontSize: number,
-  property: string,
-  direction: "atMost" | "atLeast",
-  term: string,
-): number {
+function toPixels(value: string, fontSize: number, property: string, direction: "atMost" | "atLeast", term: string): number {
   const trimmed = value.trim();
   const ranks = KEYWORD_RANKS[property];
   if (ranks) {
     const rank = ranks[trimmed];
     if (rank === undefined) {
-      throw new Error(
-        `${term} resolves to "${value}", a value this guard has no ordering for; measure the fold in ` +
-          "a browser and give it a rank",
-      );
+      throw new Error(`${term} resolves to "${value}", a value this guard has no ordering for; measure the fold in ` +
+        "a browser and give it a rank");
     }
     return rank;
   }
@@ -518,18 +514,17 @@ function toPixels(
   if (trimmed === "none" || trimmed === "auto") {
     return direction === "atMost" ? 0 : Number.POSITIVE_INFINITY;
   }
-  // `normal` is zero spacing; for anything else it is a value this cannot bound.
+  // `normal` is zero spacing and a numeric weight is itself; any other keyword is refused below.
   if (trimmed === "normal" && property.endsWith("-spacing")) return 0;
+  if (property === "font-weight" && /^\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
   const number = Number.parseFloat(trimmed);
   if (!Number.isNaN(number)) {
     if (trimmed.endsWith("px")) return number;
     if (trimmed.endsWith("rem")) return number * ROOT_FONT_SIZE;
     if (/^-?[\d.]+$/.test(trimmed)) return number * fontSize; // a unitless line-height
   }
-  throw new Error(
-    `${term} resolves to "${value}", which this guard cannot compare; measure the fold in a browser ` +
-      "and pin the term in px",
-  );
+  throw new Error(`${term} resolves to "${value}", which this guard cannot compare; measure the fold in a browser ` +
+    "and pin the term in px");
 }
 
 function conditionOf(rule: CSSRule): string {
@@ -538,9 +533,9 @@ function conditionOf(rule: CSSRule): string {
 }
 
 // Every style rule in the sheet, with the condition it sits under. A @layer
-// block is walked as if unconditional: jsdom applies neither, and in a browser
-// an unlayered declaration beats a layered one, so a layered rule cannot
-// override anything this stylesheet declares.
+// block is walked as if unconditional: in a browser an unlayered declaration
+// beats a layered one, so a layered rule cannot override anything this
+// stylesheet declares.
 function styleRules(sheet: CSSStyleSheet): { rules: ParsedRule[]; imports: string[] } {
   const rules: ParsedRule[] = [];
   const imports: string[] = [];
@@ -575,10 +570,8 @@ function appliesTo(element: Element, rule: ParsedRule): boolean {
     return element.matches(rule.selectorText);
   } catch {
     // Refuse to classify rather than assume it does not apply.
-    throw new Error(
-      `the fold budget cannot evaluate the selector "${rule.selectorText}"; measure the fold in a ` +
-        "browser and teach this guard the new shape",
-    );
+    throw new Error(`the fold budget cannot evaluate the selector "${rule.selectorText}"; measure the fold in a ` +
+      "browser and teach this guard the new shape");
   }
 }
 
@@ -588,16 +581,22 @@ describe("landing hero fold budget", () => {
     (width) => {
       // Read inside the mount: a CSSStyleDeclaration is live, and re-resolves to
       // the defaults once the stylesheet and the element are gone.
-      const resolved = withLandingPageAt(width, () => {
+      const resolved = withLandingPageAt(width, (sheet) => {
         const values = new Map<SubtreeElement, Record<string, string>>();
+        const { rules } = styleRules(sheet);
         for (const [label, element] of landingSubtree()) {
+          for (const rule of CH_MEASURED.has(label) ? rules : []) {
+            const measure = rule.style.getPropertyValue("max-width");
+            if (measure && !/^(none|[\d.]+ch)$/.test(measure) && appliesTo(element, rule))
+              throw new Error(`${label} max-width is "${measure}" in ${rule.selectorText}, not a ch measure; measure the fold in a browser and re-derive its bound`);
+          }
           const computed = getComputedStyle(element);
           const read: Record<string, string> = { "font-size": computed.fontSize };
           for (const [owner, property] of FOLD_BUDGET) {
             if (owner !== label) continue;
-            // A border only occupies space if it has a style, and jsdom reports
-            // `medium` - 16px - for a width nobody declared. Reading the pair
-            // together is what tells a declared 15px border from an absent one.
+            // A border only occupies space if it has a style; both jsdom
+            // versions read an unstyled edge as 0px and a styled one with no
+            // declared width as 3px.
             const edge = EFFECTIVE_BORDERS[property];
             read[property] = edge
               ? NO_BORDER.has(computed.getPropertyValue(`${edge}-style`))
@@ -619,7 +618,7 @@ describe("landing hero fold budget", () => {
         // thousandth of a pixel above its own bound in binary floating point.
         const pixels =
           Math.round(toPixels(raw, Number.parseFloat(computed["font-size"]), property, direction, term) * 1000) / 1000;
-        const hint = `${term}: raising this lowers the sign-in button, so measure the fold in a browser at ${width}x600 before changing the bound`;
+        const hint = `${term}: raising this lowers the sign-in button, so measure the fold in a browser at ${width}x${MEASURED_HEIGHT} before changing the bound`;
         // Soft, so one run names every term that moved rather than only the first.
         if (direction === "atMost") expect.soft(pixels, hint).toBeLessThanOrEqual(bound);
         else expect.soft(pixels, hint).toBeGreaterThanOrEqual(bound);
@@ -649,8 +648,8 @@ describe("landing hero fold budget", () => {
 
     expect(
       found,
-      "a conditional declaration reaching the hero: jsdom applies no condition, so measure the fold in " +
-        "a browser at the widths this applies to and pin it in CONDITIONAL_OVERRIDES",
+      "a conditional declaration reaching the hero: jsdom cannot evaluate it at the width under test, so " +
+        "measure the fold in a browser at the widths this applies to and pin it in CONDITIONAL_OVERRIDES",
     ).toEqual(CONDITIONAL_OVERRIDES);
   });
 

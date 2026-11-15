@@ -39,7 +39,7 @@ const otherShellLines = new Set([
   "set -e",
   "git clone https://github.com/Nitjsefnie/Overflow.git /srv/overflow",
   "cd /srv/overflow",
-  "set -a; . /etc/overflow/overflow.env; set +a",
+  ". /srv/overflow/scripts/systemd-env-file.sh; export_env_file /etc/overflow/overflow.env",
   'export OVERFLOW_DATABASE_URL="${OVERFLOW_DATABASE_URL-${DATABASE_URL-}}"',
   "key_name=OVERFLOW_TOKEN_ENCRYPTION_KEY",
   "key_name=TOKEN_ENCRYPTION_KEY",

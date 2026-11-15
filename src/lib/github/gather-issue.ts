@@ -1,4 +1,3 @@
-import { withFreshSweepReads } from "@/lib/fold/sweep-pass";
 import { drainIssueReads, readIssueClosingPullRequests, readIssueOpeningEvidence } from "@/lib/github/drain-issue-reads";
 import type { GitHubIssueListOptions } from "@/lib/github/client";
 import type { GitHubIssueComment, GitHubIssueHistoryEvent, GitHubPullRequest } from "@/lib/github/types";
@@ -38,11 +37,11 @@ export async function gatherIssueEvidence(
     options?.timelineCriticalLabels?.has(label)
     || (options?.timelineWatchedLabels?.has(label) && !labeled.has(label)),
   )));
-  const authoritativeTimeline = suspect ? await withFreshSweepReads(() => reads.timeline(false)) : timeline;
+  const authoritativeTimeline = suspect ? await reads.timeline(false) : timeline;
   if (!openingEvidenceUnreadable && targeted && (!matchesEvidence(authoritativeTimeline) || hasMissingCriticalLabel(authoritativeTimeline))) {
     // A rewrite can make scan-time witnesses stale; re-take them after the reread,
     // which replaces the earlier one; persistent disagreement or a missing standing critical label still refuses.
-    const [freshCount, freshIds] = await withFreshSweepReads(() => reads.witness());
+    const [freshCount, freshIds] = await reads.witness();
     if (!timelineMatchesEvidence(authoritativeTimeline, freshCount, freshIds) || hasMissingCriticalLabel(authoritativeTimeline)) {
       throw new Error(`GitHub issue ${number} timeline completeness could not be verified.`);
     }

@@ -55,6 +55,15 @@ describe("timestamp reconciliation listing driver", () => {
     expect(gl.calls[1]).toEqual({ collection: "issue", updatedAfter: instant(1).toISOString() });
   });
 
+  it("resumes a held absence listing from its collection's recorded point", async () => {
+    const f = fixture([1, 2, 3, 4, 5].map((id) => subject(id))), gl = gitlab(f, 2);
+    for (const fact of f.issues.values()) await f.pass.stage({ anchor: "issue", kind: "issue", subjectKey: fact.id, updatedAt: new Date(fact.updatedAt), payload: fact });
+    // Two walk pages, then the absence listing's first page and boundary slice before the hold.
+    await expect(f.window(4, gl.listing)).rejects.toBeInstanceOf(SweepBudgetSpent);
+    expect((await f.window(100, gl.listing)).issues).toHaveLength(5);
+    expect(gl.calls.filter(({ collection, updatedAfter }) => collection === "issue" && updatedAfter === null)).toHaveLength(1);
+  });
+
   it("resumes a hold inside a 205-subject timestamp slice with one gather per subject", async () => {
     const f = fixture(Array.from({ length: 205 }, (_, i) => subject(i + 1, "issue", 1)));
     const gl = gitlab(f);

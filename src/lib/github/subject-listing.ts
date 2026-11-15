@@ -1,7 +1,6 @@
 import type { WalkSubject } from "@/lib/forge/subject-listing";
 import type { GitHubGateway } from "@/lib/github/client";
 import type { GitHubRepositoryReference } from "@/lib/github/types";
-import { withFreshSweepReads } from "@/lib/fold/sweep-pass";
 
 /** Uses the gateway's budget-checked transport; cursors retain the next Link's query. */
 export async function listSubjectPage(
@@ -12,7 +11,7 @@ export async function listSubjectPage(
   const path = `/repos/${encodeURIComponent(reference.owner)}/${encodeURIComponent(reference.name)}/issues`;
   const query = new URLSearchParams({ state: "all", sort: "updated", direction: "asc", per_page: "100" });
   if (options.since !== undefined) query.set("since", options.since);
-  const response = await withFreshSweepReads(() => deps.request(`${path}${options.cursor ?? `?${query}`}`));
+  const response = await deps.request(`${path}${options.cursor ?? `?${query}`}`);
   const rows: Array<{ id: number; number: number; updated_at?: string; pull_request?: unknown }> = JSON.parse(response.body);
   const subjects = rows.map((row): WalkSubject => {
     const updatedAt = new Date(row.updated_at ?? "");

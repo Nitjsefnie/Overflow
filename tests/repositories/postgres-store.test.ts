@@ -103,10 +103,11 @@ describe("registering a repository against the real registered_repositories cons
     expect(await store.unregisterRepository({ ...submission, provider: "github" })).toMatchObject({
       kind: "UNREGISTERED", repository: { registrationMethod: submission.registrationMethod },
     });
+    await sql`update registered_repositories set webhook_rederivation_owed_at = now() where id = ${created.id}`; // as a release that never clears it leaves the row
     const revived = await store.createRepository({ ...submission, registrationMethod });
     expect(revived).toMatchObject({ id: created.id, registrationMethod });
-    const [row] = await sql`select registration_method from registered_repositories where id = ${created.id}`;
-    expect(row.registration_method).toBe(registrationMethod);
+    const [row] = await sql`select registration_method, webhook_rederivation_owed_at from registered_repositories where id = ${created.id}`;
+    expect(row).toEqual({ registration_method: registrationMethod, webhook_rederivation_owed_at: null });
   });
 
   it.each(["active", "unregistered", "oauth_hook", "gitlab", "inactive"] as const)("finds only an active GitHub App registration: %s", async (state) => {

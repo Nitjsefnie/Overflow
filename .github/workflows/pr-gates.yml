@@ -283,17 +283,32 @@ jobs:
           OVERFLOW_GITLEAKS_REPORT_PATH: gitleaks-report.json
         run: bash scripts/secret-scan.sh
 
+      # Upload once more on failure: the action rethrows a network error
+      # (ETIMEDOUT, ECONNRESET) without retrying, so each first attempt is
+      # tolerated and its identical retry, overwriting whatever the first
+      # left, carries the step's failure.
       # `if: always()` is the only thing that makes a RED run leave the report
       # behind, and the report is what a human reads to learn which commit and
       # which line carried the finding. Uploading a report from a clean run is
       # harmless: it is an empty array.
       - name: Upload the findings report
+        id: upload-findings
         if: ${{ always() }}
+        continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: gitleaks-report
           path: gitleaks-report.json
           if-no-files-found: error
+
+      - name: Upload the findings report (retry)
+        if: ${{ always() && steps.upload-findings.outcome == 'failure' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gitleaks-report
+          path: gitleaks-report.json
+          if-no-files-found: error
+          overwrite: true
 
       # Baseline commits must be reachable from HEAD or from the fetched PR
       # head. This runs after the upload so an unreachable entry does not

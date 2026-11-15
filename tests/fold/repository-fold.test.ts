@@ -680,7 +680,6 @@ describe("foldRepository", () => {
   });
 });
 
-
 it("FINAL-P1 closed contributor PR reaches the filing store through the fold", () => {
   const snapshot = outsiderFixture();
   const landing = snapshot.issues[0]!.closingPullRequests[0]!;

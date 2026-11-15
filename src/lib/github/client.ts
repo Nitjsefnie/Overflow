@@ -10,7 +10,6 @@ import {
 import { getRepositoryHistoryCount } from "@/lib/github/repository-count";
 import { hasNextLink, lastLinkPage } from "@/lib/github/link-pagination";
 import { getCommitAuthor } from "@/lib/github/commit-author";
-import { checkpointSweepRestRequest } from "@/lib/fold/sweep-pass";
 import { z } from "zod";
 import { checkSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
@@ -869,9 +868,6 @@ export class GitHubGateway implements ForgeGateway {
   }
 
   public async request(path: string, init: RequestInit = {}, additionalCredentials: readonly string[] = []): Promise<GitHubRestResponse> {
-    return checkpointSweepRestRequest(["rest", this.apiUrl, path, init.method, init.body], () => this.requestUncached(path, init, additionalCredentials));
-  }
-  private async requestUncached(path: string, init: RequestInit, additionalCredentials: readonly string[]): Promise<GitHubRestResponse> {
     await checkSweepRequestBudget();
     const controller = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;

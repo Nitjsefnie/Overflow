@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SweepBudgetSpent } from "@/lib/fold/sweep-request-budget";
+import { StagedPassDataUnreadable } from "@/lib/fold/sweep-pass";
 import { GitHubApiError, GitHubGraphqlInvalidResponseError, GitHubGraphqlRequestError } from "@/lib/github/errors";
 import { GitHubResponseTooLargeError } from "@/lib/github/response-text";
 import { GitLabApiError } from "@/lib/gitlab/api-error";
@@ -12,10 +13,7 @@ describe("reconciliation walk completion", () => {
     f.issues.get(101)!.title = "Fresh witness for the omitted issue";
     const listPage = f.listing.listPage;
     f.listing.listPage = async (options) => {
-      if (options.since === undefined && options.cursor === "100") {
-        f.live.get(1)!.updatedAt = instant(200);
-        f.issues.get(1)!.updatedAt = instant(200).toISOString();
-      }
+      if (options.since === undefined && options.cursor === "100") { f.live.get(1)!.updatedAt = instant(200); f.issues.get(1)!.updatedAt = instant(200).toISOString(); }
       return listPage(options);
     };
     const result = await f.window(300);
@@ -27,35 +25,49 @@ describe("reconciliation walk completion", () => {
     expect(f.pass.deleteStaged).not.toHaveBeenCalledWith([{ kind: "issue", subjectKey: 101 }]);
   });
 
-  it.each(["null", "404"] as const)("removes a staged issue only after its lookup confirms %s absence", async (answer) => {
-    const f = fixture([subject(1), subject(2)]);
+  it("resumes the absence listing after every held run's record", async () => {
+    const f = fixture(Array.from({ length: 6 }, (_, i) => subject(i + 1)), 1);
     for (const fact of f.issues.values()) await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: fact.id, updatedAt: new Date(fact.updatedAt), payload: fact });
-    f.live.delete(1);
-    f.issues.delete(1);
-    if (answer === "404") f.gateway.gatherIssue = (row) => f.read(`issue:${row.id}`, () => { throw new GitHubApiError(404); });
-    expect((await f.window(20)).issues.map(({ id }) => id)).toEqual([2]);
-    expect(f.requests.filter((key) => key === "issue:1")).toHaveLength(1);
-    expect((await f.pass.readStaged()).map(({ subjectKey }) => subjectKey)).toEqual([2]);
+    // Each budget of 3 spends the walk page and two absence pages; resuming after both records needs the walk page and four.
+    for (const budget of [3, 3]) await expect(f.window(budget)).rejects.toBeInstanceOf(SweepBudgetSpent);
+    expect((await f.window(5)).issues).toHaveLength(6);
+    for (const record of [{}, [{ ...f.live.get(1), anchor: "subjects" }]]) { await f.pass.write("absence-listing:2", record); await expect(f.window(5)).rejects.toBeInstanceOf(StagedPassDataUnreadable); }
   });
 
-  it("rejects completion and retains an omitted issue on a transient lookup failure", async () => {
-    const f = fixture([subject(1), subject(2)]);
+  it.each(["null", "404"] as const)("carries omitted subjects' lookups across holds, deleting only those confirmed %s absent", async (answer) => {
+    const f = fixture([...Array.from({ length: 20 }, (_, i) => subject(i + 1)), subject(502, "pull_request")]), gather = f.gateway.gatherIssue;
     for (const fact of f.issues.values()) await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: fact.id, updatedAt: new Date(fact.updatedAt), payload: fact });
-    f.live.delete(1);
-    const failure = new GitHubApiError(503);
-    f.gateway.gatherIssue = (row) => f.read(`issue:${row.id}`, () => { throw failure; });
+    await f.pass.stage({ anchor: "subjects", kind: "pull_request", subjectKey: 502, updatedAt: instant(502), payload: { subject: { id: 502, number: 502 }, evidence: { reviews: [], rawDiff: "old evidence" } } });
+    for (let id = 11; id <= 20; id++) { f.live.delete(id); if (id <= 15) f.issues.delete(id); }
+    f.live.delete(502); f.pullRequests.delete(502);
+    if (answer === "404") f.gateway.gatherIssue = (row) => f.issues.has(row.id) ? gather(row) : f.read(`issue:${row.id}`, () => { throw new GitHubApiError(404); });
+    if (answer === "404") f.gateway.getPullRequest = (row) => f.read(`pull_request:${row.id}`, () => { throw new GitLabApiError(404); });
+    // Each budget of 6 spends the walk page and an absence page before four of the eleven lookups.
+    for (const held of [1, 2]) await expect(f.window(6), `hold ${held}`).rejects.toBeInstanceOf(SweepBudgetSpent);
+    const kept = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 16, 17, 18, 19, 20];
+    expect([(await f.window(6)).issues.map(({ id }) => id), (await f.pass.readStaged()).map(({ subjectKey }) => subjectKey)]).toEqual([kept, kept]);
+    expect(f.requests.filter((key) => /^(issue|pull_request):/.test(key))).toEqual([...Array.from({ length: 10 }, (_, i) => `issue:${i + 11}`), "pull_request:502"]);
+  });
+
+  it.each(["issue", "pull_request"] as const)("retains an omitted %s and rejects completion on a transient lookup failure", async (kind) => {
+    const f = fixture([subject(1), subject(2), subject(502, "pull_request")]);
+    for (const fact of f.issues.values()) await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: fact.id, updatedAt: new Date(fact.updatedAt), payload: fact });
+    await f.pass.stage({ anchor: "subjects", kind: "pull_request", subjectKey: 502, updatedAt: instant(502), payload: { subject: { id: 502, number: 502 }, evidence: { reviews: [], rawDiff: "old evidence" } } });
+    const [id, failure] = kind === "issue" ? [1, new GitHubApiError(503)] : [502, new GitLabApiError(503)];
+    f.live.delete(id);
+    if (kind === "issue") f.gateway.gatherIssue = (row) => f.read(`issue:${row.id}`, () => { throw failure; });
+    else f.gateway.getPullRequest = (row) => f.read(`pull_request:${row.id}`, () => { throw failure; });
     const before = await f.pass.readStaged();
     let document: unknown;
     await expect((async () => { document = await f.window(20); })()).rejects.toBe(failure);
     expect(document).toBeUndefined();
     expect(await f.pass.readStaged()).toEqual(before);
-    expect(f.requests).toContain("issue:1");
+    expect(f.requests).toContain(`${kind}:${id}`);
     expect(f.pass.deleteStaged).not.toHaveBeenCalled();
   });
 
   it("uses a PR lookup and its stored number to repair an omitted live PR", async () => {
-    const pr = { ...subject(502, "pull_request"), number: 7 };
-    const f = fixture([subject(1), pr]);
+    const pr = { ...subject(502, "pull_request"), number: 7 }, f = fixture([subject(1), pr]);
     await expect(f.window(5)).rejects.toBeInstanceOf(SweepBudgetSpent);
     f.live.delete(pr.id);
     f.gateway.getPullRequestDiff = (row) => f.read(`diff:${row.id}`, () => "Refreshed after omission");
@@ -64,33 +76,6 @@ describe("reconciliation walk completion", () => {
     expect(f.lookups.filter(({ kind, id }) => kind === "issue" && id === 502)).toEqual([]);
     expect((await f.pass.readStaged()).find(({ kind }) => kind === "pull_request")?.payload).toMatchObject({ evidence: { rawDiff: "Refreshed after omission" } });
     expect(f.pass.deleteStaged).not.toHaveBeenCalledWith([{ kind: "pull_request", subjectKey: pr.id }]);
-  });
-
-  it.each(["null", "404"] as const)("confirms %s absence with the PR read before deleting a PR", async (answer) => {
-    const f = fixture([subject(1), subject(502, "pull_request")]);
-    await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: 1, updatedAt: instant(1), payload: f.issues.get(1)! });
-    await f.pass.stage({ anchor: "subjects", kind: "pull_request", subjectKey: 502, updatedAt: instant(502),
-      payload: { subject: { id: 502, number: 502 }, evidence: { reviews: [], rawDiff: "old evidence" } } });
-    f.live.delete(502);
-    f.pullRequests.delete(502);
-    if (answer === "404") f.gateway.getPullRequest = (row) => f.read(`pull_request:${row.id}`, () => { throw new GitLabApiError(404); });
-    await f.window(20);
-    expect(f.requests).toContain("pull_request:502");
-    expect((await f.pass.readStaged()).map(({ kind }) => kind)).toEqual(["issue"]);
-  });
-
-  it("retains an omitted PR and rejects a transient PR lookup failure", async () => {
-    const f = fixture([subject(1), subject(502, "pull_request")]);
-    await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: 1, updatedAt: instant(1), payload: f.issues.get(1)! });
-    await f.pass.stage({ anchor: "subjects", kind: "pull_request", subjectKey: 502, updatedAt: instant(502),
-      payload: { subject: { id: 502, number: 502 }, evidence: { reviews: [], rawDiff: "old evidence" } } });
-    f.live.delete(502);
-    const failure = new GitLabApiError(503);
-    f.gateway.getPullRequest = (row) => f.read(`pull_request:${row.id}`, () => { throw failure; });
-    const before = await f.pass.readStaged();
-    await expect(f.window(20)).rejects.toBe(failure);
-    expect(await f.pass.readStaged()).toEqual(before);
-    expect(f.pass.deleteStaged).not.toHaveBeenCalled();
   });
 
   it("resumes a mid-refresh hold without rereading completed PRs", async () => {
@@ -106,27 +91,17 @@ describe("reconciliation walk completion", () => {
     expect(result.issues[0]?.closingPullRequests[1]).toMatchObject({ id: 9, reviews: [{ id: 19, state: "APPROVED" }], rawDiff: "fresh diff after hold" });
     expect(result.pullRequests).toEqual([{ id: 8, reviews: [], rawDiff: "diff 8" }, { id: 9, reviews: [{ id: 19, state: "APPROVED", submittedAt: instant(40).toISOString(), dismissal: null }], rawDiff: "fresh diff after hold" }]);
     expect(f.counts.get(1)).toBe(1);
-    expect(f.requests.filter((key) => key === "reviews:8")).toHaveLength(1);
-    expect(f.requests.filter((key) => key === "diff:8")).toHaveLength(1);
-    expect(f.requests.filter((key) => key === "reviews:9")).toHaveLength(2);
-    expect(f.requests.filter((key) => key === "diff:9")).toHaveLength(1);
+    expect(["reviews:8", "diff:8", "reviews:9", "diff:9"].map((read) => f.requests.filter((key) => key === read).length)).toEqual([1, 1, 2, 1]);
     expect(f.pass.complete).not.toHaveBeenCalled();
   });
 
   it("returns the uninterrupted document after resuming a committed PR refresh", async () => {
-    const setup = () => {
-      const f = fixture([subject(1)]);
-      f.issues.get(1)!.closingPullRequests = [pullRequest(8), pullRequest(9), pullRequest(10)];
-      return f;
-    };
+    const setup = () => { const f = fixture([subject(1)]); f.issues.get(1)!.closingPullRequests = [pullRequest(8), pullRequest(9), pullRequest(10)]; return f; };
     const f = setup();
     await expect(f.window(5)).rejects.toBeInstanceOf(SweepBudgetSpent);
     const result = await f.window(20);
     expect(result).toEqual(await setup().window(20));
-    for (const id of [8, 9, 10]) {
-      expect(f.requests.filter((key) => key === `reviews:${id}`)).toHaveLength(1);
-      expect(f.requests.filter((key) => key === `diff:${id}`)).toHaveLength(1);
-    }
+    for (const id of [8, 9, 10]) for (const read of ["reviews", "diff"]) expect(f.requests.filter((key) => key === `${read}:${id}`)).toHaveLength(1);
   });
 
   it("completes a large repository's PR refresh across three tiny budget windows", async () => {
@@ -137,16 +112,14 @@ describe("reconciliation walk completion", () => {
       for (const issue of f.issues.values()) await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: issue.id, updatedAt: new Date(issue.updatedAt), payload: issue });
       return f;
     };
+    // 12 requests list the walk page and all 11 absence pages, then 2 resume both listings before 5 refreshes.
     const f = await setup();
-    await expect(f.window(16)).rejects.toBeInstanceOf(SweepBudgetSpent);
-    await expect(f.window(16)).rejects.toBeInstanceOf(SweepBudgetSpent);
-    const result = await f.window(16);
+    await expect(f.window(12)).rejects.toBeInstanceOf(SweepBudgetSpent);
+    await expect(f.window(12)).rejects.toBeInstanceOf(SweepBudgetSpent);
+    const result = await f.window(12);
     expect(result).toEqual(await (await setup()).window(100));
     expect(result.issues).toHaveLength(1005);
-    for (let id = 2001; id <= 2006; id += 1) {
-      expect(f.requests.filter((key) => key === `reviews:${id}`)).toHaveLength(1);
-      expect(f.requests.filter((key) => key === `diff:${id}`)).toHaveLength(1);
-    }
+    for (let id = 2001; id <= 2006; id += 1) for (const read of ["reviews", "diff"]) expect(f.requests.filter((key) => key === `${read}:${id}`)).toHaveLength(1);
     expect(f.pass.walkAnchors().refresh).toEqual({ updatedAt: f.pass.scanStartedAt, key: 2006 });
   });
 
@@ -154,10 +127,7 @@ describe("reconciliation walk completion", () => {
     const f = fixture([subject(1)]);
     f.issues.get(1)!.closingPullRequests = [pullRequest(10)];
     f.repository.disputePullRequests = [{ id: 9, number: 9 }];
-    f.gateway.getPullRequestDiff = (pr) => f.read(`diff:${pr.id}`, () => {
-      if (pr.id === 9) throw new GitHubApiError(404);
-      return "surviving PR";
-    });
+    f.gateway.getPullRequestDiff = (pr) => f.read(`diff:${pr.id}`, () => { if (pr.id === 9) throw new GitHubApiError(404); return "surviving PR"; });
     await expect(f.window(5)).rejects.toBeInstanceOf(SweepBudgetSpent);
     expect(f.pass.walkAnchors().refresh?.key).toBe(9);
     const result = await f.window(20);
@@ -172,16 +142,13 @@ describe("reconciliation walk completion", () => {
     f.issues.get(1)!.closingPullRequests = [pullRequest(8), pullRequest(9)];
     const stage = f.pass.stage;
     let failed = false;
-    f.pass.stage = async (row) => {
-      if (row.anchor === "refresh" && row.subjectKey === 9 && !failed) { failed = true; throw new Error("Refresh staging failed"); }
-      return stage(row);
-    };
+    f.pass.stage = async (row) => { if (row.anchor === "refresh" && row.subjectKey === 9 && !failed) { failed = true; throw new Error("Refresh staging failed"); }
+      return stage(row); };
     await expect(f.window(20)).rejects.toThrow("Refresh staging failed");
     expect(failed).toBe(true);
     expect(f.pass.walkAnchors().refresh?.key).toBe(8);
     expect((await f.window(20)).pullRequests).toHaveLength(2);
-    expect(f.requests.filter((key) => key === "diff:8")).toHaveLength(1);
-    expect(f.requests.filter((key) => key === "diff:9")).toHaveLength(2);
+    expect(["diff:8", "diff:9"].map((read) => f.requests.filter((key) => key === read).length)).toEqual([1, 2]);
   });
 
   it("refreshes a newly referenced PR behind the saved refresh anchor", async () => {
@@ -192,38 +159,26 @@ describe("reconciliation walk completion", () => {
     Object.assign(f.issues.get(1)!, { updatedAt: instant(20).toISOString(), closingPullRequests: [pullRequest(8), pullRequest(9), pullRequest(10)] });
     const result = await f.window(20);
     expect(result.pullRequests.map(({ id }) => id)).toEqual([8, 9, 10]);
-    expect(f.requests.filter((key) => key === "diff:8")).toHaveLength(1);
-    expect(f.requests.filter((key) => key === "diff:9")).toHaveLength(1);
+    expect(["diff:8", "diff:9"].map((read) => f.requests.filter((key) => key === read).length)).toEqual([1, 1]);
   });
 
-  it("invalidates a refreshed PR that disappears from the restarted absence listing", async () => {
+  it("looks up a refreshed listed PR the listing omits once the record that listed it is lost", async () => {
     const f = fixture([subject(1), subject(2, "pull_request"), subject(3, "pull_request")]);
-    f.issues.get(1)!.closingPullRequests = [pullRequest(2), pullRequest(3)];
-    f.repository.disputePullRequests = [{ id: 2, number: 2 }];
-    for (const row of f.live.values()) await f.pass.stage({ anchor: "subjects", kind: row.kind, subjectKey: row.id, updatedAt: row.updatedAt,
-      payload: row.kind === "issue" ? f.issues.get(row.id)! : { subject: { id: row.id, number: row.number }, evidence: { reviews: [], rawDiff: "main walk" } } });
-    await expect(f.window(4)).rejects.toBeInstanceOf(SweepBudgetSpent);
-    expect(f.pass.walkAnchors().refresh?.key).toBe(2);
-    f.live.delete(2);
-    f.pullRequests.delete(2);
-    f.gateway.getPullRequestReviews = (pr) => f.read(`reviews:${pr.id}`, () => {
-      if (pr.id === 2) throw new GitHubApiError(404);
-      return [];
-    });
+    f.issues.get(1)!.closingPullRequests = [pullRequest(2), pullRequest(3)]; f.repository.disputePullRequests = [{ id: 2, number: 2 }];
+    await expect(f.window(13)).rejects.toBeInstanceOf(SweepBudgetSpent);
+    // A page ceiling can drop the absence record; PR 2's refreshed row still says listed.
+    await f.pass.write("absence-listing:0", []);
+    f.live.delete(2); f.pullRequests.delete(2);
+    f.gateway.getPullRequestReviews = (pr) => f.read(`reviews:${pr.id}`, () => { if (pr.id === 2) throw new GitHubApiError(404); return []; });
     const result = await f.window(20);
-    expect(result.pullRequests.map(({ id }) => id)).toEqual([3]);
-    expect(result.missingDisputePrIds).toEqual(new Set([2]));
-    expect(await f.window(20)).toEqual(result);
-    expect(f.requests.filter((key) => key === "reviews:2")).toHaveLength(2);
+    expect([result.pullRequests.map(({ id }) => id), result.missingDisputePrIds]).toEqual([[3], new Set([2])]);
+    expect(f.requests.filter((key) => /^(pull_request|reviews):2$/.test(key))).toEqual(["reviews:2", "reviews:2", "pull_request:2", "reviews:2"]);
   });
 
   it("restores a definitive missing result when a refreshed reference becomes disputed", async () => {
     const f = fixture([subject(1)]);
     f.issues.get(1)!.closingPullRequests = [pullRequest(9), pullRequest(10)];
-    f.gateway.getPullRequestDiff = (pr) => f.read(`diff:${pr.id}`, () => {
-      if (pr.id === 9) throw new GitHubApiError(404);
-      return "surviving PR";
-    });
+    f.gateway.getPullRequestDiff = (pr) => f.read(`diff:${pr.id}`, () => { if (pr.id === 9) throw new GitHubApiError(404); return "surviving PR"; });
     await expect(f.window(5)).rejects.toBeInstanceOf(SweepBudgetSpent);
     expect(f.discarded[0]?.reason).toBe("NOT_FOUND");
     f.repository.disputePullRequests = [{ id: 9, number: 9 }];
@@ -309,11 +264,9 @@ describe("reconciliation walk completion", () => {
 
   it("keeps unreadable-issue markers in staging for the caller's retention policy", async () => {
     const f = fixture([subject(1), subject(2)]);
-    f.issues.get(1)!.openingEvidenceUnreadable = true;
-    f.issues.get(2)!.closingPullRequestsUnreadable = true;
+    f.issues.get(1)!.openingEvidenceUnreadable = true; f.issues.get(2)!.closingPullRequestsUnreadable = true;
     const result = await f.window(20);
-    expect(result.issues[0]?.openingEvidenceUnreadable).toBe(true);
-    expect(result.issues[1]?.closingPullRequestsUnreadable).toBe(true);
+    expect([result.issues[0]?.openingEvidenceUnreadable, result.issues[1]?.closingPullRequestsUnreadable]).toEqual([true, true]);
     expect(f.discarded.map(({ reason }) => reason)).toEqual(["UNREADABLE_FIELD", "UNREADABLE_FIELD"]);
   });
 
@@ -323,17 +276,13 @@ describe("reconciliation walk completion", () => {
   ] as const)("discards only one PR's closing read when its %s is unreadable (disputed: %s), still staging its evidence", async (fieldPath, disputed) => {
       const f = fixture([subject(1), subject(2, "pull_request"), subject(3), subject(4, "pull_request")]);
       if (disputed) f.repository.disputePullRequests = [{ id: 2, number: 2 }];
-      f.issues.get(1)!.closingPullRequests = [pullRequest(2)];
-      f.issues.get(3)!.closingPullRequests = [pullRequest(4)];
+      f.issues.get(1)!.closingPullRequests = [pullRequest(2)]; f.issues.get(3)!.closingPullRequests = [pullRequest(4)];
       f.gateway.getPullRequestClosingIssues = (pr) => f.read(`closing:${pr.id}`, () => {
-        if (pr.id === 2) throw new GitHubGraphqlInvalidResponseError("Unreadable closing read", fieldPath);
-        return [{ id: 3, number: 3, repositoryGitHubId: 42 }];
-      });
+        if (pr.id === 2) throw new GitHubGraphqlInvalidResponseError("Unreadable closing read", fieldPath); return [{ id: 3, number: 3, repositoryGitHubId: 42 }]; });
       const result = await f.window(40);
       expect(f.discarded).toEqual([{ kind: "pull_request", subject: expect.objectContaining({ id: 2 }), reason: "UNREADABLE_FIELD", fieldPath }]);
       // The issue already naming the unreadable PR is still refreshed, as is the healthy PR's.
-      expect(f.counts.get(1)).toBe(2);
-      expect(f.counts.get(3)).toBe(2);
+      expect([f.counts.get(1), f.counts.get(3)]).toEqual([2, 2]);
       expect((await f.pass.readStaged()).find(({ kind, subjectKey }) => kind === "pull_request" && subjectKey === 2)?.payload)
         .toMatchObject({ subject: { id: 2, number: 2 }, evidence: { reviews: [], rawDiff: "diff 2" } });
       expect(result.issues.map(({ id }) => id)).toEqual([1, 3]);
@@ -347,10 +296,7 @@ describe("reconciliation walk completion", () => {
     const f = fixture([subject(1)]);
     if (disputed) f.repository.disputePullRequests = [{ id: 8, number: 8 }];
     f.issues.get(1)!.closingPullRequests = [pullRequest(8), pullRequest(9)];
-    f.gateway.getPullRequestReviews = (pr) => f.read(`reviews:${pr.id}`, () => {
-      if (pr.id === 8) throw new GitHubGraphqlInvalidResponseError("Unreadable evidence read", fieldPath);
-      return [];
-    });
+    f.gateway.getPullRequestReviews = (pr) => f.read(`reviews:${pr.id}`, () => { if (pr.id === 8) throw new GitHubGraphqlInvalidResponseError("Unreadable evidence read", fieldPath); return []; });
     const result = await f.window(20);
     expect(f.discarded).toEqual([{ kind: "pull_request", subject: expect.objectContaining({ id: 8 }), reason: "UNREADABLE_FIELD", fieldPath }]);
     expect(result.pullRequests).toEqual([{ id: 9, reviews: [], rawDiff: "diff 9" }]);

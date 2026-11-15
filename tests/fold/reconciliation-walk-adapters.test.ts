@@ -52,9 +52,9 @@ describe("the GitHub walk adapter", () => {
   it.each(["null", "not-found"] as const)("skips a %s PR lookup and discards the pass snapshot's true PR identity", async (lookup) => {
     const { github, numbers } = fixture(lookup);
     const pass = memoryPass();
-    pass.dirtySubjects.push({ kind: "ISSUE", id: 701, number: 7, generation: 1 },
-      { kind: "PULL_REQUEST", id: 902, number: 8, generation: 2 },
-      { kind: "PULL_REQUEST", id: 901, number: 7, generation: 3 });
+    pass.dirtySubjects.push({ kind: "ISSUE", id: 701, number: 7, generation: "1" },
+      { kind: "PULL_REQUEST", id: 902, number: 8, generation: "2" },
+      { kind: "PULL_REQUEST", id: 901, number: 7, generation: "3" });
     const onDiscard = vi.fn(async () => {});
     const result = await github.walkReconciliation(reference, {
       pass, repository: { githubRepositoryId: 42, disputePullRequests: [] }, onDiscard,
@@ -82,7 +82,7 @@ describe("the GitHub walk adapter", () => {
   ] as const)("propagates a %s PR lookup without discarding the subject", async (lookup, status, rateLimited) => {
     const { github } = fixture(lookup);
     const pass = memoryPass();
-    pass.dirtySubjects.push({ kind: "PULL_REQUEST", id: 901, number: 7, generation: 3 });
+    pass.dirtySubjects.push({ kind: "PULL_REQUEST", id: 901, number: 7, generation: "3" });
     const onDiscard = vi.fn(async () => {});
     await expect(github.walkReconciliation(reference, {
       pass, repository: { githubRepositoryId: 42, disputePullRequests: [] }, onDiscard,
@@ -94,7 +94,7 @@ describe("the GitHub walk adapter", () => {
   it("propagates a budget hold at PR normalization without discarding the subject", async () => {
     const { github } = fixture();
     const pass = memoryPass();
-    pass.dirtySubjects.push({ kind: "PULL_REQUEST", id: 901, number: 7, generation: 3 });
+    pass.dirtySubjects.push({ kind: "PULL_REQUEST", id: 901, number: 7, generation: "3" });
     const onDiscard = vi.fn(async () => {});
     const heldUntil = new Date(at);
     let spent = 0;

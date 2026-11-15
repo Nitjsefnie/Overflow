@@ -1,0 +1,1 @@
+alter table registered_repositories add column webhook_rederivation_owed_at timestamptz;

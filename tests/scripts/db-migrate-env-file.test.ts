@@ -9,7 +9,6 @@ import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-director
 const fixtureDirectories = createOwnedTempDirectoryRegistry(join(tmpdir(), "db-migrate-env-file-"));
 afterAll(() => fixtureDirectories.dispose());
 
-
 // Run the documented command against a probe to observe its .env-loading behavior.
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const sentinel = "OVERFLOW_DB_MIGRATE_SENTINEL";

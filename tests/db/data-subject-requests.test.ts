@@ -1059,7 +1059,6 @@ describe("whole branch review regressions", () => {
         where repository_id = ${repositoryId} and github_issue_id = ${personIssueId}
       `;
 
-
     await double.run();
     await removeForgePerson(sql,{provider:'github',forgeId},{confirm:true});
     await removeForgePerson(sql,{provider:'github',forgeId},{confirm:true});
@@ -1157,7 +1156,6 @@ describe("whole branch review regressions", () => {
         where issues.repository_id = ${repositoryId} and issues.github_issue_id = ${personIssueId}
       `;
 
-
     const [person]=await sql`insert into users (github_user_id,github_login) values (${forgeId},${login}) returning id`;
     await double.run();
     const [before]=await personSettlementRow();
@@ -1207,7 +1205,6 @@ describe("identity authority and access inventory", () => {
     expect(repeated.logins).toEqual(doc.logins);
     expect(repeated.logins).not.toContain(DATA_SUBJECT_TOMBSTONE_LOGIN);
   });
-
 });
 
   it("review: GitHub removal clears the linked GitLab token of the deleted account", async () => {
@@ -1301,7 +1298,6 @@ describe("identity authority and access inventory", () => {
         ),
     };
 
-
     await double.run();
     await removeForgePerson(sql,{provider:'github',forgeId},{confirm:true});
     const opening=double.issues[0]!.history[0]!;
@@ -1314,7 +1310,6 @@ describe("identity authority and access inventory", () => {
     if (actorIsSubject) expect(JSON.stringify(actual)).not.toContain(login);
     else expect(actual[0]!.violation.reason).toContain(login);
    });
-
 
   it("exports linked identities with secret presence flags for a GitHub account", async () => {
     const seed = await seedHandScenario();

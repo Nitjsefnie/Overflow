@@ -320,8 +320,8 @@
     12927
   ],
   "scripts/check-page-geometry.mjs": [
-    24084,
-    46742
+    23970,
+    46649
   ],
   "scripts/check-prerendered-routes.ts": [
     543,
@@ -456,8 +456,8 @@
     1269
   ],
   "scripts/prune-noop-reconciliation-changes.ts": [
-    4255,
-    10953
+    4251,
+    10949
   ],
   "scripts/secret-scan-baseline.sh": [
     2781,
@@ -698,10 +698,6 @@
   "src/lib/controller-config.ts": [
     2235,
     3397
-  ],
-  "src/lib/dashboard/eligible-issues.ts": [
-    2470,
-    15454
   ],
   "src/lib/dashboard/labels.ts": [
     550,

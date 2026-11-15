@@ -2,7 +2,6 @@ import type { WalkSubject } from "@/lib/forge/subject-listing";
 import type { GitHubRepositoryReference } from "@/lib/github/types";
 import type { GitLabRestResponse } from "@/lib/gitlab/client";
 import { responseJsonArray } from "@/lib/gitlab/api-error";
-import { withFreshSweepReads } from "@/lib/fold/sweep-pass";
 
 export type GitLabSubjectsPageOptions = {
   collection: "issue" | "pull_request";
@@ -27,7 +26,7 @@ export async function listGitLabSubjectsPage(
   if (options.updatedAfter !== null) query.set("updated_after", options.updatedAfter);
   if (options.updatedBefore !== undefined) query.set("updated_before", options.updatedBefore);
   const target = `${path}?${query}`;
-  const response = await withFreshSweepReads(() => deps.request(target));
+  const response = await deps.request(target);
   const rows = await responseJsonArray<SubjectRow>(response, target);
   for (const row of rows) {
     if (typeof row.updated_at !== "string" || Number.isNaN(Date.parse(row.updated_at))) {

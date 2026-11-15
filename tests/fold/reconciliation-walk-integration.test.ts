@@ -16,7 +16,7 @@ import { RECONCILIATION_EVIDENCE_FORMAT } from "@/lib/fold/reconciliation-eviden
 import { materializeRepositoryFixture } from "../support/materialized-repository";
 import { verifiedRepositoryAt } from "../support/verified-repository";
 import { startPostgresContainer } from "../support/postgres-container";
-import { issue, pullRequest } from "./reconciliation-walk-fixture";
+import { instant, issue, pullRequest, subject } from "./reconciliation-walk-fixture";
 
 let sql: Sql;
 let container: StartedTestContainer;
@@ -162,6 +162,37 @@ describe("a budget-bound reconciliation walk", () => {
     expect(await sql`select * from reconciliation_sweep_walk_subjects where pass_id = ${pass!.pass_id}`).toEqual([]);
   });
 
+  it("spends no request on an issue staged with a gathered payload no older than its listing, ahead of the anchor too", async () => {
+    const f = await fixture();
+    // Issue 11 lists before PR 12, issues 13, 14 and 16 after it; gathering the PR stages all four through its repair path.
+    const facts = new Map([11, 13, 14, 16].map((id) => [id, issue(id)]));
+    const pages = [[subject(11), subject(12, "pull_request")], [subject(13), subject(14), subject(16)]];
+    const reads: number[] = []; let hold = true, missing = 16;
+    f.gateway.walkReconciliation = (_reference, input) => walkReconciliation({ ...input,
+      listing: { kind: "cursor", listPage: async ({ cursor }) => {
+        if (cursor !== null && hold) { hold = false; f.state.limit = 0; } await checkSweepRequestBudget();
+        return { subjects: structuredClone(pages[Number(cursor ?? 0)]!), nextCursor: cursor === null ? "1" : null };
+      } },
+      gateway: { getPullRequest: async () => null, getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",
+        getPullRequestClosingIssues: async () => [11, 13, 14, 16].map((id) => ({ id, number: id, repositoryGitHubId: f.repository.githubRepositoryId })),
+        gatherIssue: async ({ id }) => { await checkSweepRequestBudget(); reads.push(id); // a discarded gather stages a placeholder
+          if (id === missing) { missing = 0; throw new GitHubApiError(404); } return structuredClone(facts.get(id)!); } } });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try { expect(await f.run("SWEEP")).toMatchObject({ skipped: true }); } finally { log.mockRestore(); }
+    expect(await sql`select walk_anchors->'subjects' as anchor from reconciliation_sweep_passes where repository_id = ${f.repositoryId}`)
+      .toEqual([{ anchor: { updated_at: instant(12).toISOString(), key: 12 } }]);
+    expect(await sql`select subject_key, updated_at from reconciliation_sweep_walk_subjects join reconciliation_sweep_passes using (pass_id)
+      where repository_id = ${f.repositoryId} and kind = 'issue' order by subject_key`).toEqual(
+      [[11, instant(11)], [13, instant(13)], [14, instant(14)], [16, at]].map(([key, updatedAt]) => ({ subject_key: String(key), updated_at: updatedAt })));
+    pages[1]![1] = subject(14, "issue", 15); // updated after its repair gather staged it
+    facts.get(14)!.updatedAt = instant(15).toISOString(); f.state.limit = Infinity;
+    expect((await f.run("SWEEP")).skipped).toBe(false);
+    // 11 is re-gathered for its PR; 13 is skipped; the listing (not the absence pass) gathers the older-staged 14 and placeholder 16.
+    expect(reads).toEqual([11, 11, 13, 14, 16, 14, 16]);
+    expect((await f.store.getReconciliationEvidence(f.repositoryId))?.issues.map(({ id, updatedAt }) => [id, updatedAt])).toEqual(
+      [11, 13, 14, 16].map((id) => [id, facts.get(id)!.updatedAt]));
+  });
+
   it("runs the walk through the lazy sponsor gateway", async () => {
     const f = await fixture();
     const gateway = sponsorGateway(f.store, f.repositoryId, () => f.gateway);
@@ -239,13 +270,15 @@ describe("a budget-bound reconciliation walk", () => {
     const f = await fixture();
     f.store.getRepository = async () => ({ ...f.repository, disputePullRequests: [{ id: 901, number: 7 }] });
     f.state.prFailure = new GitHubApiError(406);
-    await sql`insert into repository_reconciliation_dirty_subjects (repository_id, kind, github_subject_id, subject_number)
-      values (${f.repositoryId}, 'PULL_REQUEST', 901, 7)`;
+    await sql`insert into repository_reconciliation_dirty_subjects (repository_id, kind, github_subject_id, subject_number, generation)
+      values (${f.repositoryId}, 'PULL_REQUEST', 901, 7, ${String(2n ** 53n + 1n)})`;
     const [dirty] = await f.store.getDirtyReconciliationSubjects(f.repositoryId);
     const discard = vi.spyOn(f.store, "discardDirtyReconciliationSubject");
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    // A failed publication acknowledges nothing, so only the discard can remove the dirty row.
+    f.materialize.mockRejectedValueOnce(new Error("Publication failed after the discard."));
     try {
-      await f.run("SWEEP");
+      await expect(f.run("SWEEP")).rejects.toThrow();
       expect(log).toHaveBeenCalledWith(`Reconciliation of repository ${f.repositoryId} discarded unresolvable subject kind=PULL_REQUEST number=7 reason=DIFF_TOO_LARGE`);
       expect(discard).toHaveBeenCalledWith({ repositoryId: f.repositoryId, kind: "PULL_REQUEST", githubSubjectId: 901, generation: dirty!.generation });
       expect(await f.store.getDirtyReconciliationSubjects(f.repositoryId)).toEqual([]);

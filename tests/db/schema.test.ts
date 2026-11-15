@@ -3241,7 +3241,7 @@ describe("initial PostgreSQL materialization", () => {
     const rejectedState = {
       githubIssueId,
       kind: "SETTLEMENT_EVIDENCE_REJECTED",
-      githubPullRequestId,
+      githubPullRequestId, unlabelledSelfWork: false,
       reason: "No nonblank rationale comment by the repository sponsor's account (login `materialization-sponsor`) was posted between fifteen minutes before the label at 2026-09-01T11:00:00.000Z and fifteen minutes after the merge at 2026-09-01T12:00:00.000Z.",
     };
     const store = new PostgresFoldStore(sql);

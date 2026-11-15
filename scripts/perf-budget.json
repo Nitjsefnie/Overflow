@@ -1,5 +1,8 @@
 {
   "board-load": 2,
   "repository-fold": 43,
+  "repository-held-sweep-fold": 45,
+  "repository-inactive-fold": 20,
+  "repository-sweep-fold": 105,
   "webhook-ingestion": 10
 }

@@ -295,14 +295,25 @@ describe("completed-work receiving limits against PostgreSQL", () => {
   it("counts contributions against the balance after moderation but never counts a reversal as repayment", async () => {
     const sponsor = await account();
     const worker = await account();
-    const debt = await settle(worker, sponsor, 10, 1);
+    // The adjustment names a settlement between two other accounts, so deleting it moves no sponsor leg.
+    const anchor = await settle(await account(), await account(), 1, 9);
+    await settle(worker, sponsor, 10, 1);
     await settle(sponsor, worker, 10, 2);
-    const adjustmentId = await adjustment(sponsor, worker, debt.id, 10, 3);
+    const adjustmentId = await adjustment(sponsor, worker, anchor.id, 10, 3);
     await settle(sponsor, worker, 10, 4);
     // The contribution repaid ten credits of adjusted debt, too.
     expect(await creditState(sponsor)).toEqual({ balance: 0, repaidDebt: 20, creditLimit: 12 });
-    await adjustment(sponsor, worker, debt.id, -10, 5, adjustmentId);
+    await adjustment(sponsor, worker, anchor.id, -10, 5, adjustmentId);
     expect(await creditState(sponsor)).toEqual({ balance: 10, repaidDebt: 20, creditLimit: 12 });
+    // At -11 the limit of 12 boards both openings and 11 only the exception: the view and the board
+    // keep counting the adjustment after its settlement is deleted (migration 091).
+    const next = await issue(sponsor.repositoryId, "OPEN");
+    for (const credits of [10, 10, 1]) await settle(worker, sponsor, credits, 6);
+    const facts = async () => [await creditState(sponsor), await board(sponsor, worker)];
+    const expected = [{ balance: -11, repaidDebt: 20, creditLimit: 12 }, [sponsor.issueId, next]];
+    expect(await facts()).toEqual(expected);
+    await sql`delete from settlements where id = ${anchor.id}`;
+    expect(await facts()).toEqual(expected);
   });
 
   it("does not grow either limit from adjustment credits or reversal credits received while indebted", async () => {

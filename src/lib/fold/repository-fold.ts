@@ -228,6 +228,8 @@ export type UnwritableClosure = {
     | "CLOSING_EVIDENCE_UNREADABLE";
   githubPullRequestId: number | null;
   reason: string;
+  /** The sponsor's own closure had no actual-catalog label standing or applied later: nothing for a moderator to price. */
+  unlabelledSelfWork?: true;
 };
 
 export type SettlementEvidenceViolationCode = "SETTLED_LABEL_UNAUTHORIZED" | "SETTLED_RATIONALE_EDITED";
@@ -350,7 +352,7 @@ type RejectionReach =
   | { kind: "WINDOW"; refusedEvidenceAt: string | null };
 type SettledDifficultyResolution =
   | { kind: "accepted"; evidence: SettledDifficultyEvidence }
-  | { kind: "rejected"; reason: string; reach: RejectionReach; violation?: SettlementEvidenceViolationCode };
+  | { kind: "rejected"; reason: string; reach: RejectionReach; violation?: SettlementEvidenceViolationCode; unlabelled?: true };
 
 type AuthoritativeClosingPullRequest = RepositoryFoldPullRequest & {
   mergedAt: string;
@@ -546,6 +548,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
         kind: "SETTLEMENT_EVIDENCE_REJECTED",
         githubPullRequestId: pullRequest.id,
         reason: settledResolution.reason,
+        ...(settledResolution.unlabelled === true && author?.id === sponsor.id && { unlabelledSelfWork: true as const }),
       });
     }
 
@@ -953,15 +956,14 @@ function resolveSettledDifficulty(
       ? ""
       : ` The earliest later application, \`${earliestLaterApplication.label}\` at ${new Date(earliestLaterApplication.createdAt).toISOString()}, came after that window.`;
     return {
-      kind: "rejected",
-      reach: windowReach,
+      kind: "rejected", reach: windowReach,
+      ...(earliestLaterApplication === undefined && { unlabelled: true as const }),
       reason: `No configured actual-catalog label was standing on the issue by fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.${laterApplication}`,
     };
   }
   if (activeLabels.size > 1) {
     return {
-      kind: "rejected",
-      reach: windowReach,
+      kind: "rejected", reach: windowReach,
       reason: `Several actual-catalog labels were standing on the issue by fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}: ${[...activeLabels.keys()].sort().map((label) => `\`${label}\``).join(", ")}. Exactly one is required.`,
     };
   }
@@ -972,8 +974,7 @@ function resolveSettledDifficulty(
     sourceTime > mergeTime + EVIDENCE_ORDERING_GRACE_MS
   ) {
     return {
-      kind: "rejected",
-      reach: windowReach,
+      kind: "rejected", reach: windowReach,
       reason: `The settled label \`${label}\` was applied at ${new Date(source.createdAt).toISOString()}, outside the window from fifteen minutes before the final commit at ${new Date(pullRequest.finalCommitAt).toISOString()} to fifteen minutes after the merge at ${new Date(pullRequest.mergedAt).toISOString()}.`,
     };
   }
@@ -1053,8 +1054,7 @@ function resolveSettledDifficulty(
   const duplicatedDatabaseId = findDuplicatedDatabaseId(tieGroup);
   if (missingDatabaseIdCount > 1 || duplicatedDatabaseId !== undefined) {
     return {
-      kind: "rejected",
-      reach: windowReach,
+      kind: "rejected", reach: windowReach,
       reason: duplicatedDatabaseId === undefined
         ? `Several qualifying rationale comments by ${repositorySponsorPhrase(raterLogin)} share the instant ${new Date(Date.parse(rationale.createdAt)).toISOString()} without GitHub database ids, so no evidence-backed rule can order them.`
         : `Several qualifying rationale comments by ${repositorySponsorPhrase(raterLogin)} share the instant ${new Date(Date.parse(rationale.createdAt)).toISOString()}, and more than one carries the GitHub database id ${duplicatedDatabaseId}, so the ids cannot order them.`,

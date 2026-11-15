@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -44,13 +44,14 @@ import { parse } from "yaml";
  *    detect step has run, and `... != 'true'` must still hold then — that is
  *    what lets the test step run at all.
  *
- * ONE LIMITATION is deliberate and stated rather than modelled: the selector
- * assumes every preceding step succeeded, which is what GitHub's implicit
- * `success()` on a step carrying no `if:` means, and it never simulates a
- * cancelled or failed job. A status function's suppression of that requirement
- * is therefore invisible to it — `!cancelled()` appended to a test step's
- * condition, or `always()`, would leave every verdict below unchanged even
- * though it changes what a cancelled run executes.
+ * ONE LIMITATION is deliberate and stated rather than modelled: the scenarios
+ * assume every preceding step succeeded, which is what GitHub's implicit
+ * `success()` on a step carrying no `if:` means, and never simulate a
+ * cancelled or failed job (only Half 4's upload pairs run on a red one). A
+ * status function's suppression of that requirement is therefore invisible to
+ * them — `!cancelled()` appended to a test step's condition, or `always()`,
+ * would leave every scenario verdict unchanged even though it changes what a
+ * cancelled run executes.
  *
  * Reordering tolerance is deliberate: the assertions are membership plus the
  * one order that carries meaning (migrations before tests), never an absolute
@@ -97,20 +98,7 @@ export type JobStatus = "success" | "failure" | "cancelled";
  * `steps.detect-docs.outputs.docs_only != 'true'` depends on before
  * detect-docs has run.
  */
-const CONTEXT_ROOTS = [
-  "env",
-  "github",
-  "inputs",
-  "job",
-  "jobs",
-  "matrix",
-  "needs",
-  "runner",
-  "secrets",
-  "steps",
-  "strategy",
-  "vars",
-];
+const CONTEXT_ROOTS = ["env", "github", "inputs", "job", "jobs", "matrix", "needs", "runner", "secrets", "steps", "strategy", "vars"];
 
 /** The status functions, and what each reports for a job status. `always()` is
  *  the only one that is not a comparison. */
@@ -467,11 +455,7 @@ function unwrap(expression: string): string {
  * It never returns `false` to mean "I did not understand this": see the header
  * for why that would be the defect this suite exists to close.
  */
-export function evaluateExpression(
-  expression: string,
-  context: ActionsContext = {},
-  status: JobStatus = "success",
-): ExpressionValue {
+export function evaluateExpression(expression: string, context: ActionsContext = {}, status: JobStatus = "success"): ExpressionValue {
   try {
     return evaluate(parseExpression(unwrap(expression)), context, status);
   } catch (error) {
@@ -483,25 +467,34 @@ export function evaluateExpression(
   }
 }
 
+/** Whether an `if:` calls a status function, which is what stops GitHub adding
+ *  its implicit `success() &&`. Read from the parse tree, so `'always()'` as a
+ *  string literal is not a call. */
+function callsStatusFunction(expression: string): boolean {
+  const walk = (node: Node): boolean =>
+    node.kind === "status" || (node.kind === "not" && walk(node.operand)) ||
+    ((node.kind === "and" || node.kind === "or" || node.kind === "compare") && (walk(node.left) || walk(node.right)));
+  return walk(parseExpression(unwrap(expression)));
+}
+
 /** Whether GitHub would select this step in this context.
  *
- *  - A step with no `if:` is selected: no failures are assumed, and the only
- *    job this suite simulates has every step succeeding.
+ *  - A step with no `if:`, or one calling no status function, also needs a
+ *    green job: GitHub adds `success() &&` to it (the scenarios stay green).
  *  - A `continue-on-error` step IS selected. Selection is about whether the
  *    runner executes the step at all; whether its failure gates anything is a
  *    separate question, and the assertions below ask it separately. Folding
  *    the second question into this one would make the suite unable to say that
  *    a tolerated step does not gate. */
 function isSelected(step: WorkflowStep, context: ActionsContext, status: JobStatus): boolean {
-  if (step.if === undefined) return true;
-  if (typeof step.if === "boolean") return step.if;
+  if (step.if === undefined || typeof step.if === "boolean") return step.if !== false && status === "success";
   if (typeof step.if !== "string") {
     throw new Error(
       `the \`if:\` of step ${JSON.stringify(step.name ?? step.uses ?? step.id ?? "unnamed")} must be a ` +
         `string expression or a boolean, not ${JSON.stringify(step.if)}`,
     );
   }
-  return toBoolean(evaluateExpression(step.if, context, status));
+  return toBoolean(evaluateExpression(step.if, context, status)) && (status === "success" || callsStatusFunction(step.if));
 }
 
 /**
@@ -513,11 +506,7 @@ function isSelected(step: WorkflowStep, context: ActionsContext, status: JobStat
  * exists to remove — the assertions would be reading a list built to satisfy
  * them.
  */
-export function selectSteps(
-  steps: readonly WorkflowStep[],
-  context: ActionsContext,
-  status: JobStatus = "success",
-): WorkflowStep[] {
+export function selectSteps(steps: readonly WorkflowStep[], context: ActionsContext, status: JobStatus = "success"): WorkflowStep[] {
   return steps.filter((step) => isSelected(step, context, status));
 }
 
@@ -664,6 +653,10 @@ function shellWords(command: string): string[] {
  * The completeness assertion below is what closes it, and it closes it by
  * comparing this table against the workflow rather than trusting it.
  */
+/** An upload's first attempt; its retry (`overwrite: true`) is held to it by Half 4. */
+const isFirstUpload = (step: WorkflowStep) =>
+  (step.uses ?? "").startsWith("actions/upload-artifact@") && step.with?.overwrite !== true;
+
 const COVERAGE_ARTIFACTS: { label: string; matches: (step: WorkflowStep) => boolean }[] = [
   {
     label: "the patch coverage report",
@@ -672,12 +665,12 @@ const COVERAGE_ARTIFACTS: { label: string; matches: (step: WorkflowStep) => bool
   {
     label: "the patch coverage upload",
     matches: (step) =>
-      (step.uses ?? "").startsWith("actions/upload-artifact@") && step.with?.name === "patch-coverage",
+      isFirstUpload(step) && step.with?.name === "patch-coverage",
   },
   {
     label: "the coverage summary upload",
     matches: (step) =>
-      (step.uses ?? "").startsWith("actions/upload-artifact@") && step.with?.name === "coverage-summary",
+      isFirstUpload(step) && step.with?.name === "coverage-summary",
   },
 ];
 
@@ -743,9 +736,7 @@ function contextFor(scenario: Scenario): ActionsContext {
   };
 }
 
-function label(step: WorkflowStep): string {
-  return step.name ?? step.uses ?? step.id ?? "(unnamed step)";
-}
+function label(step: WorkflowStep): string { return step.name ?? step.uses ?? step.id ?? "(unnamed step)"; }
 
 function runsContaining(steps: readonly WorkflowStep[], needle: string): WorkflowStep[] {
   return steps.filter((step) => (step.run ?? "").includes(needle));
@@ -769,12 +760,7 @@ function captureError(run: () => unknown): string {
  */
 const LEGS = ["ci-pr.yml", "ci.yml"] as const;
 type Leg = (typeof LEGS)[number];
-type ParsedLeg = {
-  steps: WorkflowStep[];
-  outputs: Record<string, unknown>;
-  if: unknown;
-  events: string[];
-};
+type ParsedLeg = { steps: WorkflowStep[]; outputs: Record<string, unknown>; if: unknown; events: string[] };
 
 const legs = new Map<Leg, ParsedLeg>();
 
@@ -807,9 +793,7 @@ function legOf(scenario: Scenario): ParsedLeg {
 }
 
 /** The verify steps of the file a scenario runs in. */
-function stepsFor(scenario: Scenario): WorkflowStep[] {
-  return legOf(scenario).steps;
-}
+function stepsFor(scenario: Scenario): WorkflowStep[] { return legOf(scenario).steps; }
 
 /**
  * The push leg — the only one that measures coverage and therefore the only
@@ -1177,7 +1161,7 @@ describe("the docs-only detection the scenarios above assume", () => {
     // The table describes the leg that MEASURES coverage. The pull-request leg
     // is checked for carrying none of them separately, below.
     const measureLeg = legs.get(COVERAGE_LEG)!.steps;
-    const inWorkflow = measureLeg.filter(namesCoverageArtifact);
+    const inWorkflow = measureLeg.filter((step) => namesCoverageArtifact(step) && step.with?.overwrite !== true);
     const matched = measureLeg.filter((step) =>
       COVERAGE_ARTIFACTS.some((artifact) => artifact.matches(step)),
     );
@@ -1480,9 +1464,7 @@ const ZIZMOR_PIN_RUN_TEXT = [
 ].join("\n");
 
 /** Sanctioned only when the named step is byte-identical to the pinned run text. */
-function isSanctionedZizmorPinStep(step: WorkflowStep): boolean {
-  return (step.run ?? "") === ZIZMOR_PIN_RUN_TEXT;
-}
+function isSanctionedZizmorPinStep(step: WorkflowStep): boolean { return (step.run ?? "") === ZIZMOR_PIN_RUN_TEXT; }
 
 /**
  * Issue 1035: the suppression-list divergence gate is the second inline
@@ -1863,13 +1845,9 @@ const SUPPRESSION_PIN_RUN_TEXT = [
 ].join("\n");
 
 /** Sanctioned only when the named step is byte-identical to the pinned run text. */
-function isSanctionedSuppressionStep(step: WorkflowStep): boolean {
-  return (step.run ?? "") === SUPPRESSION_PIN_RUN_TEXT;
-}
+function isSanctionedSuppressionStep(step: WorkflowStep): boolean { return (step.run ?? "") === SUPPRESSION_PIN_RUN_TEXT; }
 /** A run block that invokes pip or pip3 at all — the one-step allowance is judged over this set. */
-function runsPip(step: WorkflowStep): boolean {
-  return /(?<![\w./-])pip3?(?![\w-])/.test(step.run ?? "");
-}
+function runsPip(step: WorkflowStep): boolean { return /(?<![\w./-])pip3?(?![\w-])/.test(step.run ?? ""); }
 
 /** Commands that run a package manager, which would install or execute the
  *  pull request's dependencies, lifecycle scripts or package.json scripts. */
@@ -1889,9 +1867,7 @@ const BASE_SCRIPT = /^(?:\$GITHUB_WORKSPACE|\$\{GITHUB_WORKSPACE\})\/scripts\/[\
  *  anything from the tree they operate on. */
 const PRT_ACTIONS = ["actions/checkout@", "actions/setup-node@", "actions/download-artifact@"];
 
-function unquoted(word: string): string {
-  return word.replaceAll("'", "").replaceAll('"', "");
-}
+function unquoted(word: string): string { return word.replaceAll("'", "").replaceAll('"', ""); }
 
 /** Every reason one step's run block executes something other than the base
  *  checkout's own scripts. Empty when the step is clean. */
@@ -2269,7 +2245,6 @@ for (const scenario of PRT_SCENARIOS) {
   });
 }
 
-
 for (const scenario of SCENARIOS.filter((entry) => entry.file === "ci.yml")) {
   it(`runs the prerender gate on ${scenario.label}`, () => {
     const selected = selectSteps(stepsFor(scenario), contextFor(scenario));
@@ -2281,3 +2256,98 @@ for (const scenario of SCENARIOS.filter((entry) => entry.file === "ci.yml")) {
     expect(selected.indexOf(gates[0]!)).toBeGreaterThan(selected.indexOf(builds[0]!));
   });
 }
+
+/* -------------------------------------------------------------------------- */
+/* Half 4 — a bounded second attempt for every required-path artifact upload    */
+/* -------------------------------------------------------------------------- */
+
+// actions/upload-artifact rethrows a network error (ETIMEDOUT, ECONNRESET) at
+// once, so one dropped connection failed the job and skipped every later step.
+// Each upload below is a tolerated first attempt followed at once by an
+// identical retry that overwrites what the first left and carries the failure.
+// `afterFailure`: the upload runs on a red job too (the findings report).
+const DOCS_CHANGE: ActionsContext = { steps: { [DETECT_STEP_ID]: { outputs: { docs_only: "false" } } } };
+const DOCS_ONLY: ActionsContext = { steps: { [DETECT_STEP_ID]: { outputs: { docs_only: "true" } } } };
+const RETRIED_UPLOADS = [
+  { file: "ci.yml", artifact: "patch-coverage", afterFailure: false, skippedWhen: DOCS_ONLY },
+  { file: "ci.yml", artifact: "coverage-summary", afterFailure: false, skippedWhen: DOCS_ONLY },
+  { file: "pr-suite.yml", artifact: "patch-coverage", afterFailure: false, skippedWhen: DOCS_ONLY },
+  { file: "pr-suite.yml", artifact: "coverage-summary", afterFailure: false, skippedWhen: DOCS_ONLY },
+  { file: "secret-scan.yml", artifact: "gitleaks-report", afterFailure: true, skippedWhen: null },
+  { file: "pr-gates.yml", artifact: "gitleaks-report", afterFailure: true, skippedWhen: null },
+];
+// The one exemption: scorecard.yml feeds no required context, so one attempt.
+const UNRETRIED_UPLOADS = [{ file: "scorecard.yml", artifact: "scorecard-results" }];
+
+/** Runs a first attempt and its retry as the runner would: each is selected by
+ *  `isSelected`, a failed step turns the job red unless it is
+ *  `continue-on-error: true`, and a later `if:` reads each earlier step's
+ *  outcome. Returns which attempts ran and the job's status. */
+function runAttempts(pair: WorkflowStep[], context: ActionsContext, prior: JobStatus, fails: boolean[]) {
+  let status = prior;
+  const outcomes: Record<string, unknown> = { ...(context.steps as Record<string, unknown>) };
+  const ran: string[] = [];
+  pair.forEach((step, index) => {
+    const tolerated = step["continue-on-error"];
+    if (tolerated !== undefined && typeof tolerated !== "boolean") throw new Error(`${label(step)}: continue-on-error must be a boolean`);
+    const runs = isSelected(step, { ...context, steps: outcomes }, status);
+    if (runs) ran.push(index === 0 ? "first" : "retry");
+    if (runs && fails[index] && tolerated !== true) status = "failure";
+    if (step.id) outcomes[step.id] = { outcome: runs ? (fails[index] ? "failure" : "success") : "skipped" };
+  });
+  return { ran, status };
+}
+
+describe("every artifact upload on a required path", () => {
+  const uploads: { file: string; steps: WorkflowStep[]; step: WorkflowStep }[] = [];
+  const requiredFiles: string[] = [];
+  beforeAll(async () => {
+    for (const file of (await readdir(resolve(".github/workflows"))).filter((name) => name.endsWith(".yml"))) {
+      const workflow = parse(await readFile(resolve(`.github/workflows/${file}`), "utf8")) as { jobs?: Record<string, { steps?: WorkflowStep[] }> };
+      for (const job of Object.values(workflow.jobs ?? {})) {
+        for (const step of job.steps ?? []) {
+          if ((step.uses ?? "").startsWith("actions/upload-artifact@")) uploads.push({ file, steps: job.steps!, step });
+        }
+      }
+    }
+    const required = JSON.parse(await readFile(resolve(".github/required-checks.json"), "utf8")) as Record<string, string[]>;
+    requiredFiles.push(...Object.values(required).flat());
+  });
+  const attemptsOf = (file: string, artifact: string) =>
+    uploads.filter((upload) => upload.file === file && upload.step.with?.name === artifact);
+
+  it("is listed here, twice for a retried upload and once for the exemption, which feeds no required context", () => {
+    expect(uploads.map(({ file, step }) => `${file} ${String(step.with?.name)}`).sort()).toEqual([
+      ...RETRIED_UPLOADS.flatMap(({ file, artifact }) => [`${file} ${artifact}`, `${file} ${artifact}`]),
+      ...UNRETRIED_UPLOADS.map(({ file, artifact }) => `${file} ${artifact}`),
+    ].sort());
+    for (const { file } of UNRETRIED_UPLOADS) expect(requiredFiles, `${file} now feeds a required context`).not.toContain(`.github/workflows/${file}`);
+  });
+
+  for (const site of RETRIED_UPLOADS) {
+    describe(`${site.file}'s ${site.artifact} upload`, () => {
+      const pair = () => attemptsOf(site.file, site.artifact).map(({ step }) => step);
+
+      it("is followed at once by a retry of the same action and inputs that overwrites the first attempt's artifact", () => {
+        const [first, retry] = attemptsOf(site.file, site.artifact);
+        expect(first!.steps.indexOf(retry!.step), "the retry must be the very next step of the same job").toBe(first!.steps.indexOf(first!.step) + 1);
+        expect(retry!.step.uses).toBe(first!.step.uses);
+        expect(retry!.step.with).toEqual({ ...first!.step.with, overwrite: true });
+      });
+
+      for (const prior of ["success", "failure"] as const) {
+        for (const skipped of site.skippedWhen ? [false, true] : [false]) {
+          for (const [firstFails, retryFails] of [[false, false], [true, false], [true, true]]) {
+            const holds = !skipped && (prior === "success" || site.afterFailure);
+            const when = `job ${prior}, ${skipped ? "condition false" : "condition holds"}, first ${firstFails ? "fails" : "succeeds"}, retry ${retryFails ? "fails" : "succeeds"}`;
+            it(`on ${when}`, () => {
+              const run = runAttempts(pair(), skipped ? site.skippedWhen! : DOCS_CHANGE, prior, [firstFails!, retryFails!]);
+              expect(run.ran, "which attempts run").toEqual(holds ? (firstFails ? ["first", "retry"] : ["first"]) : []);
+              expect(run.status, "the job's status after them").toBe(prior === "failure" || (holds && firstFails && retryFails) ? "failure" : "success");
+            });
+          }
+        }
+      }
+    });
+  }
+});

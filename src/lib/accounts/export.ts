@@ -191,7 +191,7 @@ export const userForeignKeyExports: readonly UserForeignKeyExportEntry[] = [
     // No created_at or id here: the composite key orders deterministically.
     orderBy: ["measured_at", "repository_id"],
   },
-  { table: "reconciliation_sweep_rounds", column: "sponsor_id", path: "reconciliationSweepRounds", kind: "jsonb", orderBy: ["window_start"] },
+  { table: "reconciliation_sweep_rounds", column: "sponsor_id", path: "reconciliationSweepRounds", kind: "jsonb", orderBy: ["sponsor_id"] },
   { table: "reconciliation_sweep_catchups", column: "sponsor_id", path: "reconciliationSweepCatchups", kind: "jsonb", orderBy: ["created_at", "repository_id"] },
   { table: "moderation_credit_adjustments", column: "target_account_id", path: "moderationCreditAdjustments", kind: "jsonb", orderBy: ["created_at", "id"] },
   { table: "moderation_credit_adjustment_lines", column: "creditor_id", path: "moderationCreditAdjustmentLines", kind: "jsonb", orderBy: ["adjustment_id", "settlement_id"] },

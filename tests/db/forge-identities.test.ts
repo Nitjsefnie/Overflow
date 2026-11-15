@@ -184,7 +184,7 @@ describe("migration 038: forge identities and provider columns", () => {
       store: {
         withWebhookUpgradeLock: async (_id, operation) => operation(),
         stageWebhookCredential: async () => { throw new Error("must not stage a hookless registration"); },
-        finalizeWebhookCredential: async () => false,
+        finalizeWebhookCredential: async () => false, markWebhookRederivationOwed: async () => null, clearWebhookRederivationOwed: async () => {},
         listActiveRepositoryIds: async () => [created!.id],
         findActiveRepositoryById: async (id) => (created!.id === id ? { ...created! } : null),
         findActiveRepositoryForgeById: async () => ({ provider: "gitlab", instanceUrl: "https://gitlab.example.com" }),
@@ -207,6 +207,7 @@ describe("migration 038: forge identities and provider columns", () => {
       report: (outcome) => {
         outcomes.push(outcome);
       },
+      writeError: (line) => { outcomes.push(line); },
     };
 
     expect(await upgradeRepositoryWebhooks(dependencies)).toEqual({ succeeded: 1, failed: 0, gone: 0 });
@@ -568,7 +569,6 @@ describe("migration 041: token re-verification marking", () => {
     expect(listed.find((identity) => identity.id === sibling!.id)!.tokenFailedAt).not.toBeNull();
   });
 });
-
 
 describe("identity-scoped credentials", () => {
   let nextUserId = 940000;

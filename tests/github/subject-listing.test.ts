@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
 import { listSubjectPage } from "@/lib/github/subject-listing";
 import { SweepBudgetSpent, withSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
-import { withSweepPass, type SweepPass } from "@/lib/fold/sweep-pass";
 
 const repository = { owner: "octo", name: "overflow" };
 const firstTime = "2026-10-25T08:00:00.000Z";
@@ -94,22 +93,16 @@ describe("GitHub subject pages", () => {
     await expect(listSubjectPage(client, repository, { cursor: null })).rejects.toThrow(/GitHub.*updated_at/);
   });
 
-  it("uses fresh HTTP reads without reading or writing the active pass cache and spends once per request", async () => {
-    let reads = 0;
-    let writes = 0;
+  it("spends the sweep budget once per request and holds before sending when it is spent", async () => {
     let sent = 0;
     let spent = 0;
-    const pass = {
-      read: async () => { reads++; return { status: 200, headers: {}, body: "[]" }; },
-      write: async () => { writes++; },
-    } as unknown as SweepPass;
     const client = gateway(async () => Response.json([{ id: ++sent, number: 6, updated_at: firstTime }]));
     const resetAt = new Date(secondTime);
-    await withSweepPass(pass, () => withSweepRequestBudget(async () => ++spent <= 2 ? null : resetAt, async () => {
+    await withSweepRequestBudget(async () => ++spent <= 2 ? null : resetAt, async () => {
       expect((await listSubjectPage(client, repository, { cursor: null })).subjects[0]?.id).toBe(1);
       expect((await listSubjectPage(client, repository, { cursor: null })).subjects[0]?.id).toBe(2);
       await expect(listSubjectPage(client, repository, { cursor: "?page=2" })).rejects.toBeInstanceOf(SweepBudgetSpent);
-    }));
-    expect({ reads, writes, sent, spent }).toEqual({ reads: 0, writes: 0, sent: 2, spent: 3 });
+    });
+    expect({ sent, spent }).toEqual({ sent: 2, spent: 3 });
   });
 });

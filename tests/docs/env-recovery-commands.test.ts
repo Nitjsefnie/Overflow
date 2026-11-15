@@ -35,7 +35,7 @@ function runCommands(body: string, configuration: string) {
     delete env[name];
     delete env[`OVERFLOW_${name}`];
   }
-  const result = spawnSync("bash", ["-eu", "-c", body.replaceAll("overflow-<stamp>.dump", "overflow-fixture.dump").replaceAll("/etc/overflow", directory).replaceAll("/srv/overflow", directory)], {
+  const result = spawnSync("bash", ["-eu", "-c", body.replaceAll("overflow-<stamp>.dump", "overflow-fixture.dump").replaceAll("/srv/overflow/scripts/systemd-env-file.sh", `${process.cwd()}/scripts/systemd-env-file.sh`).replaceAll("/etc/overflow", directory).replaceAll("/srv/overflow", directory)], {
     env, encoding: "utf8", cwd: directory, ...identity,
   });
   return { ...result, directory };
@@ -60,6 +60,12 @@ describe("recovery commands read either environment spelling", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(join(result.directory, "overflow.env"), "utf8")).toBe(`OVERFLOW_TOKEN_ENCRYPTION_KEY=${key}\n`);
     expect(statSync(join(result.directory, "overflow.env")).mode & 0o777).toBe(0o640);
+  });
+
+  it("loads a value holding $ literally, as the service's EnvironmentFile= reads it", () => {
+    const result = runCommands(`${loading}\nprintf '<%s>' "$OVERFLOW_FIXTURE_PRICE"`, "OVERFLOW_FIXTURE_PRICE=5$HOME\n");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("<5$HOME>");
   });
 
   it("preserves an empty canonical URL and refuses backup despite a valid legacy URL", () => {

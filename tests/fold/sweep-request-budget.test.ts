@@ -14,8 +14,17 @@ describe("sweep HTTP admission", () => {
   it.each([undefined, "", "0", "-1", "1.5", "oops", "Infinity"])("defaults invalid budget %s", (value) => {
     expect(readSweepRequestBudget({ RECONCILIATION_SWEEP_REQUEST_BUDGET: value })).toBe(3000);
   });
-  it("accepts a positive integer override", () => {
-    expect(readSweepRequestBudget({ RECONCILIATION_SWEEP_REQUEST_BUDGET: "17" })).toBe(17);
+  const P = "OVERFLOW_RECONCILIATION_SWEEP_REQUEST_BUDGET";
+  const B = "RECONCILIATION_SWEEP_REQUEST_BUDGET";
+  it.each([
+    ["the prefixed name alone", { [P]: "17" }, 17],
+    ["the bare name alone", { [B]: "17" }, 17],
+    ["the prefixed name over the bare one", { [P]: "17", [B]: "23" }, 17],
+    ["the largest integer column value", { [P]: "2147483647" }, 2147483647],
+    ["one past the integer column, prefixed", { [P]: "2147483648" }, 3000],
+    ["one past the integer column, bare", { [B]: "2147483648" }, 3000],
+  ])("reads %s", (_name, environment, expected) => {
+    expect(readSweepRequestBudget(environment)).toBe(expected);
   });
   it.each([undefined, "", "0", "-1", "1.5", "oops", "Infinity", "150119987580", String(Number.MAX_SAFE_INTEGER + 1)])(
     "defaults invalid window %s to six hours", (value) => {
@@ -34,8 +43,7 @@ describe("sweep HTTP admission", () => {
     expect(formatSweepWindow(minutes)).toBe(text);
   });
   it("counts REST and GraphQL in one counter, before sending, without retrying a hold", async () => {
-    let spent = 0;
-    let sent = 0;
+    let spent = 0, sent = 0;
     const resetAt = new Date("2030-01-01T06:00:00Z");
     const request = async () => { sent++; return Response.json({ data: { value: 7 } }); };
     const rest = new GitHubGateway({ accessToken: randomBytes(24).toString("hex"), fetch: request });
@@ -56,8 +64,7 @@ describe("sweep HTTP admission", () => {
     expect(sent).toBe(3); // Ordinary route and CLI reads have no budget wiring.
   });
   it("charges a GitLab read before it sends, holds without sending when spent", async () => {
-    let spent = 0;
-    let sent = 0;
+    let spent = 0, sent = 0;
     const resetAt = new Date("2030-01-01T06:00:00Z");
     const gateway = new GitLabGateway({
       instanceUrl: "https://gitlab.example.com",
@@ -65,13 +72,8 @@ describe("sweep HTTP admission", () => {
       fetch: async () => {
         sent++;
         return Response.json({
-          id: 5001,
-          name: "example",
-          path: "example",
-          path_with_namespace: "octo/example",
-          visibility: "public",
-          web_url: "https://gitlab.example.com/octo/example",
-          namespace: { id: 1, name: "Octo", path: "octo", kind: "group" },
+          id: 5001, name: "example", path: "example", path_with_namespace: "octo/example", visibility: "public",
+          web_url: "https://gitlab.example.com/octo/example", namespace: { id: 1, name: "Octo", path: "octo", kind: "group" },
         });
       },
     });
@@ -91,8 +93,7 @@ describe("sweep HTTP admission", () => {
   });
   it("sends an already-admitted sibling even if another request latches exhaustion", async () => {
     let release!: (reset: Date | null) => void;
-    let attempts = 0;
-    let sent = 0;
+    let attempts = 0, sent = 0;
     const firstAdmission = new Promise<Date | null>((resolve) => { release = resolve; });
     const rest = new GitHubGateway({ accessToken: randomBytes(24).toString("hex"), fetch: async () => { sent++; return Response.json({}); } });
     await withSweepRequestBudget(async () => ++attempts === 1 ? firstAdmission : new Date("2030-01-01T06:00:00Z"), async () => {
