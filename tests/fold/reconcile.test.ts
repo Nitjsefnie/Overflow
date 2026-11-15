@@ -496,12 +496,15 @@ describe("reconcileRepository", () => {
       dependencies.store.withRepositoryReconciliation = async (id, work) => {
         try { return await coordinate(id, work); } finally { released = true; }
       };
-      discardIfInactive.mockImplementation(async () => { expect(released).toBe(true); });
+      // An assertion inside the cleanup would be swallowed by its catch: record what it saw instead.
+      const seen: boolean[] = [];
+      discardIfInactive.mockImplementation(async () => { seen.push(released); });
       const logged = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
         await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).rejects.toThrow("Unable to reconcile repository.");
       } finally { logged.mockRestore(); }
       expect(discardIfInactive).toHaveBeenCalledExactlyOnceWith("repository");
+      expect(seen).toEqual([true]);
       expect(f.pass.complete).not.toHaveBeenCalled();
     });
 
@@ -520,6 +523,37 @@ describe("reconcileRepository", () => {
         expect(logged.mock.calls.flat().map(String).join("\n")).not.toContain("database unavailable");
       } finally { logged.mockRestore(); }
       expect(discardIfInactive).toHaveBeenCalledTimes(3);
+    });
+
+    type Sweep = ReturnType<typeof sweepRun>;
+    const failSettling = (active: boolean) => async ({ f, dependencies, discardIfInactive }: Sweep) => {
+      const failure = new Error("connection terminated unexpectedly"), repository = (await dependencies.store.getRepository("repository"))!;
+      failStaging(f, 3, failure);
+      vi.mocked(dependencies.store.failRun).mockImplementationOnce(async () => { repository.active = active; });
+      discardIfInactive.mockRejectedValue(new Error("database unavailable"));
+      return failure;
+    };
+    it.each<[string, (s: Sweep) => Promise<Error>]>([
+      ["its staged rows cannot be read", async ({ f }) => {
+        for (const key of [1, 2]) await f.pass.stage({ anchor: "subjects", kind: "issue", subjectKey: key, updatedAt: instant(key), payload: stub(key) });
+        const failure = new Error("connection terminated unexpectedly"), read = f.pass.readStaged;
+        f.pass.readStaged = vi.fn(read).mockRejectedValueOnce(failure);
+        return failure;
+      }],
+      ["settling an active repository's failed run fails", failSettling(true)],
+      ["settling a repository unregistered during its failed run fails", failSettling(false)],
+    ])("keeps the sweep pass and the run's own failure when %s", async (_label, fail) => {
+      const run = sweepRun(), { f, dependencies, discardPass, discardIfInactive } = run;
+      const failure = await fail(run);
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).rejects.toMatchObject({ message: "Unable to reconcile repository.", cause: failure });
+      } finally { logged.mockRestore(); }
+      expect(discardIfInactive).toHaveBeenCalledExactlyOnceWith("repository");
+      expect(f.pass.complete).not.toHaveBeenCalled();
+      expect(discardPass).not.toHaveBeenCalled();
+      expect((await f.pass.readStaged()).map(({ subjectKey }) => subjectKey)).toEqual([1, 2]);
+      expect(dependencies.store.failRun).toHaveBeenCalledOnce();
     });
 
     it("ends the sweep pass when the fold completes", async () => {
