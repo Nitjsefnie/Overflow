@@ -23,13 +23,10 @@ async function scratch() {
 function launch(preload: string, args: string[] = [], env: Record<string, string | undefined> = {}) {
   const environment: NodeJS.ProcessEnv = { ...process.env, OVERFLOW_LAYOUT_CHECK_KEEP_WORKDIR: "", OVERFLOW_LAYOUT_CHECK_CHROME: process.execPath, ...env };
   if (env.OVERFLOW_DATABASE_URL === undefined) delete environment.OVERFLOW_DATABASE_URL;
-  const child = spawn(process.execPath, ["--import", preload, "scripts/check-page-geometry.mjs", ...args], {
-    cwd: root, detached: true, stdio: ["ignore", "pipe", "pipe"], env: environment,
-  });
+  const child = spawn(process.execPath, ["--import", preload, "scripts/check-page-geometry.mjs", ...args], { cwd: root, detached: true, stdio: ["ignore", "pipe", "pipe"], env: environment });
   gates.push(child);
   groups.add(child.pid!);
-  let stdout = "";
-  let stderr = "";
+  let stdout = ""; let stderr = "";
   child.stdout!.on("data", data => { stdout += data; });
   child.stderr!.on("data", data => { stderr += data; });
   return { child, exited: once(child, "exit"), stdout: () => stdout, stderr: () => stderr };
@@ -208,8 +205,7 @@ it.each(["SIGTERM", "SIGINT"] as const)("owns both real-entrypoint startup trees
     TMPDIR: systemTmp, OVERFLOW_DATABASE_URL: "postgresql://127.0.0.1:1/unused_fixture", OVERFLOW_LAYOUT_CHECK_PORT: String(await freePort()), DEPTH: "0",
   });
   interface Pids { parent: number; grandchild: number; created: string | null }
-  let server: Pids | undefined;
-  let chrome: Pids | undefined;
+  let server: Pids | undefined; let chrome: Pids | undefined;
   try {
     await expect.poll(async () => {
       if (run.child.exitCode !== null || run.child.signalCode !== null) throw new Error(run.stderr());
@@ -225,8 +221,7 @@ it.each(["SIGTERM", "SIGINT"] as const)("owns both real-entrypoint startup trees
   }
   const directory = await readFile(join(path, "workdir"), "utf8");
   directories.push(directory);
-  groups.add(server!.parent);
-  groups.add(chrome!.parent);
+  groups.add(server!.parent); groups.add(chrome!.parent);
   expect(gone(server!.grandchild)).toBe(false);
   expect(gone(chrome!.grandchild)).toBe(false);
   expect(chrome!.created!.startsWith(directory + sep) && existsSync(chrome!.created!)).toBe(true);
