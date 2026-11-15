@@ -54,9 +54,12 @@ describe("shared database clients", () => {
     vi.stubEnv("DATABASE_CONNECT_TIMEOUT_SECONDS", "invalid");
     vi.stubEnv("OVERFLOW_DATABASE_CONNECT_TIMEOUT_SECONDS", "30");
     expect([getSql().options.connect_timeout, getCoordinationSql().options.connect_timeout]).toEqual([30, 30]);
+    await closeSql();
+    vi.stubEnv("OVERFLOW_DATABASE_CONNECT_TIMEOUT_SECONDS", "2147483"); // the longest whose milliseconds fit Node's 32-bit timer
+    expect([getSql().options.connect_timeout, getCoordinationSql().options.connect_timeout]).toEqual([2147483, 2147483]);
   });
 
-  it.each(["", "abc", "-5", "0", "2.5"])("refuses %j for OVERFLOW_DATABASE_CONNECT_TIMEOUT_SECONDS at client construction", (invalid) => {
+  it.each(["", "abc", "-5", "0", "2.5", "2147484"])("refuses %j for OVERFLOW_DATABASE_CONNECT_TIMEOUT_SECONDS at client construction", (invalid) => {
     vi.stubEnv("OVERFLOW_DATABASE_URL", unreachableDatabaseUrl);
     vi.stubEnv("OVERFLOW_DATABASE_CONNECT_TIMEOUT_SECONDS", invalid);
     expect(() => getSql()).toThrow(`DATABASE_CONNECT_TIMEOUT_SECONDS is set but invalid: "${invalid}".`);
