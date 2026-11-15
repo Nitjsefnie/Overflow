@@ -8,7 +8,7 @@
 # The app container applies pending migrations (scripts/migrate.ts) before the
 # server starts, and serves on port 3000.
 
-FROM node:24.22.2-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c AS deps
+FROM node:24.22.3-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS deps
 WORKDIR /app
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -37,7 +37,7 @@ FROM deps AS prod-deps
 RUN rm -rf node_modules \
   && pnpm install --frozen-lockfile --prod
 
-FROM node:24.22.2-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c AS runtime
+FROM node:24.22.3-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS runtime
 # Immutable provenance (issue 461). An image built from this Dockerfile must
 # name the exact source it was built from: a preserved image used to report
 # Config.Labels=null, with nothing tying the running bytes to a reviewed
