@@ -157,7 +157,8 @@ const startupFixture = `
   setInterval(() => {}, 1000);
 `;
 
-it.each(["SIGTERM", "SIGINT"] as const)("owns both real-entrypoint startup trees on %s", async signal => {
+// Chrome's TMPDIR nests under the gate's only while its socket fits: 41 is the last length that does.
+it.each([["SIGTERM", 41, true], ["SIGINT", 42, false], ["SIGTERM", 130, false]] as const)("owns both real-entrypoint startup trees on %s under a %i-character TMPDIR", async (signal, length, nested) => {
   const path = await scratch();
   const fixture = join(path, "startup.cjs");
   const preload = join(path, "startup.mjs");
@@ -198,9 +199,12 @@ it.each(["SIGTERM", "SIGINT"] as const)("owns both real-entrypoint startup trees
     } });
     syncBuiltinESMExports();
   `);
-  // The gate's system temp directory, longer than any TMPDIR Chrome itself can start under.
-  const systemTmp = join(await scratch(), "t".repeat(100));
+  // The gate's system temp directory, padded to exactly `length` under a short owned base.
+  const base = await fixtureDirectories.createAsync("/tmp/gate-tmp-");
+  directories.push(base);
+  const systemTmp = join(base, "t".repeat(length - base.length - 1));
   await mkdir(systemTmp);
+  expect(systemTmp.length).toBe(length);
   const run = launch(preload, [], {
     TMPDIR: systemTmp, OVERFLOW_DATABASE_URL: "postgresql://127.0.0.1:1/unused_fixture", OVERFLOW_LAYOUT_CHECK_PORT: String(await freePort()), DEPTH: "0",
   });
@@ -225,6 +229,7 @@ it.each(["SIGTERM", "SIGINT"] as const)("owns both real-entrypoint startup trees
   expect(gone(server!.grandchild)).toBe(false);
   expect(gone(chrome!.grandchild)).toBe(false);
   expect(chrome!.created!.startsWith(directory + sep) && existsSync(chrome!.created!)).toBe(true);
+  expect(chrome!.created!.startsWith(systemTmp + sep)).toBe(nested);
   // Chrome binds created + "/SingletonSocket"; Linux sun_path holds 107 bytes plus NUL.
   expect(chrome!.created!.length + "/SingletonSocket".length).toBeLessThanOrEqual(107);
   run.child.kill(signal);
