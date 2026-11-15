@@ -18,6 +18,7 @@ useTrustedOrigin();
 
 import HomePage, { LandingPage, metadata } from "@/app/page";
 import { GITHUB_REPOSITORY_REGISTRATION_SCOPE } from "@/lib/auth/github-oauth-scopes";
+import { registrationAppInstall } from "@/lib/github/registration-app-display";
 import { OVERFLOW_OPENING_CATALOG } from "@/lib/opening-catalog-examples";
 
 describe("landing page", () => {
@@ -26,8 +27,8 @@ describe("landing page", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(["https://github.com/apps/overflow-registration/installations/new", null])("explains configured registration on the landing page with URL %s", (url) => {
-    const { container } = render(<LandingPage registrationAppConfigured registrationAppInstallUrl={url} />);
+  it.each([registrationAppInstall("overflow-registration"), null])("explains configured registration on the landing page with install %o", (install) => {
+    const { container } = render(<LandingPage registrationAppConfigured registrationAppInstall={install} />);
     const hero = container.querySelector("section.landing-hero")!;
     const registration = screen.getByRole("button", { name: "Sign in to register a repository" });
     const section = registration.closest("section")!;
@@ -43,8 +44,8 @@ describe("landing page", () => {
     expect(Array.from(notes[0]!.querySelectorAll("code"), (element) => element.textContent))
       .toEqual([GITHUB_REPOSITORY_REGISTRATION_SCOPE]);
     const link = notes[1]!.querySelector("a");
-    if (url === null) expect(link).toBeNull();
-    else expect(link).toHaveAttribute("href", url);
+    if (install === null) expect(link).toBeNull();
+    else expect(link).toHaveAttribute("href", install.url);
     expect(notes[0]!.compareDocumentPosition(registration) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(registration.compareDocumentPosition(notes[1]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
@@ -60,8 +61,8 @@ describe("landing page", () => {
       .toEqual([GITHUB_REPOSITORY_REGISTRATION_SCOPE]);
   });
 
-  it.each(["https://github.com/apps/overflow-registration/installations/new", null])("lists exactly the App's repository permissions with URL %s", (url) => {
-    const { container } = render(<LandingPage registrationAppConfigured registrationAppInstallUrl={url} />);
+  it.each([registrationAppInstall("overflow-registration"), null])("lists exactly the App's repository permissions with install %o", (install) => {
+    const { container } = render(<LandingPage registrationAppConfigured registrationAppInstall={install} />);
     const hero = container.querySelector("section.landing-hero")!;
     const registration = screen.getByRole("button", { name: "Sign in to register a repository" });
     const section = registration.closest("section")!;
@@ -141,7 +142,7 @@ describe("landing page", () => {
 
   it.each([false, true])("keeps one primary hero control ahead of every secondary control (App configured: %s)", (configured) => {
     const { container } = render(<LandingPage registrationAppConfigured={configured}
-      registrationAppInstallUrl={configured ? "https://github.com/apps/overflow-registration/installations/new" : null} />);
+      registrationAppInstall={configured ? registrationAppInstall("overflow-registration") : null} />);
     const main = screen.getByRole("main");
     const hero = container.querySelector<HTMLElement>("section.landing-hero")!;
     const primary = within(hero).getAllByRole("button").find((button) => button.classList.contains("action-button"));
@@ -196,7 +197,7 @@ describe("landing page", () => {
   });
 
   it("uses points vocabulary in every landing-page configuration and its title", () => {
-    const texts = [{}, { registrationAppConfigured: true, registrationAppInstallUrl: "https://github.com/apps/overflow-registration/installations/new" }].map((props) => {
+    const texts = [{}, { registrationAppConfigured: true, registrationAppInstall: registrationAppInstall("overflow-registration") }].map((props) => {
       const view = render(<LandingPage {...props} />);
       // The absence check below means nothing over an empty render.
       expect(within(view.container).getByRole("heading", { level: 1 })).toBeVisible();

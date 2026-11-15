@@ -113,7 +113,7 @@ export function RepositoryForm({
   appSignInAction,
   canAdministerGitHubWebhooks,
   registrationAppConfigured = false,
-  registrationAppInstallUrl = null,
+  registrationAppInstall = null,
 }: RepositoryFormProps) {
   const catalogHelpId = useId();
   const nextOpeningRowId = useRef(initialValues.openingLabels.length);
@@ -394,7 +394,7 @@ export function RepositoryForm({
           </select>
         </label>
       ) : null}
-      {appRegistration ? <RegistrationAppHelp url={registrationAppInstallUrl} /> : null}
+      {appRegistration ? <RegistrationAppHelp install={registrationAppInstall} /> : null}
       {!isCatalogChange ? <p className="field-help">Start with one small, self-contained issue priced at 1 to 3 points.</p> : null}
       {provider === "gitlab" ? (
         <>
@@ -441,7 +441,7 @@ export function RepositoryForm({
             the registration form; GitHub keeps the account and adds the grant to whatever it already holds.
             Registering a GitLab project needs no GitHub permission — choose GitLab above.
           </p>
-          {registrationAppConfigured ? <RegistrationAppAlternative url={registrationAppInstallUrl} /> : null}
+          {registrationAppConfigured ? <RegistrationAppAlternative install={registrationAppInstall} /> : null}
         </section>
       ) : (
         <label className="field">
