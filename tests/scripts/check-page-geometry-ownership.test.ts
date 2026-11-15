@@ -24,8 +24,7 @@ function launch(preload: string, args: string[] = [], env: Record<string, string
   const environment: NodeJS.ProcessEnv = { ...process.env, OVERFLOW_LAYOUT_CHECK_KEEP_WORKDIR: "", OVERFLOW_LAYOUT_CHECK_CHROME: process.execPath, ...env };
   if (env.OVERFLOW_DATABASE_URL === undefined) delete environment.OVERFLOW_DATABASE_URL;
   const child = spawn(process.execPath, ["--import", preload, "scripts/check-page-geometry.mjs", ...args], {
-    cwd: root, detached: true, stdio: ["ignore", "pipe", "pipe"],
-    env: environment,
+    cwd: root, detached: true, stdio: ["ignore", "pipe", "pipe"], env: environment,
   });
   gates.push(child);
   groups.add(child.pid!);
@@ -36,11 +35,7 @@ function launch(preload: string, args: string[] = [], env: Record<string, string
   return { child, exited: once(child, "exit"), stdout: () => stdout, stderr: () => stderr };
 }
 function gone(pid: number) {
-  try { process.kill(pid, 0); return false; }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
-    throw error;
-  }
+  try { process.kill(pid, 0); return false; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return true; throw error; }
 }
 async function assertGone(...pids: number[]) {
   await expect.poll(() => pids.every(gone), { timeout: 10000 }).toBe(true);
@@ -61,13 +56,10 @@ afterEach(async () => {
     // Includes the gate group even after its leader exits, so disconnected
     // plain-spawn mutants are cleaned without leaking their fixture children.
     for (const pid of groups) {
-      try { process.kill(-pid, "SIGKILL"); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+      try { process.kill(-pid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
     }
     groups.clear();
-    for (const child of gates.splice(0)) {
-      if (child.exitCode === null && child.signalCode === null) await once(child, "exit");
-    }
+    for (const child of gates.splice(0)) { if (child.exitCode === null && child.signalCode === null) await once(child, "exit"); }
     for (const path of directories.splice(0)) await rm(path, { recursive: true, force: true });
   } finally {
     fixtureDirectories.dispose();
@@ -223,10 +215,7 @@ it.each(["SIGTERM", "SIGINT"] as const)("owns both real-entrypoint startup trees
         server = JSON.parse(await readFile(join(path, "server.json"), "utf8"));
         chrome = JSON.parse(await readFile(join(path, "chrome.json"), "utf8"));
         return true;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-        throw error;
-      }
+      } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
     }, { timeout: 10000 }).toBe(true);
   } catch (error) {
     const loaded = existsSync(join(path, "loaded-url")) ? await readFile(join(path, "loaded-url"), "utf8") : "not loaded";
