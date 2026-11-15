@@ -523,8 +523,8 @@ fi
       expect(producer, `${file} must carry the postgres-image job`).toBeDefined();
       expect(
         producer!.steps.flatMap((step) => step.run ?? []).join("\n"),
-        `${file}'s postgres-image job must read the image reference from ci/Dockerfile`,
-      ).toContain("ci/Dockerfile");
+        `${file}'s postgres-image job's awk must read the image reference from ci/Dockerfile`,
+      ).toContain("}' ci/Dockerfile)");
       expect(
         JSON.stringify(consumer.needs ?? null),
         `${file}'s consuming job must declare postgres-image in needs`,
