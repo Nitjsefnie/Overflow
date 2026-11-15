@@ -1514,15 +1514,8 @@ describe("reconcileRepository", () => {
         }),
       },
     });
-    dependencies.store.getReconciliationEvidence = async () => ({
-      version: 1,
-      formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
-      checkpoint: new Date(),
-      lastFullPassAt: new Date(),
-      omittedOversizedFacts: 0,
-      issues: [],
-      pullRequests: [],
-    });
+    dependencies.store.getReconciliationEvidence = async () => ({ version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
+      checkpoint: new Date(), lastFullPassAt: new Date(), omittedOversizedFacts: 0, issues: [], pullRequests: [] });
     dependencies.store.getDirtyReconciliationSubjects = async () => [subject];
     const discard = vi.fn().mockResolvedValue(undefined);
     dependencies.store.discardDirtyReconciliationSubject = discard;
