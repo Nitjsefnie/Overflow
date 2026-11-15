@@ -30,6 +30,8 @@ export const RECONCILIATION_COORDINATION_POOL_MAX = WORK_POOL_MAX;
  * is down, so anything above a few seconds is only the client waiting to
  * report a failure it already knows (issue 661): the library default is 30 s,
  * which is how long every caller queued behind a dead database hangs.
+ * DATABASE_CONNECT_TIMEOUT_SECONDS overrides it for a host too starved to
+ * connect in 5 s; it has no disabled value, so a dead database never hangs.
  */
 const CONNECT_TIMEOUT_SECONDS = 5;
 
@@ -97,16 +99,21 @@ function reportPostgresNotice(notice: PostgresNotice): void {
  * silently disabled the deadline the default exists to guarantee.
  */
 function statementTimeoutMs(): string {
-  const raw = readEnv("DATABASE_STATEMENT_TIMEOUT_MS");
-  if (raw === undefined) {
-    return DEFAULT_STATEMENT_TIMEOUT_MS;
-  }
-  if (!/^[0-9]+$/.test(raw) || Number.parseInt(raw, 10) === 0) {
-    throw new Error(
-      `DATABASE_STATEMENT_TIMEOUT_MS is set but invalid: "${raw}". ` +
-        "It must be a positive whole number of milliseconds, the statement " +
-        "deadline every connection of the work pool advertises to the server.",
-    );
+  return positiveWholeNumberFromEnv("DATABASE_STATEMENT_TIMEOUT_MS",
+    "milliseconds, the statement deadline every connection of the work pool advertises to the server") ?? DEFAULT_STATEMENT_TIMEOUT_MS;
+}
+
+/** The connect deadline the environment names, else CONNECT_TIMEOUT_SECONDS; validated as statementTimeoutMs is. */
+function connectTimeoutSeconds(): number {
+  const raw = positiveWholeNumberFromEnv("DATABASE_CONNECT_TIMEOUT_SECONDS", "seconds, the deadline for a pool connection to become ready");
+  return raw === undefined ? CONNECT_TIMEOUT_SECONDS : Number.parseInt(raw, 10);
+}
+
+/** The variable's value when unset or a positive whole number; anything else set throws, naming the variable. */
+function positiveWholeNumberFromEnv(name: string, meaning: string): string | undefined {
+  const raw = readEnv(name);
+  if (raw !== undefined && (!/^[0-9]+$/.test(raw) || Number.parseInt(raw, 10) === 0)) {
+    throw new Error(`${name} is set but invalid: "${raw}". It must be a positive whole number of ${meaning}.`);
   }
   return raw;
 }
@@ -121,7 +128,7 @@ function statementTimeoutMs(): string {
 function openPool(max: number, statementTimeout: string): SqlClient {
   return postgres(requireDatabaseUrl(), {
     max,
-    connect_timeout: CONNECT_TIMEOUT_SECONDS,
+    connect_timeout: connectTimeoutSeconds(),
     idle_timeout: IDLE_TIMEOUT_SECONDS,
     max_lifetime: MAX_LIFETIME_SECONDS,
     onnotice: reportPostgresNotice,
