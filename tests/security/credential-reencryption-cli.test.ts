@@ -24,10 +24,8 @@ function databaseFailure(): Error {
 }
 
 function untouchableStore(): CredentialStore {
-  return {
-    readBatch: async () => { throw new Error("must not read the database"); },
-    replaceIfUnchanged: async () => { throw new Error("must not write the database"); },
-  };
+  return { readBatch: async () => { throw new Error("must not read the database"); },
+    replaceIfUnchanged: async () => { throw new Error("must not write the database"); } };
 }
 
 function previousKeyRow(): StoredCredential {
