@@ -1,7 +1,3 @@
-// Runs a script in its own process group under a SIGKILL timeout and kills
-// the whole group after the spawn returns, so nothing the script started
-// outlives the call. Shared by tests/ci/dependency-audit-retry.test.ts and the
-// deploy-revision harness's runDeploy.
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -25,9 +21,7 @@ function killTree(pgid: number | undefined, pid: number | undefined): void {
   if (pid !== undefined) {
     try {
       process.kill(pid, STEP_KILL_SIGNAL);
-    } catch {
-      // Already gone, or not ours to signal.
-    }
+    } catch {}
   }
 }
 
@@ -42,7 +36,6 @@ function ownProcessGroup(): number | undefined {
   }
 }
 
-/** Runs `argv` (e.g. `["bash", "-e", script]`) with `dir` as cwd; the group id is published in `dir`. */
 export function runBoundedScript(
   argv: string[],
   dir: string,
@@ -59,8 +52,6 @@ export function runBoundedScript(
     timeout: timeoutMs,
     killSignal: STEP_KILL_SIGNAL,
   });
-  // The script publishes `$$` before the exec, so this read is after the fact
-  // and never races: by now either the file is there or the script never ran.
   let pgid: number | undefined;
   try {
     const published = Number(readFileSync(pgidFile, "utf8").trim());
@@ -69,10 +60,9 @@ export function runBoundedScript(
       pgid = published;
     }
   } catch {
-    // No file: `setsid` never got as far as the script.
+    // No file: the script never ran.
   }
-  // Unconditional, not only on a timeout: a script that exits can leave a
-  // descendant running, and that is the same leak by another route.
+  // Unconditional, not only on a timeout: a script that exits can leave a descendant running.
   killTree(pgid, result.pid ?? undefined);
   return result;
 }
