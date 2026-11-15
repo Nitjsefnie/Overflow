@@ -484,8 +484,10 @@ async function reconcileRepositoryAfterRepositoryRead(
               new Set(disputePullRequests.map(pr => pr.id)),
             );
             for (const [id, evidence] of refreshedEvidence.evidence) pullRequestEvidence.set(id, evidence);
-            // A refused diff never reads; cached empty (as it folds), incremental passes skip it.
-            for (const id of refreshedEvidence.diffRefusedPrIds) if (!pullRequestEvidence.has(id)) pullRequestEvidence.set(id, { reviews: [], rawDiff: "" });
+            // A refused diff never reads: cached empty, as it folds, until a full pass, changed issue or dirty row.
+            for (const id of refreshedEvidence.diffRefusedPrIds) {
+              if (!pullRequestEvidence.has(id)) pullRequestEvidence.set(id, { reviews: [], rawDiff: "" });
+            }
             const retainedPrIds = new Set([...referencedPullRequests, ...disputePullRequests]
               .filter(pr => !refreshedEvidence.missingDisputePrIds.has(pr.id)).map(({ id }) => id));
             for (const id of pullRequestEvidence.keys()) if (!retainedPrIds.has(id)) pullRequestEvidence.delete(id);
