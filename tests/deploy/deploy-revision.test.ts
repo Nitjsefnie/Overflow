@@ -1,10 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { chmod, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import { pendingMigrationLines, readMigrationTree } from "../../scripts/deploy-migration-status";
 import { migrationCompatibilityFixtures } from "../fixtures/migration-compatibility";
 
@@ -516,6 +516,27 @@ exit 0
     const entries = await readLog(fixture.shimLog);
     expect(entries[0]!.cmd).toBe("git");
   });
+
+  it("leaves no process a hung deploy started running once its timeout fires", async () => {
+    const fixture = await makeFixture();
+    const hang = path.join(fixture.dir, "hang.sh");
+    const pidFile = path.join(fixture.dir, "pids");
+    // Two background subshells and the script itself publish their PIDs, then all loop forever.
+    await writeFile(hang, `for _ in 1 2; do (while :; do sleep 1; done) & echo $! >> "${pidFile}"; done\necho $$ >> "${pidFile}"\nwhile :; do sleep 1; done\n`);
+    const result = await runDeploy(fixture, {}, { scriptPath: hang, timeoutMs: 3_000 });
+
+    expect([(result.error as NodeJS.ErrnoException | undefined)?.code, result.signal]).toEqual(["ETIMEDOUT", "SIGKILL"]);
+    const pids = (await readFile(pidFile, "utf8")).trim().split("\n").map(Number);
+    expect(new Set(pids).size, "the oracle is live: all three processes ran and recorded themselves").toBe(3);
+    // Identity from /proc, not a bare PID: a killed process's cmdline reads empty, a reused PID's names no fixture.
+    const running = () => pids.filter((pid) => {
+      try { return readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(hang); } catch { return false; }
+    });
+    // Teardown for a regression only: it runs after the wait below fails the test by its timeout.
+    onTestFinished(() => running().forEach((pid) => process.kill(pid, "SIGKILL")));
+    // SIGKILL lands asynchronously, so wait for it unbounded; survivors loop forever, so the test timeout fails it.
+    while (running().length > 0) await new Promise((settle) => setTimeout(settle, 50));
+  }, 30_000);
 
   it("builds the release name from UTC date and the 7-character head hash", async () => {
     const source = await readFile(script, "utf8");

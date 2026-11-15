@@ -3,12 +3,12 @@
 // command shims and their log, the gate-state writers, and the deploy runner.
 // Extracted so each measured test module stays under the tests/ size ceiling
 // (.github/workflows/size-baseline.yml).
-import { spawnSync } from "node:child_process";
 import { chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect } from "vitest";
+import { runBoundedScript } from "./bounded-script";
 import { createOwnedTempDirectoryRegistry } from "./owned-temp-directory";
 
 const fixtureDirectories = createOwnedTempDirectoryRegistry(path.join(tmpdir(), "overflow-deploy-revision-"));
@@ -604,7 +604,7 @@ export function expectGateRefused(entries: ShimLogEntry[], label = "the gate ref
 export async function runDeploy(
   fixture: Fixture,
   extraEnv: Record<string, string> = {},
-  options: { omitShims?: string[]; scriptPath?: string; openFd9On?: string } = {},
+  options: { omitShims?: string[]; scriptPath?: string; openFd9On?: string; timeoutMs?: number } = {},
 ) {
   const names = ALL_SHIMS.filter((name) => !(options.omitShims ?? []).includes(name));
   await writeShims(fixture, names);
@@ -612,32 +612,28 @@ export async function runDeploy(
   // own copy for the issue-747 proof). openFd9On: a path fd 9 is opened on
   // before the script starts, for a phase-2 entry that must get past the
   // fd 9 check to reach the serving-anchor refusal.
-  const args = options.openFd9On
-    ? ["-c", 'exec 9>"$1"; exec bash "$2"', "deploy-revision", options.openFd9On, options.scriptPath ?? script]
-    : [options.scriptPath ?? script];
-  return spawnSync("bash", args, {
-    encoding: "utf8",
-    cwd: fixture.dir,
-    timeout: 60_000,
-    env: {
-      ...process.env,
-      SHIM_LOG: fixture.shimLog,
-      GIT_SHIM_HASH: FIXTURE_HASH,
-      GIT_SHIM_TREE: fixture.tree,
-      GIT_SHIM_REMOTE_URL: FIXTURE_REMOTE_URL,
-      GH_SHIM_PROTECTION_JSON: fixture.protectionJson,
-      GIT_SHIM_REQUIRED_CHECKS: fixture.requiredChecks,
-      GH_SHIM_GATE_SEQUENCE: fixture.gateSuccess,
-      OVERFLOW_DEPLOY_TREE: fixture.tree,
-      OVERFLOW_DEPLOY_ENV_FILE: fixture.envFile,
-      OVERFLOW_DEPLOY_LOCK: fixture.lock,
-      OVERFLOW_DEPLOY_UNIT: fixture.unit,
-      OVERFLOW_DEPLOY_URL: fixture.url,
-      OVERFLOW_DEPLOY_LOG_DIR: fixture.logDir,
-      PATH: `${fixture.bins}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
-      ...extraEnv,
-    },
-  });
+  const argv = options.openFd9On
+    ? ["bash", "-c", 'exec 9>"$1"; exec bash "$2"', "deploy-revision", options.openFd9On, options.scriptPath ?? script]
+    : ["bash", options.scriptPath ?? script];
+  // Own process group, killed whole after the run: a hung script's subshells must not outlive the test.
+  return runBoundedScript(argv, fixture.dir, {
+    ...process.env,
+    SHIM_LOG: fixture.shimLog,
+    GIT_SHIM_HASH: FIXTURE_HASH,
+    GIT_SHIM_TREE: fixture.tree,
+    GIT_SHIM_REMOTE_URL: FIXTURE_REMOTE_URL,
+    GH_SHIM_PROTECTION_JSON: fixture.protectionJson,
+    GIT_SHIM_REQUIRED_CHECKS: fixture.requiredChecks,
+    GH_SHIM_GATE_SEQUENCE: fixture.gateSuccess,
+    OVERFLOW_DEPLOY_TREE: fixture.tree,
+    OVERFLOW_DEPLOY_ENV_FILE: fixture.envFile,
+    OVERFLOW_DEPLOY_LOCK: fixture.lock,
+    OVERFLOW_DEPLOY_UNIT: fixture.unit,
+    OVERFLOW_DEPLOY_URL: fixture.url,
+    OVERFLOW_DEPLOY_LOG_DIR: fixture.logDir,
+    PATH: `${fixture.bins}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
+    ...extraEnv,
+  }, options.timeoutMs ?? 60_000);
 }
 
 /** Builds the existing shim PATH with no reachable gh binary. */
