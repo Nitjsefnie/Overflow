@@ -519,13 +519,13 @@ exit 0
     await writeFile(hang, `for _ in 1 2; do (while :; do sleep 1; done) & echo $! >> "${pidFile}"; done\necho $$ >> "${pidFile}"\nwhile :; do sleep 1; done\n`);
     const result = await runDeploy(fixture, {}, { scriptPath: hang, timeoutMs: 3_000 });
 
-    expect([(result.error as NodeJS.ErrnoException | undefined)?.code, result.signal]).toEqual(["ETIMEDOUT", "SIGKILL"]);
     const pids = (await readFile(pidFile, "utf8")).trim().split("\n").map(Number);
-    expect(new Set(pids).size, "the oracle is live: all three processes ran and recorded themselves").toBe(3);
     // Identity from /proc, not a bare PID: a killed process's cmdline reads empty, a reused PID's names no fixture.
     const running = () => pids.filter((pid) => { try { return readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(hang); } catch { return false; } });
-    // Teardown for a regression only: it runs after the wait below fails the test by its timeout.
+    // Teardown for a regression only, registered before any assertion so a failing one still reaps the survivors.
     onTestFinished(() => running().forEach((pid) => process.kill(pid, "SIGKILL")));
+    expect([(result.error as NodeJS.ErrnoException | undefined)?.code, result.signal]).toEqual(["ETIMEDOUT", "SIGKILL"]);
+    expect(new Set(pids).size, "the oracle is live: all three processes ran and recorded themselves").toBe(3);
     // SIGKILL lands asynchronously, so wait for it unbounded; survivors loop forever, so the test timeout fails it.
     while (running().length > 0) await new Promise((settle) => setTimeout(settle, 50));
   }, 30_000);
