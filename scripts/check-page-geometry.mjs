@@ -1329,8 +1329,7 @@ async function main() {
             // The page rendered but the contract element is gone: a markup
             // rewrite must re-point the contract VISIBLY, so stop the run —
             // after cleanup, via the flag below, never via process.exit.
-            hardFailure =
-              `page contract out of date — update the selector in scripts/check-page-geometry.mjs ` +
+            hardFailure = `page contract out of date — update the selector in scripts/check-page-geometry.mjs ` +
               `("${contract.primaryAction}" matched nothing on ${contract.page} at ` +
               `${viewportLabel(viewport)}; the page rendered — "${contract.renderRoot}" is present)`;
             break pageLoop;
