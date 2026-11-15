@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { createServer, type AddressInfo } from "node:net";
+import { describe, expect, it, vi } from "vitest";
 import {
   credentialColumns,
+  postgresCredentialStore,
   runCredentialReencryptionCli,
   type CredentialStore,
   type StoredCredential,
 } from "../../scripts/reencrypt-credentials";
+import { closeSql, getSql } from "@/lib/db/client";
 import { encryptToken, type TokenKeySet } from "@/lib/security/token-cipher";
 import { legacyV1Envelope, legacyV1Key } from "../support/legacy-token-envelope";
 
@@ -93,6 +96,34 @@ describe("credential re-encryption CLI failure paths", () => {
     expect(result.lines).toEqual([JSON.stringify({ failure: "REENCRYPTION_FAILED" })]);
     expectNoSecrets(result.lines);
     expect(result.lines.join("\n")).not.toContain(row.envelope.toString("utf8"));
+  });
+
+  it("names CONNECT_TIMEOUT when the database accepts the connection and never answers", async () => {
+    let accepted = 0;
+    const silent = createServer(() => { accepted++; });
+    await new Promise<void>((resolve) => { silent.listen(0, "127.0.0.1", resolve); });
+    vi.stubEnv("OVERFLOW_DATABASE_URL", `postgres://reencrypt@127.0.0.1:${(silent.address() as AddressInfo).port}/reencrypt`);
+    try {
+      // The store the script builds by default: the production client and its connect deadline.
+      const result = await run([], postgresCredentialStore(getSql()));
+      expect(accepted).toBeGreaterThan(0);
+      expect(result).toEqual({ code: 1, lines: [JSON.stringify({ failure: "REENCRYPTION_FAILED", cause: "CONNECT_TIMEOUT" })] });
+    } finally {
+      await closeSql();
+      silent.close();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each([
+    [Object.assign(new Error(connectionString), { name: "PostgresError", code: "57P01" }), "57P01"],
+    [new TypeError(connectionString), "TypeError"],
+    [Object.assign(new Error(connectionString), { code: `refused ${connectionString}` }), undefined],
+    [Object.defineProperty(new Error(connectionString), "code", { get() { throw new Error(connectionString); } }), undefined],
+    [Object.create(null) as unknown, undefined], [{ code: "57P01", name: "reencrypt" }, undefined], [null, undefined],
+  ])("names a failure by its code or error class, never its message (%#)", async (thrown, cause) => {
+    const store: CredentialStore = { readBatch: async () => { throw thrown; }, replaceIfUnchanged: async () => false };
+    expect(await run([], store)).toEqual({ code: 1, lines: [JSON.stringify({ failure: "REENCRYPTION_FAILED", cause })] });
   });
 
   it("counts a v1 envelope as notCurrent under --check and reports it failed/UNDECRYPTABLE without a write", async () => {

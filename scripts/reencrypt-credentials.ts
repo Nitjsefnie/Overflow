@@ -18,8 +18,8 @@ import {
  * the current key with its row binding. Once `--check` passes, the previous
  * key can be retired.
  *
- * Output is JSON lines naming tables, columns, row ids and counts only; no
- * plaintext, key or ciphertext is ever written.
+ * Output is JSON lines naming tables, columns, row ids, counts and a failure's
+ * error code only; no plaintext, key or ciphertext is ever written.
  */
 
 type KeyRow = Record<string, string | number>;
@@ -198,9 +198,24 @@ export async function runCredentialReencryptionCli(
       }
     }
     return clean ? 0 : 1;
-  } catch {
-    write(JSON.stringify({ failure: "REENCRYPTION_FAILED" }));
+  } catch (error) {
+    write(JSON.stringify({ failure: "REENCRYPTION_FAILED", cause: failureCause(error) }));
     return 1;
+  }
+}
+
+/**
+ * The thrown error's code (postgres.js, SQLSTATE or Node) or else its class, when identifier-shaped:
+ * never its message, which can carry a connection string or a value. Undefined drops the field.
+ */
+function failureCause(error: unknown): string | undefined {
+  try {
+    if (!(error instanceof Error)) return undefined;
+    const { code } = error as { code?: unknown };
+    return [code, error.name === "Error" ? undefined : error.name]
+      .find((value): value is string => typeof value === "string" && /^\w{1,64}$/.test(value));
+  } catch {
+    return undefined; // a throwing getter must not cost the failure line
   }
 }
 

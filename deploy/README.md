@@ -1690,8 +1690,11 @@ and its write, or whose GitHub user id, forge identity or webhook credential id
 they now are. The script is idempotent and safe to re-run: a second run
 rewrites only what is still not current, so run the block again after any
 failure or interruption. `{"failure":"REENCRYPTION_FAILED"}` means the database
-could not be read or written; rows already re-sealed stay re-sealed. The output
-names tables, columns, row ids and counts, never a credential or a key, so
+could not be read or written; rows already re-sealed stay re-sealed. Its `cause`,
+when present, is the error's code or class, never its message: `CONNECT_TIMEOUT`
+when no database session was ready within five seconds of connecting, or a
+PostgreSQL SQLSTATE such as `57P01` (the server terminated the connection). The output
+names tables, columns, row ids, counts and that cause, never a credential or a key, so
 retain it with the rotation record.
 
 The second command writes nothing. It prints
