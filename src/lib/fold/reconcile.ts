@@ -783,15 +783,5 @@ async function declineCrawl(
 }
 
 function noDeltaSummary(repositoryId: string, runId: string): ReconciliationSummary {
-  return {
-    repositoryId,
-    runId,
-    skipped: false,
-    adds: 0,
-    changes: 0,
-    removals: 0,
-    added: 0,
-    changed: 0,
-    removed: 0,
-  };
+  return { repositoryId, runId, skipped: false, adds: 0, changes: 0, removals: 0, added: 0, changed: 0, removed: 0 };
 }
