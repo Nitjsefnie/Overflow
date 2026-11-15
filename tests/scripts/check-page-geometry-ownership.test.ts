@@ -1,10 +1,10 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
@@ -141,6 +141,8 @@ const startupFixture = `
   const depth = Number(process.env.DEPTH || 0);
   if (depth >= 2) process.exit(2);
   const [kind, record] = process.argv.slice(2);
+  // Chrome's own scratch directory, made where Chrome makes it: under TMPDIR.
+  const created = kind === 'chrome' ? fs.mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'org.chromium.Chromium.')) : null;
   let ready = false;
   const child = spawn(process.execPath, ['-e', \`
     if (Number(process.env.DEPTH) >= 2) process.exit(2);
@@ -152,7 +154,7 @@ const startupFixture = `
   });
   child.stdout.once('data', data => {
     ready = true;
-    fs.writeFileSync(record + '.tmp', JSON.stringify({ parent: process.pid, grandchild: Number(data) }));
+    fs.writeFileSync(record + '.tmp', JSON.stringify({ parent: process.pid, grandchild: Number(data), created }));
     fs.renameSync(record + '.tmp', record);
     if (kind === 'server') {
       require('node:http').createServer((_req, res) => res.end('fixture')).listen(
@@ -161,7 +163,8 @@ const startupFixture = `
     // Chrome remains silent: the real gate waits in its launch path until
     // the test sends the signal, without needing a fake CDP implementation.
   });
-  process.on('SIGTERM', () => child.once('exit', () => process.exit(0)));
+  // A Chrome that ignores SIGTERM is only stopped by the gate's SIGKILL.
+  process.on('SIGTERM', () => kind === 'chrome' ? fs.writeFileSync(record + '.sigterm', '') : child.once('exit', () => process.exit(0)));
   setInterval(() => {}, 1000);
 `;
 
@@ -206,10 +209,11 @@ it.each(["SIGTERM", "SIGINT"] as const)("owns both real-entrypoint startup trees
     } });
     syncBuiltinESMExports();
   `);
+  const systemTmp = await scratch(); // the gate's system temp directory
   const run = launch(preload, [], {
-    OVERFLOW_DATABASE_URL: "postgresql://127.0.0.1:1/unused_fixture", OVERFLOW_LAYOUT_CHECK_PORT: String(await freePort()), DEPTH: "0",
+    TMPDIR: systemTmp, OVERFLOW_DATABASE_URL: "postgresql://127.0.0.1:1/unused_fixture", OVERFLOW_LAYOUT_CHECK_PORT: String(await freePort()), DEPTH: "0",
   });
-  interface Pids { parent: number; grandchild: number }
+  interface Pids { parent: number; grandchild: number; created: string | null }
   let server: Pids | undefined;
   let chrome: Pids | undefined;
   try {
@@ -234,10 +238,15 @@ it.each(["SIGTERM", "SIGINT"] as const)("owns both real-entrypoint startup trees
   groups.add(chrome!.parent);
   expect(gone(server!.grandchild)).toBe(false);
   expect(gone(chrome!.grandchild)).toBe(false);
+  expect(chrome!.created!.startsWith(systemTmp + sep) && existsSync(chrome!.created!)).toBe(true);
   run.child.kill(signal);
   const [code, exitSignal] = await run.exited;
   expect(exitSignal).toBe(null);
   expect(code).toBe(signal === "SIGTERM" ? 143 : 130);
   await assertGone(server!.parent, server!.grandchild, chrome!.parent, chrome!.grandchild);
   expect(existsSync(directory)).toBe(false);
+  expect(existsSync(join(path, "chrome.json.sigterm"))).toBe(true); // ignored SIGTERM, yet gone: SIGKILLed
+  // Asserted before teardown, which removes systemTmp anyway.
+  expect(existsSync(chrome!.created!)).toBe(false);
+  expect(readdirSync(systemTmp).filter(name => name.startsWith("org.chromium.Chromium."))).toEqual([]);
 });
