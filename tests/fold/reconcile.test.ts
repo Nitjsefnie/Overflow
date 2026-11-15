@@ -914,20 +914,9 @@ describe("reconcileRepository", () => {
     const summary = await reconcileRepository(dependencies, "repository");
 
     expect(dependencies.store.findUsersByGitHubUserIds).toHaveBeenCalledWith([2001]);
-    expect(summary).toMatchObject({
-      repositoryId: "repository",
-      adds: 2,
-      changes: 1,
-      removals: 3,
-    });
-    expect(dependencies.github.getPullRequestReviews).toHaveBeenCalledWith(
-      { owner: "octo", name: "example" },
-      11,
-    );
-    expect(dependencies.github.getPullRequestDiff).toHaveBeenCalledWith(
-      { owner: "octo", name: "example" },
-      11,
-    );
+    expect(summary).toMatchObject({ repositoryId: "repository", adds: 2, changes: 1, removals: 3 });
+    expect(dependencies.github.getPullRequestReviews).toHaveBeenCalledWith({ owner: "octo", name: "example" }, 11);
+    expect(dependencies.github.getPullRequestDiff).toHaveBeenCalledWith({ owner: "octo", name: "example" }, 11);
     expect(materialize).toHaveBeenCalledWith(
       expect.objectContaining({
         repositoryId: "repository",
@@ -1070,10 +1059,7 @@ describe("reconcileRepository", () => {
     await reconcileRepository(dependencies, "repository");
 
     // Soft, so a run that skips the fetch still reports what it did to the proof.
-    expect.soft(calls).toEqual([
-      { operation: "reviews", number: 11 },
-      { operation: "diff", number: 11 },
-    ]);
+    expect.soft(calls).toEqual([{ operation: "reviews", number: 11 }, { operation: "diff", number: 11 }]);
     const fold = materialize.mock.calls[0]![0].fold as FoldResult;
     expect(fold.unwritableClosures).toEqual([]);
     expect(fold.settlements.map(({ githubPullRequestId }) => githubPullRequestId)).toEqual([201]);
@@ -1223,20 +1209,14 @@ describe("reconcileRepository", () => {
     ]));
     const snapshots = [
       {
-        issues: [
-          reconciliationIssue({ id: 101, number: 1 }),
-          reconciliationIssue({ id: 102, number: 2 }),
-        ],
+        issues: [reconciliationIssue({ id: 101, number: 1 }), reconciliationIssue({ id: 102, number: 2 })],
         closingPullRequests: new Map([
           [1, [reconciliationPullRequest({ id: 201, number: 11 })]],
           [2, [reconciliationPullRequest({ id: 202, number: 12 })]],
         ]),
       },
       {
-        issues: [
-          reconciliationIssue({ id: 102, number: 2 }),
-          reconciliationIssue({ id: 101, number: 1 }),
-        ],
+        issues: [reconciliationIssue({ id: 102, number: 2 }), reconciliationIssue({ id: 101, number: 1 })],
         closingPullRequests: new Map([
           [2, [reconciliationPullRequest({ id: 202, number: 12 })]],
           [1, [reconciliationPullRequest({ id: 201, number: 11 })]],
@@ -1512,13 +1492,7 @@ describe("reconcileRepository", () => {
     // discard the subject. This is the negative control against a widened
     // classifier accepting any GitLabApiError status.
     const serverError = new GitLabApiError(500);
-    const dependencies = reconciliationDependencies({
-      github: {
-        getIssue: vi.fn(async () => {
-          throw serverError;
-        }),
-      },
-    });
+    const dependencies = reconciliationDependencies({ github: { getIssue: vi.fn(async () => { throw serverError; }) } });
     dependencies.store.getReconciliationEvidence = async () => ({ version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
       checkpoint: new Date(), lastFullPassAt: new Date(), omittedOversizedFacts: 0, issues: [], pullRequests: [] });
     dependencies.store.getDirtyReconciliationSubjects = async () => [
@@ -1541,13 +1515,7 @@ describe("reconcileRepository", () => {
     [new GitHubResponseTooLargeError(MAX_SUCCESS_BODY_BYTES), "RESPONSE_TOO_LARGE"],
   ])("completes the run when dirty pull request closing references answer %s, discarding only that subject", async (failure, reason) => {
     const subject = { kind: "PULL_REQUEST" as const, id: 777, number: 44, generation: "9" };
-    const dependencies = reconciliationDependencies({
-      github: {
-        getPullRequestClosingIssues: vi.fn(async () => {
-          throw failure;
-        }),
-      },
-    });
+    const dependencies = reconciliationDependencies({ github: { getPullRequestClosingIssues: vi.fn(async () => { throw failure; }) } });
     dependencies.store.getReconciliationEvidence = async () => ({ version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
       checkpoint: new Date(), lastFullPassAt: new Date(), omittedOversizedFacts: 0, issues: [], pullRequests: [] });
     dependencies.store.getDirtyReconciliationSubjects = async () => [subject];
@@ -1820,13 +1788,7 @@ describe("reconcileRepository", () => {
     // whole-run retry semantics. This pins the boundary against the pull
     // request classifier's 406 branch leaking into the issue arm.
     const diffCap = new GitHubApiError(406);
-    const dependencies = reconciliationDependencies({
-      github: {
-        getIssue: vi.fn(async () => {
-          throw diffCap;
-        }),
-      },
-    });
+    const dependencies = reconciliationDependencies({ github: { getIssue: vi.fn(async () => { throw diffCap; }) } });
     dependencies.store.getReconciliationEvidence = async () => ({
       version: 1,
       formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
