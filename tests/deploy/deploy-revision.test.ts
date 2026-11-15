@@ -225,9 +225,7 @@ exit 0
     expect(result.stderr).not.toContain("parsed with the target SHA's own scripts/required-checks-parse.jq");
     const entries = await readLog(fixture.shimLog);
     const servingCache = `${realpathSync(fixture.prevDir)}/cache`;
-    const nodeEntry = entries.find(
-      (entry) => entry.cmd === "node" && entry.args[0] === "scripts/release.ts",
-    )!;
+    const nodeEntry = entries.find((entry) => entry.cmd === "node" && entry.args[0] === "scripts/release.ts")!;
     const release = nodeEntry.args[3]!;
     expect(release).toMatch(RELEASE_GRAMMAR);
     expect(release.endsWith(`-${FIXTURE_HASH}`)).toBe(true);
@@ -337,9 +335,7 @@ exit 0
 
     expect(result.status, result.stderr).toBe(0);
     const entries = await readLog(fixture.shimLog);
-    const release = entries.find(
-      (entry) => entry.cmd === "node" && entry.args[0] === "scripts/release.ts",
-    )!.args[3]!;
+    const release = entries.find((entry) => entry.cmd === "node" && entry.args[0] === "scripts/release.ts")!.args[3]!;
     const upgradeLog = path.join(fixture.logDir, `webhook-upgrade-${release}.jsonl`);
     await expect(readFile(upgradeLog, "utf8")).resolves.toContain('{"upgradeFixture":true}');
     expect(result.stdout).toContain('{"upgradeFixture":true}');
@@ -351,9 +347,7 @@ exit 0
 
     expect(result.status, result.stderr).toBe(0);
     const entries = await readLog(fixture.shimLog);
-    const release = entries.find(
-      (entry) => entry.cmd === "node" && entry.args[0] === "scripts/release.ts",
-    )!.args[3]!;
+    const release = entries.find((entry) => entry.cmd === "node" && entry.args[0] === "scripts/release.ts")!.args[3]!;
     // The captured listing is printed as one contiguous block, descending, so
     // the deploy record shows exactly what the prune guard decided from.
     const listing = [
@@ -529,9 +523,7 @@ exit 0
     const pids = (await readFile(pidFile, "utf8")).trim().split("\n").map(Number);
     expect(new Set(pids).size, "the oracle is live: all three processes ran and recorded themselves").toBe(3);
     // Identity from /proc, not a bare PID: a killed process's cmdline reads empty, a reused PID's names no fixture.
-    const running = () => pids.filter((pid) => {
-      try { return readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(hang); } catch { return false; }
-    });
+    const running = () => pids.filter((pid) => { try { return readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(hang); } catch { return false; } });
     // Teardown for a regression only: it runs after the wait below fails the test by its timeout.
     onTestFinished(() => running().forEach((pid) => process.kill(pid, "SIGKILL")));
     // SIGKILL lands asynchronously, so wait for it unbounded; survivors loop forever, so the test timeout fails it.
@@ -623,9 +615,7 @@ exit 0
       /^ {6}while IFS=\$'\\t' read -r job_run job_path/.test(line),
     );
     expect(rowLoopStart, "the producer row loop is gone from required_checks_gate").toBeGreaterThan(-1);
-    const rowLoopEnd = lines.findIndex(
-      (line, index) => index > rowLoopStart && line === "      done <<<\"$jobs\"",
-    );
+    const rowLoopEnd = lines.findIndex((line, index) => index > rowLoopStart && line === "      done <<<\"$jobs\"");
     expect(rowLoopEnd, "the producer row loop is unterminated").toBeGreaterThan(rowLoopStart);
 
     const rowLoop = lines.slice(rowLoopStart, rowLoopEnd).join("\n");
@@ -636,10 +626,7 @@ exit 0
     ).not.toMatch(/pins_for|is_pinned_path_of/);
 
     const hoistLine = lines.findIndex((line) => line.trim() === 'check_pins=$(pins_for "$check")');
-    expect(
-      hoistLine,
-      "a check's pins must be read before its row loop and kept in a variable",
-    ).toBeGreaterThan(-1);
+    expect(hoistLine, "a check's pins must be read before its row loop and kept in a variable").toBeGreaterThan(-1);
     expect(hoistLine).toBeLessThan(rowLoopStart);
   });
 
@@ -697,10 +684,7 @@ exit 0
       ["verify", "completed", "success"],
       ["claim", "completed", "success"],
     ]);
-    const result = await runDeploy(fixture, {
-      GH_SHIM_GATE_SEQUENCE: absent,
-      OVERFLOW_DEPLOY_CI_TIMEOUT: "1",
-    });
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: absent, OVERFLOW_DEPLOY_CI_TIMEOUT: "1" });
 
     expect(result.status, result.stderr).not.toBe(0);
     expect(result.stderr).toContain("deploy-gate (absent)");
@@ -744,10 +728,7 @@ exit 0
       ["verify", "completed", ""],
       ["deploy-gate", "completed", "success"],
     ]);
-    const result = await runDeploy(fixture, {
-      GH_SHIM_GATE_SEQUENCE: malformed,
-      OVERFLOW_DEPLOY_CI_TIMEOUT: "30",
-    });
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: malformed, OVERFLOW_DEPLOY_CI_TIMEOUT: "30" });
 
     expect(result.status, result.stderr).toBe(1);
     expect(result.stderr).toContain("Required check verify concluded unknown");
@@ -786,10 +767,7 @@ exit 0
       ["verify", "completed", "success"],
       ["deploy-gate", "in_progress"],
     ]);
-    const result = await runDeploy(fixture, {
-      GH_SHIM_GATE_SEQUENCE: pending,
-      OVERFLOW_DEPLOY_CI_TIMEOUT: "1",
-    });
+    const result = await runDeploy(fixture, { GH_SHIM_GATE_SEQUENCE: pending, OVERFLOW_DEPLOY_CI_TIMEOUT: "1" });
 
     expect(result.status, result.stderr).not.toBe(0);
     expect(result.stderr).toContain("deploy-gate");
@@ -1183,9 +1161,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
    */
   const strictParser = 'error("strict parser: every map is too new")\n';
 
-  function treeParser(fixture: Fixture): string {
-    return path.join(fixture.tree, "scripts", "required-checks-parse.jq");
-  }
+  function treeParser(fixture: Fixture): string { return path.join(fixture.tree, "scripts", "required-checks-parse.jq"); }
 
   function parserRead(sha: string): string {
     return `git show ${sha}:scripts/required-checks-parse.jq`;
@@ -1204,11 +1180,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     );
     const entries = await readLog(fixture.shimLog);
     const reads = gateReads(FIXTURE_HASH);
-    expect(gateLog(entries)).toEqual([
-      ...reads.slice(0, 3),
-      parserRead(FIXTURE_HASH),
-      ...reads.slice(3),
-    ]);
+    expect(gateLog(entries)).toEqual([...reads.slice(0, 3), parserRead(FIXTURE_HASH), ...reads.slice(3)]);
     expect(entries.some((entry) => entry.args[0] === "release:switch")).toBe(true);
   });
 
@@ -1222,10 +1194,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     expect(result.stderr).toContain("the tree's scripts/required-checks-parse.jq exited");
     expect(result.stderr).toContain("the target SHA carries no copy of that file to fall back to (git show exited 128)");
     const entries = await readLog(fixture.shimLog);
-    expect(gateLog(entries)).toEqual([
-      ...gateReads(FIXTURE_HASH).slice(0, 3),
-      parserRead(FIXTURE_HASH),
-    ]);
+    expect(gateLog(entries)).toEqual([...gateReads(FIXTURE_HASH).slice(0, 3), parserRead(FIXTURE_HASH)]);
     expectGateRefused(entries);
   });
 
@@ -1240,10 +1209,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     expect(result.stderr).toContain(`Could not read a valid .github/required-checks.json at ${FIXTURE_HASH}`);
     expect(result.stderr).toContain("the target SHA's own copy exited");
     const entries = await readLog(fixture.shimLog);
-    expect(gateLog(entries)).toEqual([
-      ...gateReads(FIXTURE_HASH).slice(0, 3),
-      parserRead(FIXTURE_HASH),
-    ]);
+    expect(gateLog(entries)).toEqual([...gateReads(FIXTURE_HASH).slice(0, 3), parserRead(FIXTURE_HASH)]);
     expectGateRefused(entries);
   });
 
@@ -1544,9 +1510,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     "https://github.com/a/b\nc/d.git",
   ])("refuses when remote.origin.url does not parse to an owner/repo pair: %s", async (remoteUrl) => {
     const fixture = await makeFixture();
-    const result = await runDeploy(fixture, {
-      GIT_SHIM_REMOTE_URL: remoteUrl,
-    });
+    const result = await runDeploy(fixture, { GIT_SHIM_REMOTE_URL: remoteUrl });
 
     expect(result.status, result.stderr).not.toBe(0);
     expect(result.stderr).toContain("remote.origin.url");
@@ -1623,9 +1587,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     const fixture = await makeFixture();
     for (const offender of NEAR_MISS_IGNORED) {
       await writeFile(fixture.shimLog, "");
-      const result = await runDeploy(fixture, {
-        GIT_SHIM_IGNORED: ignoredListing([...OPERATIONAL_IGNORED, offender]),
-      });
+      const result = await runDeploy(fixture, { GIT_SHIM_IGNORED: ignoredListing([...OPERATIONAL_IGNORED, offender]) });
 
       expect(result.status, `${offender}: ${result.stderr}`).toBe(1);
       expectIgnoredRefusal(result.stderr, fixture.tree, offender);
@@ -1722,9 +1684,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     const entries = await readLog(fixture.shimLog);
-    const release = entries.find(
-      (entry) => entry.cmd === "node" && entry.args[0] === "scripts/release.ts",
-    )!.args[3]!;
+    const release = entries.find((entry) => entry.cmd === "node" && entry.args[0] === "scripts/release.ts")!.args[3]!;
     await expect(readFile(path.join(fixture.tree, release, "REVISION"), "utf8")).resolves.toBe(`${fullSha}\n`);
     expect(result.stdout).toContain(`Source revision: ${fullSha}`);
   });
@@ -2232,9 +2192,7 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
     const entries = await readLog(fixture.shimLog);
     // Real git logs nothing; its pin-map read is proved by the gate passing.
     expect(gateLog(entries)).toEqual(gateReads(tip).filter((line) => !line.startsWith("git ")));
-    const release = entries.find(
-      (entry) => entry.cmd === "node" && entry.args[0] === "scripts/release.ts",
-    )!.args[3]!;
+    const release = entries.find((entry) => entry.cmd === "node" && entry.args[0] === "scripts/release.ts")!.args[3]!;
     expect(release.endsWith(`-${tip.slice(0, 7)}`)).toBe(true);
     await expect(readFile(path.join(fixture.tree, release, "REVISION"), "utf8")).resolves.toBe(`${tip}\n`);
   });
@@ -2275,9 +2233,7 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
     expect(git("rev-parse", "HEAD")).toBe(withStep);
     expect(result.stdout).toContain("747-EXTRA-VERIFICATION ran");
     const entries = await readLog(fixture.shimLog);
-    const release = entries.find(
-      (entry) => entry.cmd === "node" && entry.args[0] === "scripts/release.ts",
-    )!.args[3]!;
+    const release = entries.find((entry) => entry.cmd === "node" && entry.args[0] === "scripts/release.ts")!.args[3]!;
     expect(release.endsWith(`-${withStep.slice(0, 7)}`)).toBe(true);
     await expect(readFile(path.join(fixture.tree, release, "REVISION"), "utf8")).resolves.toBe(`${withStep}\n`);
   });
