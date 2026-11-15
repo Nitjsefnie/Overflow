@@ -1,4 +1,4 @@
-import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { STEP_KILL_SIGNAL, runBoundedScript } from "../support/bounded-script";
 import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
 const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "dependency-audit-retry-")]);
@@ -13,8 +14,6 @@ const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "depend
 type ScriptedOutcome = { code: number; stdout: string; stderr: string };
 
 const STEP_TIMEOUT_MS = 120_000;
-
-const STEP_KILL_SIGNAL = "SIGKILL";
 
 const RUNAWAY_MAX_DEPTH = 5;
 
@@ -28,75 +27,9 @@ const RUNAWAY_BOUND_MS = 1_500;
 
 const SURVIVOR_SETTLE_MS = 4_000;
 
-const STEP_LAUNCHER = 'echo $$ > "$1"; shift; exec bash -e "$@"';
-
-function killTree(pgid: number | undefined, pid: number | undefined): void {
-  if (pgid !== undefined) {
-    try {
-      process.kill(-pgid, STEP_KILL_SIGNAL);
-      return;
-    } catch (error) {
-
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
-    }
-  }
-  if (pid !== undefined) {
-    try {
-      process.kill(pid, STEP_KILL_SIGNAL);
-    } catch {
-      // Already gone, or not ours to signal.
-    }
-  }
-}
-
-function runBoundedScript(
-  script: string,
-  home: string,
-  env: NodeJS.ProcessEnv,
-  timeoutMs: number,
-  scriptArgs: string[] = [],
-): SpawnSyncReturns<string> {
-  const pgidFile = join(home, "step-pgid");
-  const result = spawnSync("setsid", ["bash", "-c", STEP_LAUNCHER, "step", pgidFile, script, ...scriptArgs], {
-    cwd: home,
-    encoding: "utf8",
-    env,
-    timeout: timeoutMs,
-    killSignal: STEP_KILL_SIGNAL,
-  });
-  // The script publishes `$$` before the exec, so this read is after the fact
-  // and never races: by now either the file is there or the script never ran.
-  let pgid: number | undefined;
-  try {
-    const published = Number(readFileSync(pgidFile, "utf8").trim());
-
-    const own = ownProcessGroup();
-    if (Number.isInteger(published) && published > 1 && published !== process.pid && published !== own) {
-      pgid = published;
-    }
-  } catch {
-    // No file: `setsid` never got as far as the script.
-  }
-  // Unconditional, not only on a timeout: a script that exits can leave a
-  // descendant running, and that is the same leak by another route.
-  killTree(pgid, result.pid ?? undefined);
-  return result;
-}
-
 function countProcesses(marker: string): number {
   const found = spawnSync("pgrep", ["-f", marker], { encoding: "utf8" });
   return found.stdout.split("\n").filter((line) => line.trim() !== "").length;
-}
-
-function ownProcessGroup(): number | undefined {
-  try {
-    const stat = readFileSync("/proc/self/stat", "utf8");
-    const afterComm = stat.slice(stat.lastIndexOf(")") + 1).trim().split(/\s+/);
-    const pgid = Number(afterComm[2]);
-    return Number.isInteger(pgid) && pgid > 0 ? pgid : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 const LINUX_ONLY = process.platform === "linux";
@@ -391,7 +324,7 @@ describe("the dependency audit workflow's audit step", () => {
         delete env.DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS;
       }
 
-      const result = runBoundedScript(script, home, env, STEP_TIMEOUT_MS);
+      const result = runBoundedScript(["bash", "-e", script], home, env, STEP_TIMEOUT_MS);
       return {
         status: result.status,
         stdout: result.stdout,
@@ -589,7 +522,7 @@ describe("the dependency audit workflow's audit step", () => {
       // Bounded far below the chain's own lifetime, so the chain is guaranteed
       // to still be running when the bound fires — the only state in which this
       // can fail.
-      const result = runBoundedScript(script, home, { ...process.env }, RUNAWAY_BOUND_MS, [marker]);
+      const result = runBoundedScript(["bash", "-e", script, marker], home, { ...process.env }, RUNAWAY_BOUND_MS);
 
       // It was killed, not merely slow: `spawnSync` reports the timeout it
       // applied, which is a record of what the code did rather than a duration
