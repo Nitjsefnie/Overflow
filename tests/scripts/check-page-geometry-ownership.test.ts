@@ -114,8 +114,7 @@ it("releases acquisition hooks when the real gate's allocation fails", async () 
 
 async function freePort() {
   const server = createServer();
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("missing fixture port");
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
@@ -160,8 +159,7 @@ const startupFixture = `
 // Chrome's TMPDIR nests under the gate's only while its socket fits: 41 is the last length that does.
 it.each([["SIGTERM", 41, true], ["SIGINT", 42, false], ["SIGTERM", 130, false]] as const)("owns both real-entrypoint startup trees on %s under a %i-character TMPDIR", async (signal, length, nested) => {
   const path = await scratch();
-  const fixture = join(path, "startup.cjs");
-  const preload = join(path, "startup.mjs");
+  const fixture = join(path, "startup.cjs"); const preload = join(path, "startup.mjs");
   await writeFile(fixture, startupFixture);
   const fixtureUrl = pathToFileURL(join(root, "scripts/page-geometry-fixtures.mjs")).href;
   await writeFile(preload, `
@@ -200,10 +198,8 @@ it.each([["SIGTERM", 41, true], ["SIGINT", 42, false], ["SIGTERM", 130, false]] 
     syncBuiltinESMExports();
   `);
   // The gate's system temp directory, padded to exactly `length` under a short owned base.
-  const base = await fixtureDirectories.createAsync("/tmp/gate-tmp-");
-  directories.push(base);
-  const systemTmp = join(base, "t".repeat(length - base.length - 1));
-  await mkdir(systemTmp);
+  const base = await fixtureDirectories.createAsync("/tmp/gate-tmp-"); directories.push(base);
+  const systemTmp = join(base, "t".repeat(length - base.length - 1)); await mkdir(systemTmp);
   expect(systemTmp.length).toBe(length);
   const run = launch(preload, [], {
     TMPDIR: systemTmp, OVERFLOW_DATABASE_URL: "postgresql://127.0.0.1:1/unused_fixture", OVERFLOW_LAYOUT_CHECK_PORT: String(await freePort()), DEPTH: "0",
@@ -226,8 +222,7 @@ it.each([["SIGTERM", 41, true], ["SIGINT", 42, false], ["SIGTERM", 130, false]] 
   const directory = await readFile(join(path, "workdir"), "utf8");
   directories.push(directory);
   groups.add(server!.parent); groups.add(chrome!.parent);
-  expect(gone(server!.grandchild)).toBe(false);
-  expect(gone(chrome!.grandchild)).toBe(false);
+  expect(gone(server!.grandchild)).toBe(false); expect(gone(chrome!.grandchild)).toBe(false);
   expect(chrome!.created!.startsWith(directory + sep) && existsSync(chrome!.created!)).toBe(true);
   expect(chrome!.created!.startsWith(systemTmp + sep)).toBe(nested);
   // Chrome binds created + "/SingletonSocket"; Linux sun_path holds 107 bytes plus NUL.
