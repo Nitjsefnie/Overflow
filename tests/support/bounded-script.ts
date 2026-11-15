@@ -18,7 +18,7 @@ function killTree(pgid: number | undefined, pid: number | undefined): void {
       if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
     }
   }
-  if (pid !== undefined) {
+  if (pid !== undefined && pid > 1) {
     try {
       process.kill(pid, STEP_KILL_SIGNAL);
     } catch {}
@@ -63,6 +63,6 @@ export function runBoundedScript(
     // No file: the script never ran.
   }
   // Unconditional, not only on a timeout: a script that exits can leave a descendant running.
-  killTree(pgid, result.pid ?? undefined);
+  killTree(pgid, result.pid);
   return result;
 }
