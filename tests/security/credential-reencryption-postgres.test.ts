@@ -287,8 +287,7 @@ describe("re-encrypting stored credentials under the current key", () => {
     {
       table: "users", keyColumn: "github_user_id",
       async seed() {
-        return (await insertUser((id) =>
-          encryptToken("moved-oauth", previousKey, credentialBinding.userOAuthToken(id)))).id;
+        return (await insertUser((id) => encryptToken("moved-oauth", previousKey, credentialBinding.userOAuthToken(id)))).id;
       },
       async move(id: string) { await sql`update users set github_user_id = ${externalId++} where id = ${id}`; },
     },
@@ -296,19 +295,15 @@ describe("re-encrypting stored credentials under the current key", () => {
       table: "user_forge_identities", keyColumn: "instance_url",
       async seed() {
         return (await insertForgeIdentity((await insertUser(null)).id, (forgeUserId) =>
-          encryptToken("moved-pat", previousKey,
-            credentialBinding.forgeToken({ provider: "gitlab", instanceUrl, forgeUserId })))).id;
+          encryptToken("moved-pat", previousKey, credentialBinding.forgeToken({ provider: "gitlab", instanceUrl, forgeUserId })))).id;
       },
-      async move(id: string) {
-        await sql`update user_forge_identities set instance_url = 'https://moved.example.com' where id = ${id}`;
-      },
+      async move(id: string) { await sql`update user_forge_identities set instance_url = 'https://moved.example.com' where id = ${id}`; },
     },
     {
       table: "user_forge_identities", keyColumn: "forge_user_id",
       async seed() {
         return (await insertForgeIdentity((await insertUser(null)).id, (forgeUserId) =>
-          encryptToken("moved-pat", previousKey,
-            credentialBinding.forgeToken({ provider: "gitlab", instanceUrl, forgeUserId })))).id;
+          encryptToken("moved-pat", previousKey, credentialBinding.forgeToken({ provider: "gitlab", instanceUrl, forgeUserId })))).id;
       },
       async move(id: string) { await sql`update user_forge_identities set forge_user_id = ${externalId++} where id = ${id}`; },
     },
@@ -319,9 +314,7 @@ describe("re-encrypting stored credentials under the current key", () => {
         const repository = await registerRepository(previousKey, sponsor.id, "moved-secret");
         return repository.id;
       },
-      async move(id: string) {
-        await sql`update registered_repositories set webhook_credential_id = ${randomUUID()} where id = ${id}`;
-      },
+      async move(id: string) { await sql`update registered_repositories set webhook_credential_id = ${randomUUID()} where id = ${id}`; },
     },
   ])("skips a $table row whose $keyColumn changed between read and write", async ({ table, seed, move }) => {
     const id = await seed();
