@@ -45,6 +45,24 @@ describe("shared database clients", () => {
     expect(() => getSql()).toThrow('DATABASE_STATEMENT_TIMEOUT_MS is set but invalid: "".');
   });
 
+  it("connects within 5 s unless OVERFLOW_DATABASE_CONNECT_TIMEOUT_SECONDS names another whole number of seconds", async () => {
+    vi.stubEnv("OVERFLOW_DATABASE_URL", unreachableDatabaseUrl);
+    vi.stubEnv("OVERFLOW_DATABASE_CONNECT_TIMEOUT_SECONDS", undefined);
+    vi.stubEnv("DATABASE_CONNECT_TIMEOUT_SECONDS", undefined);
+    expect([getSql().options.connect_timeout, getCoordinationSql().options.connect_timeout]).toEqual([5, 5]);
+    await closeSql();
+    vi.stubEnv("DATABASE_CONNECT_TIMEOUT_SECONDS", "invalid");
+    vi.stubEnv("OVERFLOW_DATABASE_CONNECT_TIMEOUT_SECONDS", "30");
+    expect([getSql().options.connect_timeout, getCoordinationSql().options.connect_timeout]).toEqual([30, 30]);
+  });
+
+  it.each(["", "abc", "-5", "0", "2.5"])("refuses %j for OVERFLOW_DATABASE_CONNECT_TIMEOUT_SECONDS at client construction", (invalid) => {
+    vi.stubEnv("OVERFLOW_DATABASE_URL", unreachableDatabaseUrl);
+    vi.stubEnv("OVERFLOW_DATABASE_CONNECT_TIMEOUT_SECONDS", invalid);
+    expect(() => getSql()).toThrow(`DATABASE_CONNECT_TIMEOUT_SECONDS is set but invalid: "${invalid}".`);
+    expect(() => getCoordinationSql()).toThrow(`DATABASE_CONNECT_TIMEOUT_SECONDS is set but invalid: "${invalid}".`);
+  });
+
   it("ends the coordination client alongside the work client", async () => {
     process.env.OVERFLOW_DATABASE_URL = unreachableDatabaseUrl;
     const work = getSql();

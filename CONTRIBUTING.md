@@ -92,6 +92,10 @@ can stay at their defaults or be omitted as noted:
   this variable is not in `.env.example` and can be added to `.env` when you
   want to set it. See the [Environment reference](OPERATING.md#environment-reference)
   for its default and validation behavior.
+- `DATABASE_CONNECT_TIMEOUT_SECONDS` — optional deadline for opening a database
+  connection; like the statement deadline it is not in `.env.example`, and the
+  [Environment reference](OPERATING.md#environment-reference) gives its default
+  and validation behavior.
 - `OVERFLOW_GITHUB_GRAPHQL_BUDGET_RESERVE` (the bare name still works) — optional GraphQL admission threshold for
   worker passes. `.env.example` includes the default `500`, which can stay as-is
   or be changed or omitted. See the
