@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, readdirSync } from "node:fs";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { join, sep } from "node:path";
@@ -201,7 +201,9 @@ it.each(["SIGTERM", "SIGINT"] as const)("owns both real-entrypoint startup trees
     } });
     syncBuiltinESMExports();
   `);
-  const systemTmp = await scratch(); // the gate's system temp directory
+  // The gate's system temp directory, longer than any TMPDIR Chrome itself can start under.
+  const systemTmp = join(await scratch(), "t".repeat(100));
+  await mkdir(systemTmp);
   const run = launch(preload, [], {
     TMPDIR: systemTmp, OVERFLOW_DATABASE_URL: "postgresql://127.0.0.1:1/unused_fixture", OVERFLOW_LAYOUT_CHECK_PORT: String(await freePort()), DEPTH: "0",
   });
@@ -227,7 +229,9 @@ it.each(["SIGTERM", "SIGINT"] as const)("owns both real-entrypoint startup trees
   groups.add(chrome!.parent);
   expect(gone(server!.grandchild)).toBe(false);
   expect(gone(chrome!.grandchild)).toBe(false);
-  expect(chrome!.created!.startsWith(systemTmp + sep) && existsSync(chrome!.created!)).toBe(true);
+  expect(chrome!.created!.startsWith(directory + sep) && existsSync(chrome!.created!)).toBe(true);
+  // Chrome binds created + "/SingletonSocket"; Linux sun_path holds 107 bytes plus NUL.
+  expect(chrome!.created!.length + "/SingletonSocket".length).toBeLessThanOrEqual(107);
   run.child.kill(signal);
   const [code, exitSignal] = await run.exited;
   expect(exitSignal).toBe(null);

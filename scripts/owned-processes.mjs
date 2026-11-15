@@ -1,8 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { readEnv } from "../src/lib/env.ts";
 
@@ -37,7 +35,8 @@ export class OwnedProcesses {
     if (this.workDir !== null) throw new Error("work directory already allocated");
     // Hooks are already installed. Attach the result before yielding so a
     // signal delivered during allocation sees the directory when handled.
-    this.workDir = mkdtempSync(join(tmpdir(), "page-geometry-"));
+    // Fixed /tmp, not tmpdir(): Chrome's TMPDIR is this, and its socket path must fit sun_path.
+    this.workDir = mkdtempSync("/tmp/page-geometry-");
     return this.workDir;
   }
 
