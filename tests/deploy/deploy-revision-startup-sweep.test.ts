@@ -95,6 +95,7 @@ describe("scripts/deploy-revision.sh — the startup-sweep override", () => {
     ["0", `${KEY}=0\n`, undefined, "0"],
     ["true", `${KEY}=true\n`, undefined, "true"],
     ["a padded 1", `${KEY}=' 1'\n`, undefined, "\\ 1"],
+    ["a 01, which only looks like 1", `${KEY}=01\n`, undefined, "01"],
     ["a plain 1", `${KEY}=1\n`, undefined, "1"],
     ["a quoted 1", `${KEY}="1"\n`, undefined, "1"],
     ["a 1 set again after an earlier 0", `${KEY}=0\n${KEY}=1\n`, undefined, "1"],
