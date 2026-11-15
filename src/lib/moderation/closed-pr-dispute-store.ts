@@ -2,7 +2,7 @@ import { resolveDisputeTarget, landedPullRequestNumber } from "@/lib/moderation/
 import { resolveLandedCommitAuthor, type CommitAuthorResult } from "@/lib/moderation/closed-pr-dispute-commit";
 import { getSql } from "@/lib/db/client";
 import type { EnforcementState, SqlClient, TransactionClient } from "@/lib/db/types";
-import { disputeComparisons, reviewEvidence } from "@/lib/moderation/closed-pr-dispute-evidence";
+import { disputeComparisons, reviewEvidence, storedPullRequestEvidence } from "@/lib/moderation/closed-pr-dispute-evidence";
 import { countReviewRoundsAsOf } from "@/lib/fold/review-rounds";
 import { closedPrDisputeDecisionSchema } from "@/lib/moderation/closed-pr-dispute-service";
 import type {
@@ -199,7 +199,7 @@ export class PostgresClosedPrDisputeStore implements ClosedPrDisputeStore {
           where repository_id = ${related.repository_id} and kind = 'pull_request'
             and subject_key = ${related.github_pull_request_id}
         `;
-        const reviews = reviewEvidence.safeParse(evidence?.payload);
+        const reviews = reviewEvidence.safeParse(storedPullRequestEvidence(evidence?.payload));
         if (!reviews.success) return { kind: "insufficient_evidence" };
         awardedPoints = Math.max(0, figure! - countReviewRoundsAsOf(reviews.data.reviews, request.decision_time.valueOf()).length);
       }
