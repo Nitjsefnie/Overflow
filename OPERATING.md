@@ -627,7 +627,7 @@ Neither table covers variables read only by surrounding tooling: the shell's
 | --- | --- |
 | `OVERFLOW_DATABASE_URL` | PostgreSQL connection string |
 | `OVERFLOW_DATABASE_STATEMENT_TIMEOUT_MS` | Optional deadline in milliseconds for every statement the database work pool runs, enforced by the server; defaults to 600000 (ten minutes) when unset, while a set-but-invalid value — empty, non-numeric, negative or zero — is an error at client construction, not a fallback |
-| `OVERFLOW_DATABASE_CONNECT_TIMEOUT_SECONDS` | Optional deadline in whole seconds for a new database connection, from connecting to the server's first ready response, in both database pools; defaults to 5 when unset, while a set-but-invalid value — empty, non-numeric, negative or zero — is an error at client construction, not a fallback, and there is no value that disables it |
+| `OVERFLOW_DATABASE_CONNECT_TIMEOUT_SECONDS` | Optional deadline in whole seconds for a new database connection, from connecting to the server's first ready response, in both database pools; defaults to 5 when unset and accepts at most 2147483 (the longest deadline Node's timer can hold), while a set-but-invalid value — empty, non-numeric, negative, zero or above that maximum — is an error at client construction, not a fallback, and there is no value that disables it |
 | `AUTH_SECRET` | Auth.js session signing secret |
 | `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET` | GitHub OAuth application credentials |
 | `OVERFLOW_TOKEN_ENCRYPTION_KEY` | OAuth-token encryption key |

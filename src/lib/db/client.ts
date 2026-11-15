@@ -35,6 +35,9 @@ export const RECONCILIATION_COORDINATION_POOL_MAX = WORK_POOL_MAX;
  */
 const CONNECT_TIMEOUT_SECONDS = 5;
 
+/** The longest connect deadline whose milliseconds fit Node's 32-bit timer; a longer one would fire at once. */
+const MAX_CONNECT_TIMEOUT_SECONDS = Math.floor(2147483647 / 1000);
+
 /**
  * Seconds a pooled connection may sit fully idle before the client closes it.
  * The library default keeps every connection forever; 5 minutes retires the
@@ -105,14 +108,15 @@ function statementTimeoutMs(): string {
 
 /** The connect deadline the environment names, else CONNECT_TIMEOUT_SECONDS; validated as statementTimeoutMs is. */
 function connectTimeoutSeconds(): number {
-  const raw = positiveWholeNumberFromEnv("DATABASE_CONNECT_TIMEOUT_SECONDS", "seconds, the deadline for a pool connection to become ready");
+  const raw = positiveWholeNumberFromEnv("DATABASE_CONNECT_TIMEOUT_SECONDS",
+    `seconds up to ${MAX_CONNECT_TIMEOUT_SECONDS}, the deadline for a pool connection to become ready`, MAX_CONNECT_TIMEOUT_SECONDS);
   return raw === undefined ? CONNECT_TIMEOUT_SECONDS : Number.parseInt(raw, 10);
 }
 
-/** The variable's value when unset or a positive whole number; anything else set throws, naming the variable. */
-function positiveWholeNumberFromEnv(name: string, meaning: string): string | undefined {
+/** The variable's value when unset or a positive whole number up to max; anything else set throws, naming the variable. */
+function positiveWholeNumberFromEnv(name: string, meaning: string, max = Infinity): string | undefined {
   const raw = readEnv(name);
-  if (raw !== undefined && (!/^[0-9]+$/.test(raw) || Number.parseInt(raw, 10) === 0)) {
+  if (raw !== undefined && (!/^[0-9]+$/.test(raw) || Number.parseInt(raw, 10) === 0 || Number.parseInt(raw, 10) > max)) {
     throw new Error(`${name} is set but invalid: "${raw}". It must be a positive whole number of ${meaning}.`);
   }
   return raw;
