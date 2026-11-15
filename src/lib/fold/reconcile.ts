@@ -230,8 +230,8 @@ async function reconcileRepositoryAfterRepositoryRead(
   // NOT_FOUND is definitive, a pull request whose diff GitHub refuses under
   // its 20000-line cap (a fixed 406) can never read, and a body past the
   // client's success-path byte cap can never be read any smaller — so its dirty
-  // row is discarded and the remaining subjects keep the run alive; any other
-  // per-subject failure keeps whole-run retry semantics. The journal line names
+  // row, if any, is discarded and the remaining subjects keep the run alive; any
+  // other per-subject failure keeps whole-run retry semantics. The journal line names
   // the subject's identity, the failure class and a typed failure's field path
   // (our own constant), never upstream error text, as the queue's rule requires.
   const discardUnresolvableSubject = async (
@@ -252,7 +252,7 @@ async function reconcileRepositoryAfterRepositoryRead(
         generation: dirty.generation,
       });
     }
-    console.error(`Reconciliation of repository ${repositoryId} discarded unresolvable subject kind=${kind} number=${subject.number} reason=${reason}${fieldPath === undefined ? "" : ` field=${fieldPath}`}`);
+    console.error(`Reconciliation of repository ${repositoryId} ${dirty === undefined ? "skipped" : "discarded"} unresolvable subject kind=${kind} number=${subject.number} reason=${reason}${fieldPath === undefined ? "" : ` field=${fieldPath}`}`);
     return true;
   };
 
@@ -484,6 +484,8 @@ async function reconcileRepositoryAfterRepositoryRead(
               new Set(disputePullRequests.map(pr => pr.id)),
             );
             for (const [id, evidence] of refreshedEvidence.evidence) pullRequestEvidence.set(id, evidence);
+            // A refused diff never reads; cached empty (as it folds), incremental passes skip it.
+            for (const id of refreshedEvidence.diffRefusedPrIds) if (!pullRequestEvidence.has(id)) pullRequestEvidence.set(id, { reviews: [], rawDiff: "" });
             const retainedPrIds = new Set([...referencedPullRequests, ...disputePullRequests]
               .filter(pr => !refreshedEvidence.missingDisputePrIds.has(pr.id)).map(({ id }) => id));
             for (const id of pullRequestEvidence.keys()) if (!retainedPrIds.has(id)) pullRequestEvidence.delete(id);
@@ -730,9 +732,9 @@ async function collectPullRequestEvidence(
   ) => Promise<boolean>,
   dirtyPullRequestSubjects: ReadonlyMap<number, DirtyReconciliationSubject>,
   disputePullRequestIds: ReadonlySet<number>,
-): Promise<{ evidence: Map<number, { reviews: GitHubPullRequestReview[]; rawDiff: string }>; missingDisputePrIds: Set<number> }> {
+): Promise<{ evidence: Map<number, { reviews: GitHubPullRequestReview[]; rawDiff: string }>; missingDisputePrIds: Set<number>; diffRefusedPrIds: Set<number> }> {
   const uniqueEvidencePullRequests = new Map(pullRequests.map(pr => [pr.id, pr]));
-  const missingDisputePrIds = new Set<number>();
+  const missingDisputePrIds = new Set<number>(), diffRefusedPrIds = new Set<number>();
   const evidence = await mapWithConcurrency(
     [...uniqueEvidencePullRequests.values()],
     reconciliationConcurrency,
@@ -758,11 +760,12 @@ async function collectPullRequestEvidence(
           throw error;
         }
         if (disputed && reason === "NOT_FOUND") missingDisputePrIds.add(pullRequest.id);
+        if (!disputed && reason === "DIFF_TOO_LARGE") diffRefusedPrIds.add(pullRequest.id);
         return null;
       }
     },
   );
-  return { evidence: new Map(evidence.filter((entry) => entry !== null)), missingDisputePrIds };
+  return { evidence: new Map(evidence.filter((entry) => entry !== null)), missingDisputePrIds, diffRefusedPrIds };
 }
 
 async function declineCrawl(

@@ -357,7 +357,7 @@ describe("a reconciliation that deletes materialized rows says so", () => {
         { kind: "CLOSING_EVIDENCE_UNREADABLE", pull_request_id: null },
       ]);
       expect(errorLog).toHaveBeenCalledWith(
-        `Reconciliation of repository ${repositoryId} discarded unresolvable subject kind=ISSUE number=9 reason=UNREADABLE_FIELD`,
+        `Reconciliation of repository ${repositoryId} skipped unresolvable subject kind=ISSUE number=9 reason=UNREADABLE_FIELD`,
       );
       const removals = await removalChanges(second.runId);
       expect(removals).toEqual([
@@ -462,7 +462,7 @@ describe("a reconciliation that deletes materialized rows says so", () => {
       await expect(materializedSettlementIssueIds(repositoryId)).resolves.toEqual([]);
       await expect(storedViolationCodes(repositoryId)).resolves.toEqual([]);
       expect(errorLog).toHaveBeenCalledWith(
-        `Reconciliation of repository ${repositoryId} discarded unresolvable subject kind=ISSUE number=11 reason=UNREADABLE_FIELD`,
+        `Reconciliation of repository ${repositoryId} skipped unresolvable subject kind=ISSUE number=11 reason=UNREADABLE_FIELD`,
       );
       expect(await removalChanges(second.runId)).toEqual([
         {
