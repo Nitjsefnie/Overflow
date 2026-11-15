@@ -1399,15 +1399,8 @@ describe("reconcileRepository", () => {
         }),
       },
     });
-    dependencies.store.getReconciliationEvidence = async () => ({
-      version: 1,
-      formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
-      checkpoint: new Date(),
-      lastFullPassAt: new Date(),
-      omittedOversizedFacts: 0,
-      issues: [],
-      pullRequests: [],
-    });
+    dependencies.store.getReconciliationEvidence = async () => ({ version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
+      checkpoint: new Date(), lastFullPassAt: new Date(), omittedOversizedFacts: 0, issues: [], pullRequests: [] });
     dependencies.store.getDirtyReconciliationSubjects = async () => [poison, good];
     const discard = vi.fn().mockResolvedValue(undefined);
     dependencies.store.discardDirtyReconciliationSubject = discard;
@@ -1452,15 +1445,8 @@ describe("reconcileRepository", () => {
     });
     const repository = await dependencies.store.getRepository("repository");
     repository!.provider = "gitlab";
-    dependencies.store.getReconciliationEvidence = async () => ({
-      version: 1,
-      formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
-      checkpoint: new Date(),
-      lastFullPassAt: new Date(),
-      omittedOversizedFacts: 0,
-      issues: [],
-      pullRequests: [],
-    });
+    dependencies.store.getReconciliationEvidence = async () => ({ version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
+      checkpoint: new Date(), lastFullPassAt: new Date(), omittedOversizedFacts: 0, issues: [], pullRequests: [] });
     dependencies.store.getDirtyReconciliationSubjects = async () => [poison, good];
     const discard = vi.fn().mockResolvedValue(undefined);
     dependencies.store.discardDirtyReconciliationSubject = discard;
@@ -1499,15 +1485,8 @@ describe("reconcileRepository", () => {
         }),
       },
     });
-    dependencies.store.getReconciliationEvidence = async () => ({
-      version: 1,
-      formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
-      checkpoint: new Date(),
-      lastFullPassAt: new Date(),
-      omittedOversizedFacts: 0,
-      issues: [],
-      pullRequests: [],
-    });
+    dependencies.store.getReconciliationEvidence = async () => ({ version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
+      checkpoint: new Date(), lastFullPassAt: new Date(), omittedOversizedFacts: 0, issues: [], pullRequests: [] });
     dependencies.store.getDirtyReconciliationSubjects = async () => [
       { kind: "ISSUE" as const, id: 999, number: 42, generation: "7" },
       { kind: "ISSUE" as const, id: 555, number: 43, generation: "8" },
