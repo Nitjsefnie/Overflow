@@ -375,7 +375,8 @@ describe("re-encrypting stored credentials under the current key", () => {
     const invoke = (argumentsList: string[], previous: string) => spawnSync(
       "pnpm", ["--silent", "credentials:reencrypt", ...argumentsList], {
         cwd: process.cwd(), encoding: "utf8", timeout: 60_000,
-        env: { ...process.env, NODE_OPTIONS: "", OVERFLOW_DATABASE_URL: databaseUrl,
+        // A 30 s connect deadline, under spawnSync's 60 s, so a starved runner still gets the script's own diagnostic.
+        env: { ...process.env, NODE_OPTIONS: "", OVERFLOW_DATABASE_URL: databaseUrl, OVERFLOW_DATABASE_CONNECT_TIMEOUT_SECONDS: "30",
           OVERFLOW_TOKEN_ENCRYPTION_KEY: currentKey, OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS: previous },
       });
     // Every assertion on an invocation carries what the script itself reported, so a failure names its cause.
