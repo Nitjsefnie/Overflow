@@ -33,19 +33,11 @@ function untouchableStore(): CredentialStore {
 function previousKeyRow(): StoredCredential {
   const naturalKey = { github_user_id: "7001" };
   const binding = usersColumn.bind(naturalKey);
-  return {
-    id: "00000000-0000-4000-8000-000000000001",
-    envelope: Buffer.from(encryptToken("oauth-token", keys.previous!, binding), "utf8"),
-    naturalKey,
-    binding,
-  };
+  return { id: "00000000-0000-4000-8000-000000000001",
+    envelope: Buffer.from(encryptToken("oauth-token", keys.previous!, binding), "utf8"), naturalKey, binding };
 }
 
-async function run(
-  argumentsList: readonly string[],
-  store: CredentialStore,
-  options: { keys?: TokenKeySet; batchSize?: number } = {},
-) {
+async function run(argumentsList: readonly string[], store: CredentialStore, options: { keys?: TokenKeySet; batchSize?: number } = {}) {
   const lines: string[] = [];
   const code = await runCredentialReencryptionCli(argumentsList, {
     store, keys: options.keys ?? keys, batchSize: options.batchSize, write: (line) => { lines.push(line); },
