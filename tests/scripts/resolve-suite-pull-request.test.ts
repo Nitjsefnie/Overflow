@@ -379,6 +379,16 @@ describe("suite run PR resolution", () => {
       expect((await done).exitCode).toBe(0);
     });
 
+    it.each([["network", "fetch failed"], ["503", "GitHub API read failed: HTTP 503"]])(
+      "retries through the default backoff when run as its own process, failing every %s read", (mode, error) => {
+        const env: Record<string, string> = { PATH: process.env.PATH ?? "", OVERFLOW_FAIL_FETCH_MODE: mode, GITHUB_REPOSITORY: "o/r", GH_TOKEN: "t", OVERFLOW_SUITE_RUN_ID: "123" };
+        const child = spawnSync(process.execPath, ["--import", new URL("../support/fail-fetch.ts", import.meta.url).href,
+          new URL("../../scripts/resolve-suite-pull-request.ts", import.meta.url).pathname], { env: env as NodeJS.ProcessEnv, encoding: "utf8", timeout: 60_000 });
+        if (child.error) throw child.error;
+        expect({ status: child.status, signal: child.signal, stdout: child.stdout, fetches: child.stderr.split("\n").filter((line) => line.startsWith("fetch")) })
+          .toEqual({ status: 1, signal: null, stdout: `::error::${error}\n`, fetches: ["fetch 1", "fetch 2", "fetch 3", "fetches 3, exit code 1"] });
+      });
+
     it("retries a body read that times out and resolves once it succeeds", async () => {
       const h = harness();
       const attempts = scriptRunReads(h, (n) => n === 0
