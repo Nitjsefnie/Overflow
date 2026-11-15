@@ -4,7 +4,7 @@ import { RepositoryForm } from "@/components/repository-form";
 import { confirmSignInForApiToken, signInForRepositoryRegistration } from "@/lib/auth/sign-in-actions";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
-import { registrationAppConfigured, registrationAppInstallUrl } from "@/lib/github/registration-app-display";
+import { registrationAppConfigured, registrationAppInstall } from "@/lib/github/registration-app-display";
 import { readEnv } from "@/lib/env";
 
 export default async function NewRepositoryPage() {
@@ -15,7 +15,7 @@ export default async function NewRepositoryPage() {
     <AppShell memberName={session.user.name} isModerator={isModeratorSession(session)}>
       <RepositoryForm
         registrationAppConfigured={appConfigured}
-        registrationAppInstallUrl={appConfigured ? registrationAppInstallUrl(readEnv("GITHUB_REGISTRATION_APP_SLUG")) : null}
+        registrationAppInstall={appConfigured ? registrationAppInstall(readEnv("GITHUB_REGISTRATION_APP_SLUG")) : null}
         canAdministerGitHubWebhooks={session.user.canAdministerWebhooks}
         reauthorizeAction={signInForRepositoryRegistration}
         appSignInAction={confirmSignInForApiToken}

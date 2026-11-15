@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { registrationAppConfigured, registrationAppInstallUrl } from "@/lib/github/registration-app-display";
+import { registrationAppConfigured, registrationAppInstall } from "@/lib/github/registration-app-display";
 
 describe("registration App display", () => {
-  it.each([undefined, "", "Uppercase", "-app", "app-", "a/b", "a?b", "a b", "a\n"])(
-    "does not link an absent or invalid slug %s", (slug) => expect(registrationAppInstallUrl(slug)).toBeNull(),
-  );
-  it.each(["a", "overflow-registration", "app123"])("links valid slug %s", (slug) => {
-    expect(registrationAppInstallUrl(slug)).toBe(`https://github.com/apps/${slug}/installations/new`);
-  });
+  it.each([undefined, "", "Uppercase", "-app", "app-", "a/b", "a?b", "a b", "a\n"])("does not link an absent or invalid slug %s", (slug) =>
+    expect(registrationAppInstall(slug)).toBeNull());
+  it.each(["a", "overflow-registration", "app123"])("links valid slug %s", (slug) =>
+    expect(registrationAppInstall(slug)).toStrictEqual({ slug, url: `https://github.com/apps/${slug}/installations/new` }));
   it.each([undefined, ""])("requires both nonempty unprefixed settings (%s)", (missing) => {
     expect(registrationAppConfigured({})).toBe(false);
     expect(registrationAppConfigured({ GITHUB_REGISTRATION_APP_ID: "1" })).toBe(false);

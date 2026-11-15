@@ -3,6 +3,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RepositoryForm, type RepositoryFormValues } from "@/components/repository-form";
+import { registrationAppInstall } from "@/lib/github/registration-app-display";
 import { declarations, firstAtRule, pinnedRule, rem, stylesheet } from "../support/stylesheet-rules";
 
 const initialValues: RepositoryFormValues = {
@@ -249,22 +250,22 @@ describe("repository registration form", () => {
     expect(JSON.parse(String(submitCalls[0]!.init.body))).not.toHaveProperty("registrationMethod");
   });
 
-  it.each(["https://github.com/apps/overflow-registration/installations/new", null])(
-    "explains configured App registration with install URL %s", (url) => {
-      const { container } = render(<RepositoryForm registrationAppConfigured registrationAppInstallUrl={url} />);
+  // The second install's slug is not a segment of its URL, so link text derived from the URL fails it.
+  it.each([registrationAppInstall("overflow-registration"), { slug: "harbour-app", url: "https://github.test/install/other-app/new" }, null])(
+    "explains configured App registration with install %o", (install) => {
+      const { container } = render(<RepositoryForm registrationAppConfigured registrationAppInstall={install} />);
       const choice = screen.getByRole("combobox", { name: "GitHub registration method" });
       expect(choice).toHaveValue("oauth_hook");
       fireEvent.change(choice, { target: { value: "app" } });
       const help = container.querySelector(".field-help")!;
-      expect(help.textContent).toBe("Install this instance's registration App" +
-        (url === null ? "" : ", overflow-registration,") +
+      expect(help.textContent).toBe("Install this instance's registration App" + (install === null ? "" : `, ${install.slug},`) +
         " on the public repositories you want to register, then come back to this page and register each one here. " +
         "If you cannot install it on the repository's account, ask that account's owner to install it. " +
         "Sign-in uses public identity only; no webhook-administration scope is requested." +
-        (url === null ? " Ask this instance's operator for the App's install link." : ""));
+        (install === null ? " Ask this instance's operator for the App's install link." : ""));
       const link = help.querySelector("a");
-      if (url === null) expect(link).toBeNull();
-      else expect(link).toHaveAttribute("href", url);
+      if (install === null) expect(link).toBeNull();
+      else expect([link!.textContent, link!.getAttribute("href")]).toStrictEqual([install.slug, install.url]);
     },
   );
 

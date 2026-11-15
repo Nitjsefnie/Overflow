@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { PublicAppShell } from "@/components/app-shell";
 import { GITHUB_REPOSITORY_REGISTRATION_SCOPE } from "@/lib/auth/github-oauth-scopes";
 import { signInAsContributor, signInForRepositoryRegistration } from "@/lib/auth/sign-in-actions";
-import { registrationAppConfigured, registrationAppInstallUrl } from "@/lib/github/registration-app-display";
+import { registrationAppConfigured, registrationAppInstall } from "@/lib/github/registration-app-display";
 import type { RegistrationAppDisplayProps } from "@/components/registration-app-guidance";
 import { readEnv } from "@/lib/env";
 import { STARTING_CREDIT_LIMIT } from "@/lib/domain/credit-limit";
@@ -16,7 +16,7 @@ export const metadata: Metadata = {
   title: "Overflow — cooperative points",
 };
 
-export function LandingPage({ registrationAppConfigured = false, registrationAppInstallUrl = null }: RegistrationAppDisplayProps) {
+export function LandingPage({ registrationAppConfigured = false, registrationAppInstall = null }: RegistrationAppDisplayProps) {
   return (
     <main className="landing-page" id="main-content">
       <section className="landing-hero" aria-labelledby="landing-title">
@@ -53,8 +53,8 @@ export function LandingPage({ registrationAppConfigured = false, registrationApp
         </form>
         {registrationAppConfigured ? <p className="landing-action-note">
           Or register without webhook administration: use the contributor sign-in above,{" "}
-          {registrationAppInstallUrl === null ? "install this instance's registration App"
-            : <a href={registrationAppInstallUrl}>install this instance&apos;s registration App</a>}{" "}
+          {registrationAppInstall === null ? "install this instance's registration App"
+            : <a href={registrationAppInstall.url}>install this instance&apos;s registration App</a>}{" "}
           on the repository, and choose &quot;GitHub App&quot; on the registration form. The App&apos;s repository
           permissions are <code>metadata: read</code>, <code>issues: read</code>, and <code>pull_requests: read</code>.
         </p> : null}
@@ -116,7 +116,7 @@ export default async function HomePage() {
   return (
     <PublicAppShell>
       <LandingPage registrationAppConfigured={appConfigured}
-        registrationAppInstallUrl={appConfigured ? registrationAppInstallUrl(readEnv("GITHUB_REGISTRATION_APP_SLUG")) : null} />
+        registrationAppInstall={appConfigured ? registrationAppInstall(readEnv("GITHUB_REGISTRATION_APP_SLUG")) : null} />
     </PublicAppShell>
   );
 }
