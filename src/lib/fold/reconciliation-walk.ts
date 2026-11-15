@@ -85,7 +85,8 @@ export async function walkReconciliation({ pass, listing, gateway, repository, o
       return { evidence: { reviews, rawDiff }, missing: false };
     } catch (error) {
       const reason = await discard(error, "pull_request", subject, disputed);
-      return { evidence: null, missing: reason === "NOT_FOUND" };
+      // A refused diff never reads; carried empty (as it folds), the cache keeps it.
+      return { evidence: !disputed && reason === "DIFF_TOO_LARGE" ? { reviews: [], rawDiff: "" } : null, missing: reason === "NOT_FOUND" };
     }
   };
   const gather = async (subject: WalkSubject, anchor: string) => {

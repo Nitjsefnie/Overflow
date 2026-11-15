@@ -1675,6 +1675,31 @@ describe("reconcileRepository", () => {
     },
   );
 
+  it("keeps the empty entry a sweep caches for a pull request whose diff GitHub refused, so the next incremental run makes no request for it", async () => {
+    // The sweep is a full pass on the walk path, and the incremental run reads back the cache it wrote.
+    // Dispute pull request 13 is refused the same way and stays out of that cache.
+    const f = fixture([subject(1)]);
+    f.issues.get(1)!.closingPullRequests = [pullRequest(11, 5001)];
+    f.gateway.getPullRequestDiff = async () => { throw new GitHubApiError(406); };
+    const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn(async () => []), walkReconciliation: vi.fn<NonNullable<ReconciliationGateway["walkReconciliation"]>>(
+      async (_reference, input) => walkReconciliation({ ...input, listing: f.listing, gateway: f.gateway })) } });
+    dependencies.sweep = { spend: async () => null, openPass: async () => f.pass, discardPass: async () => { await f.pass.complete(); }, discardIfInactive: async () => {} };
+    (await dependencies.store.getRepository("repository"))!.disputePullRequests = [{ id: 13, number: 13 }];
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
+      const { issues, pullRequests } = vi.mocked(dependencies.store.materialize).mock.calls[0]![0].synchronization!;
+      dependencies.store.getReconciliationEvidence = async () => ({ version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
+        checkpoint: new Date(), lastFullPassAt: new Date(), omittedOversizedFacts: 0, issues: issues as Array<ReturnType<typeof issue>>, pullRequests });
+      await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
+      expect([dependencies.github.getPullRequestReviews, dependencies.github.getPullRequestDiff]
+        .flatMap((spy) => vi.mocked(spy).mock.calls.map(([, number]) => number))).toEqual([13, 13]);
+      expect(pullRequests).toEqual([{ id: 11, reviews: [], rawDiff: "" }]);
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
   it.each(["reviews", "diff"] as const)(
     "completes the run when a merged closing pull request's %s read answers a body over the success-path byte cap, discarding and omitting only that subject",
     async (failingFetch) => {
