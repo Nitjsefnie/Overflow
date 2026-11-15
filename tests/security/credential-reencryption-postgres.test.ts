@@ -410,21 +410,26 @@ describe("re-encrypting stored credentials under the current key", () => {
         env: { ...process.env, NODE_OPTIONS: "", OVERFLOW_DATABASE_URL: databaseUrl,
           OVERFLOW_TOKEN_ENCRYPTION_KEY: currentKey, OVERFLOW_TOKEN_ENCRYPTION_KEY_PREVIOUS: previous },
       });
+    // Every assertion on an invocation carries what the script itself reported, so a failure names its cause.
+    const diagnostics = ({ status, signal, stdout, stderr }: ReturnType<typeof invoke>) => JSON.stringify({ status, signal, stdout, stderr });
+    const linesOf = (result: ReturnType<typeof invoke>) => result.stdout.trim().split("\n").map((line) => { try { return JSON.parse(line) as unknown; } catch { return line; } });
     const before = await snapshot();
 
     const misconfigured = invoke([], "not-a-key");
-    expect(misconfigured.error).toBeUndefined();
-    expect(misconfigured.status, misconfigured.stderr).toBe(1);
-    expect(misconfigured.stdout.trim()).toBe(JSON.stringify({ failure: "KEYS_INVALID" }));
+    expect(misconfigured.error, diagnostics(misconfigured)).toBeUndefined();
+    expect(misconfigured.status, diagnostics(misconfigured)).toBe(1);
+    expect(misconfigured.stdout.trim(), diagnostics(misconfigured)).toBe(JSON.stringify({ failure: "KEYS_INVALID" }));
     expect(await snapshot()).toEqual(before);
 
     const pending = invoke(["--check"], previousKey);
-    expect(pending.status, pending.stderr).toBe(1);
+    expect(pending.status, diagnostics(pending)).toBe(1);
+    expect(linesOf(pending), diagnostics(pending)).toEqual([checkSummary("users", "encrypted_oauth_token", 1, 2),
+      checkSummary("user_forge_identities", "encrypted_token", 0, 2), checkSummary("registered_repositories", "encrypted_webhook_secret", 1, 2)]);
     const reencrypted = invoke([], previousKey);
-    expect(reencrypted.status, reencrypted.stderr).toBe(1);
-    const reencryptedLines = reencrypted.stdout.trim().split("\n").map((line) => JSON.parse(line));
-    expect(reencryptedLines).toHaveLength(6);
-    expect(reencryptedLines).toEqual(expect.arrayContaining([
+    expect(reencrypted.status, diagnostics(reencrypted)).toBe(1);
+    const reencryptedLines = linesOf(reencrypted);
+    expect(reencryptedLines, diagnostics(reencrypted)).toHaveLength(6);
+    expect(reencryptedLines, diagnostics(reencrypted)).toEqual(expect.arrayContaining([
       { table: "users", id: seeded.legacyUser.id, failure: "UNDECRYPTABLE" },
       { table: "user_forge_identities", id: seeded.legacyForge.id, failure: "UNDECRYPTABLE" },
       { table: "registered_repositories", id: seeded.legacyRepository.id, failure: "UNDECRYPTABLE" },
@@ -433,8 +438,10 @@ describe("re-encrypting stored credentials under the current key", () => {
       summary("registered_repositories", "encrypted_webhook_secret", 1, 1, 0, 1),
     ]));
     const settled = invoke(["--check"], "");
-    expect(settled.status, settled.stderr).toBe(1);
-    expect(`${reencrypted.stdout}${reencrypted.stderr}`).not.toContain(legacyV1Plaintext);
-    expect(reencrypted.stderr).not.toContain("Error:");
+    expect(settled.status, diagnostics(settled)).toBe(1);
+    expect(linesOf(settled), diagnostics(settled)).toEqual([checkSummary("users", "encrypted_oauth_token", 2, 1),
+      checkSummary("user_forge_identities", "encrypted_token", 1, 1), checkSummary("registered_repositories", "encrypted_webhook_secret", 2, 1)]);
+    expect(`${reencrypted.stdout}${reencrypted.stderr}`, diagnostics(reencrypted)).not.toContain(legacyV1Plaintext);
+    expect(reencrypted.stderr, diagnostics(reencrypted)).not.toContain("Error:");
   });
 });
