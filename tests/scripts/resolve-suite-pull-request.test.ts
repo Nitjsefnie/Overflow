@@ -26,9 +26,7 @@ function suite(headRepo = REPO, branch = "feature") {
 
 function pr(headRepo = REPO, branch = "feature") {
   return {
-    number: 1183, state: "open",
-    head: { repo: { full_name: headRepo }, ref: branch, sha: HEAD },
-    base: { sha: BASE, ref: "main" },
+    number: 1183, state: "open", head: { repo: { full_name: headRepo }, ref: branch, sha: HEAD }, base: { sha: BASE, ref: "main" },
   };
 }
 
@@ -43,9 +41,7 @@ function harness(run = suite(), candidates: unknown[] = [pr()], current: unknown
     if (url.pathname.endsWith("/actions/runs/123")) return Response.json(run);
     if (url.pathname.endsWith("/pulls")) return Response.json(candidates);
     if (url.pathname.endsWith("/pulls/1183")) return Response.json(current);
-    if (url.pathname.endsWith("/actions/workflows/pr-suite.yml/runs")) {
-      return Response.json({ total_count: 1, workflow_runs: [run] });
-    }
+    if (url.pathname.endsWith("/actions/workflows/pr-suite.yml/runs")) { return Response.json({ total_count: 1, workflow_runs: [run] }); }
     throw new Error(`unexpected API request ${url}`);
   }) as typeof fetch;
   return {
@@ -106,11 +102,7 @@ function resolveWithDefaultSleep(h: ReturnType<typeof harness>) {
 
 async function withFakeTimers(run: () => Promise<void>) {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  try {
-    await run();
-  } finally {
-    vi.useRealTimers();
-  }
+  try { await run(); } finally { vi.useRealTimers(); }
 }
 
 describe("suite run PR resolution", () => {
@@ -213,9 +205,7 @@ describe("suite run PR resolution", () => {
       expect(readFileSync(output, "utf8")).toBe("earlier=true\nsuperseded=true\n");
       expect(result.lines.join("\n")).toContain("::notice::");
       expect(result.lines.join("\n")).toContain(moved.head.sha);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   it("accepts a cancelled suite superseded by a higher-id pull_request suite at the same SHA", async () => {
@@ -287,9 +277,7 @@ describe("suite run PR resolution", () => {
       const result = await resolveSuitePullRequest({ ...h.deps, env: { ...h.deps.env, GITHUB_OUTPUT: output } });
       expect(result.exitCode).toBe(0);
       expect(readFileSync(output, "utf8")).toBe(`earlier=true\npr_number=1183\nhead_sha=${HEAD}\nbase_sha=${BASE}\nbase_ref=main\n`);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   describe("transient read failures", () => {
@@ -342,9 +330,7 @@ describe("suite run PR resolution", () => {
         expect(timeout.getMockImplementation()).toBeUndefined();
         expect(timeout.mock.results.map(({ value }) => Object.getOwnPropertySymbols(value).some((key) => key.description === "kTimeout")))
           .toEqual(signals.map(() => true));
-      } finally {
-        timeout.mockRestore();
-      }
+      } finally { timeout.mockRestore(); }
     });
 
     it.each([
@@ -477,8 +463,7 @@ describe("suite run PR resolution", () => {
       });
     });
 
-    it.each([[503, 3, [1_000, 2_000]], [404, 1, []]])(
-      "reports a bodiless %i response as the HTTP failure",
+    it.each([[503, 3, [1_000, 2_000]], [404, 1, []]])("reports a bodiless %i response as the HTTP failure",
       async (status, expectedAttempts, expectedSleeps) => {
         const h = harness();
         const attempts = scriptRunReads(h, () => new Response(null, { status }));
@@ -495,8 +480,7 @@ describe("suite run PR resolution", () => {
       ["a cancel that throws synchronously", () => ({ cancel() { throw new Error("cancel threw"); } })],
       ["a body without a cancel method", () => ({})],
     ])("rejected response with %s", (_label, body) => {
-      it.each([[503, 3, [1_000, 2_000]], [404, 1, []]])(
-        "is reported as the HTTP %i failure after %i attempt(s)",
+      it.each([[503, 3, [1_000, 2_000]], [404, 1, []]])("is reported as the HTTP %i failure after %i attempt(s)",
         async (status, expectedAttempts, expectedSleeps) => {
           const h = harness();
           const attempts = rejectedWithBody(h, status, 3, body);
@@ -632,8 +616,7 @@ describe("suite run PR resolution", () => {
     });
     if (result.error) throw result.error;
     expect({ status: result.status, signal: result.signal, stdout: result.stdout.trim().split("\n") }).toEqual({
-      status: 0,
-      signal: null,
+      status: 0, signal: null,
       stdout: [
         "timers while waiting: 6",
         `referenced timers while waiting: ${JSON.stringify([[CANCEL_TIMEOUT_MS - 5_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 4_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 2_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 1_000, "[eval1]", false], [CANCEL_TIMEOUT_MS - 500, "[eval1]", true], [CANCEL_TIMEOUT_MS, "resolve-suite-pull-request.ts", true]])}`,
