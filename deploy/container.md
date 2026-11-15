@@ -339,14 +339,14 @@ then the image ID is the identity rollback selects. **Signatures and
 attestations**: nothing here signs an image or attaches build attestations.
 **Automated digest bumps**: these pins go stale the moment a base image is
 rebuilt upstream. Docker Dependabot proposes tag-and-digest updates to the
-root Dockerfile's `FROM` lines, to `.github/Dockerfile` (the CI service
-image, the `/.github/` docker lane) and to `docker-compose.yml` (the
+root Dockerfile's `FROM` lines, to `ci/Dockerfile` (the CI service
+image, the `/ci/` docker lane) and to `docker-compose.yml` (the
 `docker-compose` lane); Node majors remain ignored pending
 review on/after 2026-10-28. Both build paths derive the base provenance labels
 from those `FROM` references automatically, and the tests derive their
 expectations from the runtime `FROM` line; no manual label or test constant
 update is needed. The compose database image now rides the docker-compose
-lane, and the CI service image the `/.github/` docker lane: each digest moves
+lane, and the CI service image the `/ci/` docker lane: each digest moves
 only through such a pull request. The compose lane's pull request runs the
 database suites on the new image before it lands, because the suites start
 the image that file pins; the CI lane's pull request instead changes the
