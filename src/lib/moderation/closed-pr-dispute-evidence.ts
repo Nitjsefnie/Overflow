@@ -7,6 +7,9 @@ export const reviewEvidence = z.object({ reviews: z.array(z.object({
   id: z.number().int().positive(), state: reviewState, submittedAt: z.string().nullable(),
   dismissal: z.object({ at: z.string(), previousState: reviewState.nullable() }).nullable(),
 })) });
+// Reconcile caches a pull request whose diff GitHub refused as this empty placeholder; it is no evidence.
+export const storedPullRequestEvidence = (payload: unknown): unknown =>
+  z.object({ rawDiff: z.literal("") }).safeParse(payload).success ? undefined : payload;
 
 /** Read only retained evidence; missing or omitted facts remain visibly absent. */
 export async function disputeComparisons(sql: SqlClient, requestIds: string[]): Promise<Map<string, ClosedPrDisputeComparison>> {
@@ -32,7 +35,8 @@ export async function disputeComparisons(sql: SqlClient, requestIds: string[]): 
   return new Map(rows.map((row) => {
     const origin = row.provider === "github" ? "https://github.com" : row.instance_url!;
     const prefix = `${origin}/${row.owner_name}/${row.provider === "github" ? "pull" : "-/merge_requests"}/`;
-    const pr = (number: number, title: string, payload: unknown): ClosedPrDisputePullRequest => {
+    const pr = (number: number, title: string, stored: unknown): ClosedPrDisputePullRequest => {
+      const payload = storedPullRequestEvidence(stored);
       const reviews = reviewEvidence.safeParse(payload);
       const diff = z.object({ rawDiff: z.string() }).safeParse(payload);
       return { number, title, url: `${prefix}${number}`, reviews: reviews.success ? reviews.data.reviews : null,

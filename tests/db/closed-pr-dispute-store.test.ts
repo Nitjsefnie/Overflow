@@ -825,7 +825,7 @@ describe("closed PR dispute decisions", () => {
     await expect(store().decideDispute(decision(fixture))).resolves.toMatchObject({ kind: "ok", value: { awardedPoints: 4 } });
   });
 
-  it.each(["absent", "wrong repository", "wrong kind", "wrong PR", "no reviews", "not array", "bad review", "json string"])(
+  it.each(["absent", "wrong repository", "wrong kind", "wrong PR", "no reviews", "not array", "bad review", "json string", "refused-diff placeholder"])(
     "refuses a grant with %s evidence without recording a decision", async (kind) => {
       const fixture = await decisionFixture();
       await sql`delete from repository_reconciliation_evidence_facts where repository_id = ${fixture.repositoryId}`;
@@ -837,7 +837,8 @@ describe("closed PR dispute decisions", () => {
         await sql`update users set role = 'MODERATOR' where id = ${fixture.moderatorId}`;
       } else if (kind !== "absent") {
         const payload = kind === "no reviews" ? {} : kind === "not array" ? { reviews: {} }
-          : kind === "bad review" ? { reviews: [null] } : kind === "json string" ? "not a review object" : { reviews: [] };
+          : kind === "bad review" ? { reviews: [null] } : kind === "json string" ? "not a review object"
+          : kind === "refused-diff placeholder" ? { reviews: [], rawDiff: "" } : { reviews: [] };
         await setReviewPayload(fixture, payload);
         if (kind === "wrong kind") await sql`update repository_reconciliation_evidence_facts set kind = 'issue'
           where repository_id = ${fixture.repositoryId}`;
@@ -848,8 +849,18 @@ describe("closed PR dispute decisions", () => {
       await expect(service().decideDispute(fixture.requestId, { id: fixture.moderatorId }, decision(fixture)))
         .rejects.toMatchObject({ name: "ClosedPrDisputeError", code: "INSUFFICIENT_EVIDENCE" });
       await expectUndecided(fixture.requestId);
+      if (kind === "refused-diff placeholder") expect((await service().listDisputes()).find((row) => row.id === fixture.requestId)
+        ?.comparison?.closedPullRequest).toMatchObject({ reviews: null, rawDiff: null });
     },
   );
+
+  it("grants from, and shows, an empty review list stored beside a readable diff", async () => {
+    const fixture = await decisionFixture();
+    await setReviewPayload(fixture, { reviews: [], rawDiff: "diff" });
+    expect((await service().listDisputes()).find((row) => row.id === fixture.requestId)?.comparison?.closedPullRequest)
+      .toMatchObject({ reviews: [], rawDiff: "diff" });
+    await expect(store().decideDispute(decision(fixture))).resolves.toMatchObject({ kind: "ok", value: { awardedPoints: 6 } });
+  });
 
   it("denies without review evidence or a figure, ignores a supplied figure and leaves the landing paid", async () => {
     for (const figure of [undefined, 9]) {
