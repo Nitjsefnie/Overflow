@@ -31,7 +31,6 @@
 !.github/requirements-pyyaml.txt
 !.github/gitleaks-baseline.json
 !.github/codeql-config.yml
-!.github/Dockerfile
 !.github/ISSUE_TEMPLATE/
 .github/ISSUE_TEMPLATE/*
 !.github/ISSUE_TEMPLATE/bug-report.md
@@ -351,6 +350,10 @@ src/lib/validation/*
 src/lib/webhooks/*
 !src/lib/webhooks/*.ts
 !src/*.ts
+
+!ci/
+ci/*
+!ci/Dockerfile
 
 !db/
 db/*

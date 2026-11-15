@@ -41,7 +41,7 @@ concurrency:
 jobs:
   # Issue 1334: the same reference resolution ci.yml's postgres-image job
   # does — the PostgreSQL service image is read at run time from the
-  # digest-pinned .github/Dockerfile, so a Dependabot bump of that file is
+  # digest-pinned ci/Dockerfile, so a Dependabot bump of that file is
   # exercised by this suite's own database before it lands.
   postgres-image:
     runs-on: ubuntu-latest
@@ -58,9 +58,9 @@ jobs:
       - name: Resolve the PostgreSQL service image reference
         id: image
         run: |
-          image="$(awk 'tolower($1)=="from"{print $2; exit}' .github/Dockerfile)"
+          image="$(awk 'tolower($1)=="from"{print $2; exit}' ci/Dockerfile)"
           if [ -z "${image}" ]; then
-            echo "::error::no FROM line in .github/Dockerfile" >&2
+            echo "::error::no FROM line in ci/Dockerfile" >&2
             exit 1
           fi
           echo "image=${image}" >> "$GITHUB_OUTPUT"
@@ -72,7 +72,7 @@ jobs:
 
     services:
       postgres:
-        # The reference is read at run time from the digest-pinned .github/Dockerfile by
+        # The reference is read at run time from the digest-pinned ci/Dockerfile by
         # the postgres-image job; zizmor cannot resolve a needs expression to a digest,
         # so this line carries the audit's suppression directive.
         image: ${{ needs.postgres-image.outputs.image }}  # zizmor: ignore[unpinned-images]

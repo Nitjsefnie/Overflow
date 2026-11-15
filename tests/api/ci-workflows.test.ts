@@ -523,8 +523,8 @@ fi
       expect(producer, `${file} must carry the postgres-image job`).toBeDefined();
       expect(
         producer!.steps.flatMap((step) => step.run ?? []).join("\n"),
-        `${file}'s postgres-image job must read the image reference from .github/Dockerfile`,
-      ).toContain(".github/Dockerfile");
+        `${file}'s postgres-image job must read the image reference from ci/Dockerfile`,
+      ).toContain("ci/Dockerfile");
       expect(
         JSON.stringify(consumer.needs ?? null),
         `${file}'s consuming job must declare postgres-image in needs`,
@@ -534,7 +534,7 @@ fi
     // resolved at run time from the Dockerfile the postgres-image job reads.
     // The Dockerfile's own pin — which tag and which digest — is asserted by
     // no test here (issue 1334; #1328 settled): which pin is right is the
-    // Dependabot /.github/ docker lane's judgment, and this file reads the
+    // Dependabot /ci/ docker lane's judgment, and this file reads the
     // path, never the pin's value.
     for (const file of ["ci.yml", "pr-suite.yml"]) {
       const source = await readFile(resolve(".github/workflows", file), "utf8");
@@ -1011,22 +1011,19 @@ exit 1
       "dependency-name": "node",
       "update-types": ["version-update:semver-major"],
     }]);
-    // The CI service image lane (issue 1334): it covers .github/Dockerfile,
-    // so `find` by ecosystem "docker" now returns the root entry first and
-    // this lane is found by its directory instead.
-    const githubDocker = config.updates.find((u) =>
-      u["package-ecosystem"] === "docker" && u.directory === "/.github/")!;
-    expect(githubDocker.directory).toBe("/.github/");
-    expect(githubDocker.schedule).toEqual({
+    // The CI service image lane (issue 1334): it covers ci/Dockerfile, so `find` by ecosystem "docker" returns the root entry first and this lane is found by its directory.
+    const ciDocker = config.updates.find((u) => u["package-ecosystem"] === "docker" && u.directory === "/ci/")!;
+    expect(ciDocker.directory).toBe("/ci/");
+    expect(ciDocker.schedule).toEqual({
       interval: "weekly",
       day: "sunday",
       time: "05:53",
       timezone: "Etc/UTC",
     });
-    expect(githubDocker["open-pull-requests-limit"]).toBe(5);
+    expect(ciDocker["open-pull-requests-limit"]).toBe(5);
     // The service image stays within major 17: the exact scope, so the ignore
     // cannot drift to another update type.
-    expect(githubDocker.ignore).toEqual([{
+    expect(ciDocker.ignore).toEqual([{
       "dependency-name": "postgres",
       "update-types": ["version-update:semver-major"],
     }]);
@@ -1399,9 +1396,10 @@ exit 1
     expect(checkIgnore(".github/workflows/pr-suite.yml")).toBe(1);
     expect(checkIgnore(".github/dependabot.yml")).toBe(1);
     // The CI service image both workflows resolve at run time (issue 1334).
-    expect(checkIgnore(".github/Dockerfile")).toBe(1);
+    expect(checkIgnore("ci/Dockerfile")).toBe(1);
     expect(checkIgnore(".github/workflows/unshipped.yaml")).toBe(0);
     expect(checkIgnore(".github/junk.txt")).toBe(0);
+    expect(checkIgnore("ci/junk.txt")).toBe(0);
   });
 
   it("parses a source-only CodeQL scan that installs and builds nothing", async () => {
