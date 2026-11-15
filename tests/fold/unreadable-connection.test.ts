@@ -28,7 +28,7 @@ describe("reconcileRepository unreadable issue connections", () => {
       expect(dependencies.store.failRun).not.toHaveBeenCalled();
       expect(errorLog).toHaveBeenCalledTimes(1);
       expect(errorLog).toHaveBeenCalledWith(
-        "Reconciliation of repository repository discarded unresolvable subject kind=ISSUE number=1 reason=UNREADABLE_FIELD",
+        "Reconciliation of repository repository skipped unresolvable subject kind=ISSUE number=1 reason=UNREADABLE_FIELD",
       );
       const materializeInput = vi.mocked(dependencies.store.materialize).mock.calls[0]![0];
       // The marked issue stays in the fold input: synchronize deletes any issue
@@ -104,7 +104,7 @@ describe("reconcileRepository unreadable issue connections", () => {
     try {
       await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
       expect(errorLog).toHaveBeenCalledWith(
-        "Reconciliation of repository repository discarded unresolvable subject kind=ISSUE number=1 reason=UNREADABLE_FIELD",
+        "Reconciliation of repository repository skipped unresolvable subject kind=ISSUE number=1 reason=UNREADABLE_FIELD",
       );
       const materializeInput = vi.mocked(dependencies.store.materialize).mock.calls[0]![0];
       expect(materializeInput.synchronization?.issues[0]).toMatchObject({ id: 101, closingPullRequestsUnreadable: true, closingPullRequests: [] });
@@ -187,7 +187,7 @@ describe("reconcileRepository unreadable issue connections", () => {
       expect(dependencies.store.failRun).not.toHaveBeenCalled();
       expect(errorLog).toHaveBeenCalledTimes(1);
       expect(errorLog).toHaveBeenCalledWith(
-        "Reconciliation of repository repository discarded unresolvable subject kind=ISSUE number=1 reason=UNREADABLE_FIELD",
+        "Reconciliation of repository repository skipped unresolvable subject kind=ISSUE number=1 reason=UNREADABLE_FIELD",
       );
       const materializeInput = vi.mocked(dependencies.store.materialize).mock.calls[0]![0];
       // The observed set still carries the marked issue; the fold does not.
@@ -229,7 +229,7 @@ describe("reconcileRepository unreadable issue connections", () => {
     try {
       await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
       expect(errorLog).toHaveBeenCalledWith(
-        "Reconciliation of repository repository discarded unresolvable subject kind=ISSUE number=1 reason=UNREADABLE_FIELD",
+        "Reconciliation of repository repository skipped unresolvable subject kind=ISSUE number=1 reason=UNREADABLE_FIELD",
       );
       const materializeInput = vi.mocked(dependencies.store.materialize).mock.calls[0]![0];
       expect(materializeInput.synchronization?.issues).toEqual([cachedIssue]);
