@@ -21,7 +21,7 @@ beforeAll(async () => {
 });
 afterAll(async () => { await closeSql(); await container?.stop(); });
 
-// An earlier release stored a held pass's generations as JSON numbers; such a pass resumes and acknowledges exactly.
+// A held pass whose generations are stored as JSON numbers (the legacy format) resumes and acknowledges exactly.
 it.each([["the maximum bigint", "9223372036854775806", false], ["2 ** 53 - 1, stored as a number", "9007199254740990", true]])(
   "sweeps a repository whose dirty subject's generation is %s", async (_label, last, numeric) => {
   const f = await materializeRepositoryFixture(sql);

@@ -51,7 +51,7 @@ import {
 /**
  * The registration body carries the label arrays — the one unbounded JSON
  * surface the API takes — so 128 KiB bounds the read while carrying the
- * catalogs sponsors submit (issue 661).
+ * catalogs sponsors submit.
  */
 const REPOSITORIES_BODY_LIMIT_BYTES = 128 * 1024; // 128 KiB
 
@@ -99,7 +99,7 @@ export type RepositoryRouteDependencies = {
    * The account's role read live at request time — the single role authority
    * for both credential paths. A session JWT outlives the account it was
    * issued for and a token's account row is only as fresh as the moment it
-   * was read (issue 733): a null here is a deleted (or missing) account.
+   * was read: a null here is a deleted (or missing) account.
    */
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
   createRegistrationDependencies: (
@@ -107,10 +107,10 @@ export type RepositoryRouteDependencies = {
     input: Partial<RepositoryRegistrationInput>,
   ) => Promise<RepositoryRegistrationDependencies>;
   /**
-   * The keyed expensive-route bound (issue 1054), checked by all three verbs
-   * after authorization and before the body is read. The production wiring
-   * passes this file's module-scope gate; a handler built without one — a
-   * test factory call — stays unbounded.
+   * The keyed expensive-route bound, checked by all three verbs after
+   * authorization and before the body is read. The production wiring passes
+   * this file's module-scope gate; a handler built without one — a test factory
+   * call — stays unbounded.
    */
   rateGate?: RouteRateGate;
   incrementRegistrationAttempt?: (kind: RegistrationAttemptKind) => Promise<void>;
@@ -127,10 +127,9 @@ type AuthorizedRepositoryRequest = {
 };
 
 // One keyed limiter per route file, born at the wall clock: its buckets are
-// keyed by the acting credential identity and never evict (issue 1054). All
-// three verbs share the file's one limiter: the class is the repository
-// change itself, whichever of registration, catalog change, or unregistration
-// it takes.
+// keyed by the acting credential identity and never evict. All three verbs
+// share the file's one limiter: the class is the repository change itself,
+// whichever of registration, catalog change, or unregistration it takes.
 const repositoryRateLimiter = createRateLimiter({ nowMs: () => Date.now() });
 const repositoryRateGate = createRouteRateGate({
   className: "repositories",
@@ -209,7 +208,7 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
         repository: repositoryResponse(registration),
         initialImportScheduled: registration.initialImportScheduled,
         claimPath: registration.claimPath,
-        // The listing rule's labels, in submission order (issue 1385).
+        // The listing rule's labels, in submission order.
         openingLabels: input.openingLabels.map((entry) => entry.label),
       }, { status: 201 });
     } catch (error) {
@@ -220,7 +219,7 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
       if (error instanceof RepositoryRegistrationError) {
         return registrationErrorResponse(error);
       }
-      // The granted-scope check (issue 599) runs while the wiring resolves, ahead of
+      // The granted-scope check runs while the wiring resolves, ahead of
       // the flow: a token GitHub reports as unable to administer webhooks is the
       // caller's authorization, refused with a stable code and the remedy; a token
       // GitHub no longer accepts is a credentials refusal; a rate limit is the same
@@ -260,7 +259,7 @@ export function createRepositoryPostHandler(dependencies: RepositoryRouteDepende
 }
 
 /**
- * The catalog-change handler (issue 180). The submission is the same payload a
+ * The catalog-change handler. The submission is the same payload a
  * registration takes, so the sponsor edits the catalog they know; the change
  * appends a new catalog version rather than touching settled work, and reports
  * which version it produced — or that the submitted catalog already is the
@@ -333,13 +332,13 @@ export function createRepositoryPatchHandler(dependencies: RepositoryRouteDepend
 }
 
 /**
- * The sponsor-unregistration handler (issue 48). The submission is either a
- * GitHub repository reference or, for a GitLab registration (issue 549), the
- * instance URL plus the project id or path — the forge identity the row is
- * resolved by, since a nested group's path is not expressible as a GitHub
- * owner/name reference. The flow is idempotent: an already-unregistered row
- * answers success with `alreadyUnregistered`, so the dashboard control can
- * stay rendered on every row without a repeat press ever being an error.
+ * The sponsor-unregistration handler. The submission is either a GitHub
+ * repository reference or, for a GitLab registration, the instance URL plus the
+ * project id or path — the forge identity the row is resolved by, since a nested
+ * group's path is not expressible as a GitHub owner/name reference. The flow is
+ * idempotent: an already-unregistered row answers success with
+ * `alreadyUnregistered`, so the dashboard control can stay rendered on every row
+ * without a repeat press ever being an error.
  */
 export function createRepositoryDeleteHandler(dependencies: RepositoryRouteDependencies) {
   return async function deleteRepository(request: Request): Promise<Response> {
@@ -455,11 +454,11 @@ async function authorizeRepositoryRequest(
       resolved = { session, credential: { kind: "session" } };
     }
 
-    // The live-account gate both credential paths run (issue 733): a session
-    // outlives the account it was issued for, and a token's account row is
-    // only as fresh as the moment it was read, so the route re-reads the
-    // account's role — the single role authority — before the request acts on
-    // the account. A null role is a deleted (or missing) account.
+    // The live-account gate both credential paths run: a session outlives the
+    // account it was issued for, and a token's account row is only as fresh as
+    // the moment it was read, so the route re-reads the account's role — the
+    // single role authority — before the request acts on the account. A null role
+    // is a deleted (or missing) account.
     let role: UserRole | null;
     try {
       role = await dependencies.getCurrentRole(resolved.session.user.id);
@@ -502,7 +501,7 @@ export const POST = createRepositoryPostHandler({
         return new PostgresFoldStore().enqueueReconciliationJob(repositoryId, "REGISTRATION");
       },
       // Registration is the flow that creates a webhook, so it alone asks
-      // GitHub whether the stored token may (issue 599).
+      // GitHub whether the stored token may.
       requireWebhookAdministration: input.registrationMethod !== "app",
     });
   },
@@ -584,7 +583,7 @@ async function parseInput(request: Request): Promise<RepositoryRegistrationInput
 
 // The GitHub form sends exactly `repositoryUrl`; a GitLab submission selects
 // itself with `provider: "gitlab"` and carries the instance URL plus the
-// project id or path instead (issue 549).
+// project id or path instead.
 const unregisterSchema = z
   .object({
     repositoryUrl: z.string().optional(),
@@ -624,8 +623,8 @@ async function buildRegistrationDependencies(
     scheduleInitialImport?: (repositoryId: string) => Promise<unknown>;
     /**
      * Ask GitHub whether the stored token's granted scopes can administer
-     * webhooks before the flow is built (issue 599). The GitHub path only:
-     * a GitLab submission's hook is created with the linked identity's PAT.
+     * webhooks before the flow is built. The GitHub path only: a GitLab
+     * submission's hook is created with the linked identity's PAT.
      */
     requireWebhookAdministration?: boolean;
   },
@@ -731,14 +730,14 @@ function forgeIdentityErrorResponse(error: ForgeIdentityError): Response {
   }
 }
 
-/** The error's response, and its one log: the three call sites are not pure formatting (issue 883). */
+/** The error's response, and its one log: the three call sites are not pure formatting. */
 function registrationErrorResponse(error: RepositoryRegistrationError): Response {
-  // Issue 883: the response below is the sanitized message the submitter reads,
-  // and when a collection-walk bound ended a label read it names neither the
-  // collection that was walked nor the ceiling it stopped at. The wrap keeps that
-  // error as the cause — and only that one, the bounded read whose error is worth
-  // a diagnostic — so it is rendered here: `describeErrorCause` redacts and caps
-  // it, the same rendering the abandonment diagnostic emits.
+  // The response below is the sanitized message the submitter reads, and when a
+  // collection-walk bound ended a label read it names neither the collection that
+  // was walked nor the ceiling it stopped at. The wrap keeps that error as the
+  // cause — and only that one, the bounded read whose error is worth a diagnostic
+  // — so it is rendered here: `describeErrorCause` redacts and caps it, the same
+  // rendering the abandonment diagnostic emits.
   if (error.cause !== undefined) {
     console.error(`Repository registration failed: ${describeErrorCause(error.cause)}`);
   }
@@ -759,9 +758,9 @@ function registrationErrorResponse(error: RepositoryRegistrationError): Response
       return errorResponse(502, "UPSTREAM_FAILURE", error.message);
     case "NOT_FOUND":
       return errorResponse(404, "NOT_FOUND", error.message);
-    // The registration save failed and the compensating webhook deletion failed too
-    // (issue 451): the orphaned webhook is the actionable state, so it is surfaced as
-    // its own answer rather than folded into the save failure that started it.
+    // The registration save failed and the compensating webhook deletion failed
+    // too: the orphaned webhook is the actionable state, so it is surfaced as its
+    // own answer rather than folded into the save failure that started it.
     case "ROLLBACK_INCOMPLETE":
       return errorResponse(503, "ROLLBACK_INCOMPLETE", error.message);
   }

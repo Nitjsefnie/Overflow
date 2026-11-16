@@ -112,11 +112,11 @@ describe(".github/required-checks.json", () => {
   });
 
   it("parses under the committed scripts/required-checks-parse.jq with real jq, one check<TAB>path line per pin pair", () => {
-    // The deploy gate parses the map with this tracked file (issue 1104), so
-    // the shapes the map may hold and the parser that accepts them travel
-    // together: a parser edit and a map-shape change land in the same commit
-    // or not at all. Real jq, because the gate runs jq and jq ships on
-    // GitHub-hosted runners.
+    // The deploy gate parses the map with this tracked file, so the shapes
+    // the map may hold and the parser that accepts them travel together: a
+    // parser edit and a map-shape change land in the same commit or not at
+    // all. Real jq, because the gate runs jq and jq ships on GitHub-hosted
+    // runners.
     const parsed = spawnSync(
       "jq",
       [

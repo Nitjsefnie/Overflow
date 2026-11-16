@@ -29,8 +29,8 @@ it("rebuilds a warmed production audit handler with the registered role mock aft
   productionRole.mockResolvedValue("MEMBER");
 
   // Vitest 5 keeps the cached real dependency graph despite the later vi.mock.
-  // This arm pins the stale role resolver behind the 502 in issue 1214; it
-  // must fail if mock registration ever starts rebuilding cached graphs.
+  // This arm pins the stale role resolver that answers this request with a 502;
+  // it must fail if mock registration ever starts rebuilding cached graphs.
   const { PATCH: warmedHandler } = await import("@/app/api/moderation/[id]/route");
   const poisoned = await warmedHandler(
     requests.json({ action: "dismiss", reason: "A member cannot decide an audit." }, "PATCH"),

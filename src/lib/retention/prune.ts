@@ -34,8 +34,8 @@ export interface RetentionPruneResult {
 }
 
 /**
- * Deletes the operational metadata whose growth is otherwise unbounded
- * (issue 901): webhook delivery receipts and reconciliation run history, plus
+ * Deletes the operational metadata whose growth is otherwise unbounded:
+ * webhook delivery receipts and reconciliation run history, plus
  * contributor work mail's unconfirmed expired addresses, confirmation history
  * past the caps' window and old daily counters.
  *

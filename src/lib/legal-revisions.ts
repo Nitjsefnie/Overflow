@@ -49,8 +49,7 @@
  * revision: the two must be free to move on their own schedules.
  */
 
-// Comment-only touches satisfy the file-level legal-revision gate (issue 955).
-// Rules-page relocation and account-data agreement links changed no text or revision.
+// Comment-only touches satisfy the file-level legal-revision gate.
 export interface LegalRevision {
   /** Stable identity of the document; matches the marker on its page. */
   readonly document: string;

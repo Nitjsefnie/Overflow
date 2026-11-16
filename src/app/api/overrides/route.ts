@@ -31,7 +31,7 @@ import { createRateLimiter } from "@/lib/webhooks/rate-limit";
 
 /**
  * The correction body is one target id plus a reason reasonText() caps at
- * 2000 characters, so 32 KiB bounds the read with wide margin (issue 661).
+ * 2000 characters, so 32 KiB bounds the read with wide margin.
  */
 const OVERRIDES_BODY_LIMIT_BYTES = 32 * 1024; // 32 KiB
 
@@ -69,7 +69,7 @@ export type SettlementOverrideRouteDependencies = {
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
   createService: () => Promise<SettlementOverrideRequestService>;
   /**
-   * The keyed expensive-route bound (issue 1054), checked after the member
+   * The keyed expensive-route bound, checked after the member
    * gate and before the body is read. The REST wiring and the MCP
    * correction_open tool pass the SAME module-scope gate, which is what makes
    * their bound shared per identity; a handler built without one — a test
@@ -79,10 +79,10 @@ export type SettlementOverrideRouteDependencies = {
 };
 
 // One keyed limiter per route file, born at the wall clock: its buckets are
-// keyed by the acting credential identity and never evict (issue 1054). The
-// gate is exported because the MCP tool registry composes this route's
-// factory and must admit through this same instance for the two surfaces to
-// share one bound per identity.
+// keyed by the acting credential identity and never evict. The gate is
+// exported because the MCP tool registry composes this route's factory and
+// must admit through this same instance for the two surfaces to share one
+// bound per identity.
 export const overridesRouteRateGate = createRouteRateGate({
   className: "overrides",
   limiter: createRateLimiter({ nowMs: () => Date.now() }),
@@ -174,9 +174,8 @@ export function settlementOverrideErrorResponse(error: unknown): Response {
 /**
  * Reads the body through readBodyWithinLimit and parses it with the schema.
  * Returns "tooLarge" when the body crosses the route's limit — the caller
- * answers 413 — and null for an unparsable or schema-invalid body, exactly as
- * request.json()'s rejection did before the bounded reader. A body read that
- * itself fails also keeps the null answer.
+ * answers 413 — and null for an unparsable or schema-invalid body. A body read
+ * that itself fails also keeps the null answer.
  */
 async function parseOverrideRequest(
   request: Request,

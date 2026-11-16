@@ -14,7 +14,7 @@ import {
 } from "@/lib/auth/session-guard";
 
 /**
- * The per-account session guard (issue 1043): the pure epoch decisions and
+ * The per-account session guard: the pure epoch decisions and
  * the database reads the jwt refresh performs. `isEpochRejected` pins which
  * tokens survive an epoch mismatch — a token that cannot prove it was minted
  * under the account's current epoch dies, and a MISSING account row keeps

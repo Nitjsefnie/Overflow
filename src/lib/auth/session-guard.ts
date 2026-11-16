@@ -3,10 +3,9 @@ import type { SqlClient } from "@/lib/db/types";
 import type { SessionAccountState } from "@/lib/auth/account-store";
 
 /**
- * The absolute session lifetime (issue 1043), in seconds: the 30 days the
- * privacy notice states. Use does not extend it — every session ends 30 days
- * after the sign-in that minted it, however often the cookie was refreshed in
- * between.
+ * The absolute session lifetime, in seconds: the 30 days the privacy notice
+ * states. Use does not extend it — every session ends 30 days after the
+ * sign-in that minted it, however often the cookie was refreshed in between.
  */
 export const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
@@ -81,8 +80,8 @@ export async function revokeAccountSessions(
  * The absolute-lifetime gate: expired unless `authenticatedAt` is a finite
  * number of seconds and `nowSec` is less than the maximum age past it. A
  * missing or unusable instant is expired — fail-closed, because a token
- * minted before the claim existed is exactly the unbounded cookie issue 1043
- * is about.
+ * minted before the claim existed carries none and would otherwise be an
+ * unbounded cookie.
  */
 export function isSessionExpired(authenticatedAt: unknown, nowSec: number): boolean {
   if (typeof authenticatedAt !== "number" || !Number.isFinite(authenticatedAt)) {
@@ -93,13 +92,12 @@ export function isSessionExpired(authenticatedAt: unknown, nowSec: number): bool
 
 /**
  * The epoch gate: rejected unless the token proves it was minted under the
- * row's current epoch. No row epoch (MISSING) keeps today's pass-through —
- * there is nothing to compare against, and the stale-row route is the
- * deletion gate's documented scope, not this fix's; every token, however
- * malformed its epoch claim, passes a MISSING row. A token with no usable
- * epoch claim against a LIVE row is rejected: that is a pre-fix token,
- * minted before the epoch existed, and its rejection is the deploy's
- * one-time sign-out of every cookie issued before it.
+ * row's current epoch. No row epoch (MISSING) keeps pass-through — there is
+ * nothing to compare against, and the stale-row route belongs to the deletion
+ * gate's documented scope; every token, however malformed its epoch claim,
+ * passes a MISSING row. A token with no usable epoch claim against a LIVE row
+ * is rejected: a token minted before the epoch existed carries none, so every
+ * cookie issued before the epoch is signed out.
  */
 export function isEpochRejected(tokenEpoch: unknown, rowEpoch: number | null): boolean {
   if (rowEpoch === null) {

@@ -21,7 +21,7 @@ command needs onto a clean base. The `deps` and `runtime` stages build from
 the same digest-pinned `node` base, named on the `FROM` lines in
 `Dockerfile`, and the runtime stage labels every
 image with the full source revision it was built from — an image without
-that label cannot be built (issue 461) — declares a `HEALTHCHECK` against
+that label cannot be built — declares a `HEALTHCHECK` against
 `/api/readiness`, the endpoint that answers 200 only when the database is
 reachable and every migration this build bundles is applied, and hands
 `.next/cache` to the runtime user so the server can write its cache, the way
@@ -65,9 +65,9 @@ Run the built image with compose, bringing up the database and app together:
 docker compose --profile app up -d
 ```
 
-Compose consumes the local `overflow-app` and has no app build path (issue
-718). It never pulls an app image: if that local tag is absent, compose fails;
-build it with the script first. To build under another tag, pass it to
+Compose consumes the local `overflow-app` and has no app build path. It never
+pulls an app image: if that local tag is absent, compose fails; build it with
+the script first. To build under another tag, pass it to
 `scripts/container-build.sh [tag]` and point compose at that image with an
 override file.
 
@@ -345,7 +345,7 @@ image, the `/ci/` docker lane) and to `docker-compose.yml` (the
 review on/after 2026-10-28. Both build paths derive the base provenance labels
 from those `FROM` references automatically, and the tests derive their
 expectations from the runtime `FROM` line; no manual label or test constant
-update is needed. The compose database image now rides the docker-compose
+update is needed. The compose database image rides the docker-compose
 lane, and the CI service image the `/ci/` docker lane: each digest moves
 only through such a pull request. The compose lane's pull request runs the
 database suites on the new image before it lands, because the suites start

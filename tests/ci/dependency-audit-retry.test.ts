@@ -219,7 +219,7 @@ describe("the dependency audit workflow's audit step", () => {
     const effective = (step: Step | undefined, key: string): string | undefined =>
       step?.env?.[key] ?? jobEnv?.[key] ?? workflowEnv?.[key];
 
-    // The step the finding was about, named on its own so a regression there
+    // The audit step, named on its own so a regression there
     // fails with a message about the audit rather than about a sweep.
     for (const [key, value] of Object.entries(PINS)) {
       expect(

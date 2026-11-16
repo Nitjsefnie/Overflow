@@ -8,10 +8,10 @@ import { assertTrustedServerActionOrigin } from "@/lib/security/server-action-or
 import { recordRegistrationAttempt } from "@/lib/stats/registration-attempts";
 
 /**
- * The GitHub sign-ins (issue 599). Each names its scope per call, which
- * overrides the provider default; the provider default is itself the
- * contributor's empty scope, so an unlabelled `signIn("github")` anywhere
- * else stays least-privilege.
+ * The GitHub sign-ins. Each names its scope per call, which overrides the
+ * provider default; the provider default is itself the contributor's empty
+ * scope, so an unlabelled `signIn("github")` anywhere else stays
+ * least-privilege.
  */
 
 /** Public identity only; lands on the member destination. */

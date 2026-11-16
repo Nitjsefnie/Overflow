@@ -70,7 +70,7 @@ afterEach(() => {
   }
 });
 
-// Issue 599: a contributor who signed in with no scope reaches this page
+// A contributor who signed in with no scope reaches this page
 // without GitHub webhook administration. Registering a GitHub repository
 // needs it, so choosing GitHub shows why and sends them through GitHub
 // authorization again for the wider grant. Registering a GitLab project

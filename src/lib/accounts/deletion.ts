@@ -71,7 +71,7 @@ export async function findLiveModeratorStanding(
  * Whether the account is the instance's LAST live moderator: it is a live
  * moderator and no other live moderator exists. This is a fact about the
  * warning and the journal, never a blocker — account deletion is the person's
- * erasure right and proceeds regardless (issue 1122).
+ * erasure right and proceeds regardless.
  */
 export function isLastLiveModeratorStanding(standing: LiveModeratorStanding): boolean {
   return standing.isLiveModerator && standing.otherLiveModerators === 0;

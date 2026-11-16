@@ -138,7 +138,7 @@ describe("jwt callback wiring", () => {
 
     await expect(jwt({ token } as never)).resolves.toBeNull();
     // The refresh reads the guard state — the epoch ride-along — not the
-    // plain account state the refresh used before issue 1043.
+    // plain account state.
     expect(mocks.readSessionGuardState).toHaveBeenCalledExactlyOnceWith("u1");
     expect(mocks.findSessionAccountState).not.toHaveBeenCalled();
   });
@@ -154,8 +154,8 @@ describe("jwt callback wiring", () => {
       sessionEpoch: 0,
     };
 
-    // Issue 678's refresh leg: the display name a pre-fix token carries is
-    // replaced by the row's login at the next refresh.
+    // The refresh leg: a token still carrying a display name instead of the
+    // login has it replaced by the row's login at the next refresh.
     await expect(jwt({ token } as never)).resolves.toEqual({
       userId: "u1",
       role: "MEMBER",
@@ -166,14 +166,13 @@ describe("jwt callback wiring", () => {
   });
 
   it("applies the deletion check to a token that already carries authenticatedAt", async () => {
-    // The integration pin: main's sign-in instant rides in every token, and
-    // this branch's deleted-session check must still see it. A token holding
-    // both userId and authenticatedAt is signed out when its account is
-    // DELETED, and carried through — instant included — with only its name
-    // replaced by the row's login when LIVE. The recorded instant is an hour
-    // before the fake clock, so a mutant that rewrites authenticatedAt on
-    // every refresh call instead of only on the OAuth callback changes it
-    // and fails the LIVE leg.
+    // The integration pin: the sign-in instant rides in every token, and the
+    // deleted-session check must see it. A token holding both userId and
+    // authenticatedAt is signed out when its account is DELETED, and carried
+    // through — instant included — with only its name replaced by the row's
+    // login when LIVE. The recorded instant is an hour before the fake clock,
+    // so a mutant that rewrites authenticatedAt on every refresh call instead
+    // of only on the OAuth callback changes it and fails the LIVE leg.
     const jwt = await jwtCallback();
     const recordedAt = signedInAtSeconds - 3600;
     const token = { userId: "u1", role: "MEMBER", authenticatedAt: recordedAt, sessionEpoch: 0 };

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Deterministic SQL statement gate (issue 1039). Initial budgets equal measured
-// work; improvements must run --tighten in the same change. No raise/reseed path.
+// Deterministic SQL statement gate. Budgets equal measured work; improvements
+// must run --tighten in the same change. No raise/reseed path.
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";

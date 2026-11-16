@@ -1,14 +1,14 @@
 /**
  * Measure the /issues filter controls in a real browser.
  *
- * jsdom does no layout, so a rendering test cannot see the defect this measures
- * (issue 32): the claim-state select beside two styled text inputs. This script
- * builds a fixture from the real `src/app/globals.css` plus the form markup from
+ * jsdom does no layout, so a rendering test cannot see the defect this measures:
+ * the claim-state select beside two styled text inputs. This script builds a
+ * fixture from the real `src/app/globals.css` plus the form markup from
  * `src/app/issues/page.tsx`, loads it in headless chromium at the viewport the
- * issue was measured at (1718px), and reports, per control: box height, computed
+ * defect was measured at (1718px), and reports, per control: box height, computed
  * border width, background colour, font size, and the border colour while
  * focused. It exits nonzero when the three controls disagree on any of those —
- * the issue's expected behaviour, "the select matches the text inputs".
+ * the expected behaviour, "the select matches the text inputs".
  *
  * Usage: node scripts/measure-field-controls.ts [<path-to-globals.css>]
  *

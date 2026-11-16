@@ -124,7 +124,7 @@ describe("durable reconciliation evidence", () => {
 
   // Mutant: DROPPED_NOOP_GUARD — a pass whose document is unchanged must not
   // rewrite a single fact row, or every quiet pass rewrites the whole cache
-  // again (issue 853). The AFTER row-level trigger fires only on an actual row
+  // again. The AFTER row-level trigger fires only on an actual row
   // write — a BEFORE trigger would also fire on an insert attempt that the
   // no-op guard then skips — so a pass that only re-reads passes, and one
   // rewritten fact fails the test.
@@ -149,7 +149,7 @@ describe("durable reconciliation evidence", () => {
   });
 
   // Mutant: the split silently dropping an oversized fact without flagging it, or the
-  // store attempting the oversized write anyway (the issue 850 failure shape).
+  // store attempting the oversized write anyway.
   it("omits a fact over the injected byte limit, flags the count, and keeps the rest of the cache", async () => {
     const { repositoryId, fold } = await materializeRepositoryFixture(sql);
     // A limit between the small issue's payload size and the oversized one's:
@@ -183,15 +183,14 @@ describe("durable reconciliation evidence", () => {
   // A fold committing between the read's metadata and facts selects would
   // hand the fold a metadata/facts pair from different writes. The version
   // fence turns such a pairing into a wasted pass, never a wrong publish, but
-  // the read is still one statement now — one round trip, one snapshot — so
-  // no commit can interleave inside it.
+  // the read is one statement — one round trip, one snapshot — so no commit
+  // can interleave inside it.
   //
   // The statement returns ROWS, never a single jsonb aggregate: aggregating
-  // all of a repository's facts into one jsonb value would put them back
-  // under jsonb's 268,435,455-byte total ceiling — issue 850's permanent
-  // failure, moved from write to read time. The row-count assertion below
-  // pins that: an aggregate-based read would resolve ONE row here, not one
-  // per fact plus the metadata row.
+  // all of a repository's facts into one jsonb value would put them under
+  // jsonb's 268,435,455-byte total ceiling, past which the read fails
+  // permanently. The row-count assertion below pins that: an aggregate-based
+  // read would resolve ONE row here, not one per fact plus the metadata row.
   it("reads metadata and facts in one statement, so no write can interleave between them", async () => {
     const { store, repositoryId, fold } = await materializeRepositoryFixture(sql);
     await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold, synchronization: synchronization() }));
@@ -222,18 +221,15 @@ describe("durable reconciliation evidence", () => {
     expect(resultRowCounts).toEqual([2]);
   });
 
-  // Mutant: a no-op guard that let an unchanged document rewrite fact rows —
-  // the issue 853 orphaning shape — regrows the storage measured here. The
-  // old single-document shape fails this property outright: it rewrote the
-  // whole jsonb on every fold and orphaned the old version's TOAST each time
-  // (the before-numbers are recorded in the task report; running this
-  // assertion's shape against main's store watched it grow every fold).
+  // Mutant: a no-op guard that lets an unchanged document rewrite fact rows
+  // regrows the storage measured here. A single-document shape fails this
+  // property outright: it rewrites the whole jsonb on every fold and orphans
+  // the old version's TOAST each time.
   it("keeps the evidence storage byte-identical across repeated no-op folds", async () => {
     const { store, repositoryId, fold } = await materializeRepositoryFixture(sql);
     // Incompressible hex keeps the rawDiff large through TOAST compression,
-    // so the facts table's TOAST — where issue 853's orphaning lived — is
-    // inside the measured set. pg_total_relation_size covers heap, indexes,
-    // TOAST and the TOAST index of each relation.
+    // so the facts table's TOAST is inside the measured set. pg_total_relation_size
+    // covers heap, indexes, TOAST and the TOAST index of each relation.
     const rawDiff = randomBytes(65_536).toString("hex");
     const payload = { ...synchronization(), pullRequests: [{ id: 201, reviews: [], rawDiff }] };
     const storageSize = async (): Promise<{ evidence: number; facts: number }> => {

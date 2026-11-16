@@ -13,7 +13,7 @@ const exec = promisify(execFile);
 /**
  * A virtual migration this suite appends to the real migration runner's
  * directory listing so the migration-exemption test can drive the REAL
- * runMigrations() entry (issue 661) without committing a migration: the file
+ * runMigrations() entry without committing a migration: the file
  * never touches disk, so the numbering guards and every other suite's
  * listings see only the real files. Its single statement deterministically
  * outruns the tight override the test puts in force, so the runner completes
@@ -23,9 +23,9 @@ const exec = promisify(execFile);
  * The wrappers are NOT registered as a module-level vi.mock: under
  * `isolate: false` another suite's vi.mock of node:fs/promises can displace
  * this file's registration in the shared worker registry before this suite
- * runs, which silently removed the fixture from the runner's listing (CI run
- * 36300214924). The migration-exemption test therefore registers the wrappers
- * itself, around its own import of the runner — see the vi.doMock there.
+ * runs, which silently removes the fixture from the runner's listing. The
+ * migration-exemption test therefore registers the wrappers itself, around its
+ * own import of the runner — see the vi.doMock there.
  */
 const migrationFixture = vi.hoisted(() => ({
   name: "999_issue661_statement_deadline_fixture.sql",
@@ -33,11 +33,10 @@ const migrationFixture = vi.hoisted(() => ({
 }));
 
 /**
- * Issue 661: the shared clients are the single choke point every database
- * connection in the process flows through, and issue 661 gives them real
- * deadlines. The posture pinned here (task 5's measurement rescoped it): the
- * WORK pool carries the statement deadline, the coordination pool carries
- * none. Properties pinned here:
+ * The shared clients are the single choke point every database connection in
+ * the process flows through, and they carry real deadlines. The posture pinned
+ * here: the WORK pool carries the statement deadline, the coordination pool
+ * carries none. Properties pinned here:
  *
  * - the connect phase fails fast (connect_timeout 5 s, not the library's 30 s
  *   default) while the server is unreachable;
@@ -59,7 +58,7 @@ const migrationFixture = vi.hoisted(() => ({
  * sake (tests/support/postgres-container.ts). No wall-clock margin is used to
  * sequence anything; the only elapsed assertions are the upper bounds the
  * deadline property itself demands (a rejection that arrives only after the
- * bound is the old behaviour, not the new one).
+ * bound means the deadline did not hold).
  */
 describe("database client deadlines", () => {
   const databaseUrlOriginal = process.env.OVERFLOW_DATABASE_URL;
@@ -212,7 +211,7 @@ describe("database client deadlines", () => {
     // (vi.resetModules + vi.doMock), rather than as a file-level vi.mock:
     // under `isolate: false` another suite's node:fs/promises mock can win the
     // shared worker registry before this file runs, and the fixture then
-    // silently drops out of the listing (CI run 36300214924). Re-registering
+    // silently drops out of the listing. Re-registering
     // against the fresh registry pins the listing this runner sees.
     const tightSql = await openPoolWithStatementTimeout("1000");
     vi.resetModules();
@@ -302,10 +301,10 @@ describe("database client deadlines", () => {
     ["a negative value", "-5"],
     ["zero", "0"],
   ])("refuses %s for OVERFLOW_DATABASE_STATEMENT_TIMEOUT_MS at client construction", async (_shape, invalid) => {
-    // A set-but-invalid value used to flow into the startup packet as-is: the
-    // empty string in particular silently disabled the deadline the default
-    // exists to guarantee (issue 661). Construction is the loud failure point —
-    // the pool is never built, and the error names the variable and the problem.
+    // A set-but-invalid value is rejected before it reaches the startup packet:
+    // the empty string in particular would silently disable the deadline the
+    // default exists to guarantee. Construction is the loud failure point — the
+    // pool is never built, and the error names the variable and the problem.
     await expect(openPoolWithStatementTimeout(invalid)).rejects.toThrow(
       /DATABASE_STATEMENT_TIMEOUT_MS/,
     );
@@ -317,10 +316,9 @@ describe("database client deadlines", () => {
   });
 
   it("advertises no statement deadline on the coordination pool", async () => {
-    // The rescope (issue 661, task 5): the work pool carries the deadline, the
-    // coordination pool carries none. A coordination statement queued behind a
-    // lock is a wait, not work — a deadline there could only cancel a
-    // legitimate wait.
+    // The work pool carries the deadline, the coordination pool carries none.
+    // A coordination statement queued behind a lock is a wait, not work — a
+    // deadline there could only cancel a legitimate wait.
     const workPool = await openPoolWithStatementTimeout(undefined);
     expect(await showStatementTimeout(workPool)).toBe("10min");
     expect(await showStatementTimeout(getCoordinationSql())).toBe("0");
@@ -330,7 +328,7 @@ describe("database client deadlines", () => {
     // Behavioral half of the same posture pin: with the work pool at 500 ms,
     // a coordination-pool statement blocked behind a held lock survives the
     // point where the deadline would have fired and completes when the holder
-    // releases — under the old both-pools posture it was cancelled.
+    // releases.
     const workPool = await openPoolWithStatementTimeout("500");
     expect(await showStatementTimeout(workPool)).toBe("500ms");
     await workPool`create table if not exists db_deadlines_coordination_fixture (id int primary key)`;

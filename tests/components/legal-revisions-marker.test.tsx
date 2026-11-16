@@ -25,8 +25,8 @@ const RULES_DOCUMENT = "rules";
 // superseded patch version reduces to the release it supersedes and passes for
 // it. The leading "v" is optional because a second version written as "v2.0"
 // carries no word boundary before its digits — "v" and "2" are both word
-// characters — so a recogniser without it skipped the token entirely and the
-// second version sat beside the true one unnoticed. A mutation-verified false
+// characters — so a recogniser without it skips the token entirely and the
+// second version sits beside the true one unnoticed. A mutation-verified false
 // green, both ways.
 //
 // The second alternative is a bare integer, and it is gated on the word
@@ -37,11 +37,9 @@ const RULES_DOCUMENT = "rules";
 // rather than "1" here and ".0" there. A mutation-verified false green, twice.
 const VERSION_TOKEN = /\bv?\d+\.\d+(?:\.\d+)*\b|\bversion\s+(\d+)(?!\.\d)/gi;
 
-// The two recognisers used to have different widths, which is how "Superseded
-// 2 October 2026." sat beside the ISO date with the date set unchanged and the
-// suite green. This one is a shape list, like its sibling: a date written in a
-// shape it does not name is invisible to it, and that residue is the class the
-// final review parked rather than closed.
+// The date recogniser is a shape list, like its version sibling: a date written
+// in a shape it does not name is invisible to it, and that residue is a known
+// limit of this check.
 const MONTHS =
   "January|February|March|April|May|June|July|August|September|October|November|December" +
   "|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec";
@@ -102,15 +100,13 @@ function mainOf(page: string): Element {
 // adds no section" a fact rather than a convention, and it lives here so one
 // line covers every document.
 //
-// EVERY marker on the page, not the first match. This used to be a single
-// querySelector, which answered with exactly one element and left every other
-// [data-legal-revision] on the page outside the exclusivity set entirely: a
-// second <p data-legal-revision="terms" data-version="0.9"> beside the true one
-// rendered both claims to the reader and the suite stayed 12/12. That is the
-// defect this branch exists to close, moved from a second token inside one
-// element to a second element on the page. Checking each element's own identity
-// rather than counting them also catches a foreign document's marker carried
-// onto the wrong page, which a length check would not.
+// EVERY marker on the page, not the first match. A single querySelector
+// answers with exactly one element and leaves every other
+// [data-legal-revision] on the page outside the exclusivity set entirely, so a
+// second <p data-legal-revision="terms" data-version="0.9"> beside the true
+// one would render both claims to the reader. Checking each element's own
+// identity rather than counting them also catches a foreign document's marker
+// carried onto the wrong page, which a length check would not.
 function revisionMarkers(main: Element, document: string): Element[] {
   const markers = [...main.querySelectorAll("[data-legal-revision]")];
   expect(markers.length, `the ${document} page renders a revision marker`).toBeGreaterThan(0);
@@ -139,12 +135,11 @@ function tokensIn(marker: Element, pattern: RegExp): string[] {
 // What a reader is shown is the marker's prose, not its data attributes, so
 // the rendered text has to carry the values — and ONLY the values. Presence
 // alone lets a second, contradicting version number sit beside the true one:
-// the reader sees two numbers and the pin says nothing, which is the
-// mutation-verified false green this replaces. Exact textContent equality is
-// barred by the never-assert-prose rule, so what is constrained here is the
-// SHAPE of the rendered values: the version-shaped tokens are the constant and
-// nothing else, so a second one makes it a different set. Run over every
-// marker on the page, not the first match — see revisionMarkers above.
+// the reader sees two numbers and the pin says nothing. Exact textContent
+// equality is barred by the never-assert-prose rule, so what is constrained
+// here is the SHAPE of the rendered values: the version-shaped tokens are the
+// constant and nothing else, so a second one makes it a different set. Run over
+// every marker on the page, not the first match — see revisionMarkers above.
 function expectStatesOnlyItsOwnRevision(markers: Element[], revision: LegalRevision): void {
   for (const marker of markers) {
     expect(marker).toHaveAttribute("data-version", revision.version);
@@ -224,9 +219,9 @@ describe("legal revision markers", () => {
 
   it("pins each document's identity to its own literal", () => {
     // Distinctness is not identity: swapping the two strings leaves them
-    // distinct, and this assertion used to be distinctness. Both pages then
-    // stamped themselves with the other document's name and every test in the
-    // file agreed. The literals above are the third source, the one neither
+    // distinct, so a distinctness check passes while both pages stamp
+    // themselves with the other document's name and every test in the file
+    // agrees. The literals above are the third source, the one neither
     // the module nor the page is read from.
     expect(TERMS_REVISION.document).toBe(TERMS_DOCUMENT);
     expect(ACCOUNT_DATA_REVISION.document).toBe(ACCOUNT_DATA_DOCUMENT);
@@ -239,10 +234,8 @@ describe("legal revision markers", () => {
     // compares it to the constant, and checks the rendered token
     // against the same constant — so a revert of a constant to its prior value
     // left every one of them satisfied, and a reader citing the prior version
-    // was handed superseded text — the revision in which the terms page still
-    // promised a sanction could be contested while the rules it pointed at
-    // carried no such case. Checked against itself from both sides is not a
-    // pin.
+    // was handed superseded text. Checked against itself from both sides is not
+    // a pin.
     //
     // Literal here, from the same third source as the document identities, and
     // for the same reason. Bumping a REVISION constant is a deliberate edit
@@ -260,12 +253,13 @@ describe("legal revision markers", () => {
 });
 
 // The inventory, read from the module instead of listed here. A registry entry
-// nothing renders used to be invisible: a PRIVACY_REVISION constant with no page
-// consuming it was 28/28 green and typechecked, because an unused export is
-// legal TypeScript. Deriving the list means a new entry is exercised the day it
-// is added and an orphan one fails the moment it is added. `LegalRevision` is a
-// type, erased at runtime, so it is not in Object.values and needs no filter
-// for it; the filter is for anything else the module might grow.
+// nothing renders would be invisible to a hand-written list: a PRIVACY_REVISION
+// constant with no page consuming it passes every test in such a suite and
+// typechecks, because an unused export is legal TypeScript. Deriving the list
+// means a new entry is exercised the day it is added and an orphan one fails the
+// moment it is added. `LegalRevision` is a type, erased at runtime, so it is not
+// in Object.values and needs no filter for it; the filter is for anything else
+// the module might grow.
 const REGISTERED = Object.values(legalRevisions).filter(
   (value): value is LegalRevision => typeof value === "object" && value !== null && "document" in value,
 );

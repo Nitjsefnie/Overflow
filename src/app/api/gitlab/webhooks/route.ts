@@ -47,7 +47,7 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
     try {
       credential = await dependencies.lookupCredential(selector, "gitlab");
     } catch (error) {
-      // Every 503 a forge receives has a journal line (issue 1057). The
+      // Every 503 a forge receives has a journal line. The
       // message is deliberately absent — a decrypt failure's message names
       // material, so errorLogToken is not used here — and the line names the
       // phase, the logField-encoded selector, and the error's class name
@@ -70,11 +70,11 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
       return new Response(null, { status: 401 });
     }
 
-    // The reader carries the Content-Length pre-check the route used to make
-    // itself: a declared oversize answers 413 here without a byte read, and a
-    // stream that crosses the limit is cancelled mid-read, so response
-    // ordering and the 413 semantics are unchanged. The token check above is
-    // still ahead of any Content-Length consultation and any body read.
+    // The reader carries the Content-Length pre-check: a declared oversize
+    // answers 413 here without a byte read, and a stream that crosses the limit
+    // is cancelled mid-read, so response ordering and the 413 semantics hold.
+    // The token check above comes before any Content-Length consultation and
+    // any body read.
     const rawBody = await readBodyWithinLimit(request, GITLAB_WEBHOOK_BODY_LIMIT_BYTES);
     if (rawBody === null) {
       return new Response(null, { status: 413 });
@@ -83,8 +83,7 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
     // secret was verified against the token header before this body was read,
     // so anything that reaches this line is already authenticated; the
     // digest is recorded on the receipt and lets the receipts layer count a
-    // fresh receipt key over an already-processed body as a duplicate
-    // (issue 1041).
+    // fresh receipt key over an already-processed body as a duplicate.
     const bodyDigest = createHash("sha256").update(rawBody).digest("hex");
 
     let payload: unknown;
@@ -135,8 +134,8 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
       // this console line is the operators' one view of why a delivery failed.
       // The message is a fixed template over the delivery's identifiers, and
       // the error rides as the second argument encoded into one bounded
-      // single-line token (issue 1042) — the console sink renders a raw error
-      // object through its stack, whose first line carries the message raw.
+      // single-line token — the console sink renders a raw error object
+      // through its stack, whose first line carries the message raw.
       // The request-derived identifiers (receipt key, execution UUID, and the
       // project's path_with_namespace, which the parser accepts with internal
       // control characters and at any length) each go through logField, so
@@ -158,11 +157,11 @@ export function createGitLabWebhookPostHandler(dependencies: GitLabWebhookRouteD
 }
 
 // The receiver's gate, built once at module scope and shared by every request
-// this process serves: the bucket IS the receiver's rate limit (issue 852),
-// so it must outlive individual requests — one bucket per receiver, refilled
-// by the wall clock. The gate is the keyed limiter over one constant key, so
-// the decline burst's start carries the once-per-burst journal line (issue
-// 1053) from the same mechanism that answers the 429.
+// this process serves: the bucket IS the receiver's rate limit, so it must
+// outlive individual requests — one bucket per receiver, refilled by the wall
+// clock. The gate is the keyed limiter over one constant key, so the decline
+// burst's start carries the once-per-burst journal line from the same mechanism
+// that answers the 429.
 const webhookRateLimiter = createReceiverRateLimiter({
   receiver: "gitlab",
   capacity: WEBHOOK_RATE_LIMIT_CAPACITY,
@@ -171,7 +170,7 @@ const webhookRateLimiter = createReceiverRateLimiter({
 
 // The credential lookup's journal bound, one per route module: the key is
 // per selector, so a burst of unreadable credentials for one registration
-// prints once per quiet window (issue 1057).
+// prints once per quiet window.
 const credentialLookupFailures = new FailureLogger();
 
 export async function POST(request: Request): Promise<Response> {

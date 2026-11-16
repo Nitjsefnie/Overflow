@@ -2,8 +2,7 @@ import Link from "next/link";
 import { PublicAppShell } from "@/components/app-shell";
 
 /**
- * Issue 908: src/app shipped error.tsx and global-error.tsx but no
- * not-found.tsx, so an unknown URL rendered Next.js's own 404 — unstyled, no
+ * Without this file an unknown URL renders Next.js's own 404 — unstyled, no
  * app shell, and failing the landmark-one-main and region checks. This composes
  * the public shell the other signed-out routes use, because the page is served
  * to whoever mistyped the address regardless of session.

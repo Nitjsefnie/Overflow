@@ -18,7 +18,7 @@ const fetchMock = vi.fn();
 /** The URL hash at the moment each request was made, in request order. */
 let hashAtRequest: string[];
 
-// Distinct years the panel has no other reason to print: the route sends these, the panel must show none (ruling: state only).
+// Distinct years the panel has no other reason to print: the route sends these, the panel must show none (it shows state only).
 const STORED_TIMES = {
   confirmedAt: "2031-04-07T08:09:10.000Z",
   lastNotifiedAt: "2032-05-08T09:10:11.000Z",

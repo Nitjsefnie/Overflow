@@ -125,9 +125,7 @@ function shellCommands(block: string): string[] {
     }
     // `2>&1` and `&> log`: the `&` belongs to a REDIRECTION, not to a command
     // separator. Without this a plain `2>&1` splits the block in two and the
-    // guard reds on a legitimate, harmless line — the same false red as the
-    // over-narrow denylist it replaced, which rejected every `&` including this
-    // one.
+    // guard reds on a legitimate, harmless line.
     if (char === "&" && (joined[index + 1] === ">" || joined[index - 1] === ">")) {
       current += char;
       continue;
@@ -231,8 +229,8 @@ function shellWords(command: string): string[] {
 describe("the shell parser the hash-binding case reads", () => {
   /**
    * A backslash run of `slashes` before a newline, then `tail` on its own line.
-   * Built by repetition because the whole finding is about the run's PARITY, and
-   * a literal spelled by hand is exactly where that parity goes wrong twice.
+   * Built by repetition because the whole point is the run's PARITY, and a
+   * literal spelled by hand is exactly where that parity goes wrong.
    */
   const continued = (slashes: number, tail: string): string =>
     `pip download --no-deps --require-hashes${"\\".repeat(slashes)}\n${tail}`;
@@ -240,7 +238,7 @@ describe("the shell parser the hash-binding case reads", () => {
   // [block, how many commands the shell runs it as]
   const OPERATOR_TABLE: ReadonlyArray<readonly [string, number]> = [
     // Continuations. Odd runs join, even runs are an escaped backslash plus a
-    // REAL separator — the second half of this pair is the finding.
+    // REAL separator — the second half of this pair, the real separator, is the case under test.
     [continued(1, "  --no-deps"), 1],
     [continued(2, "exit 0"), 2],
     [continued(3, "  --no-deps"), 1],
@@ -289,9 +287,8 @@ describe("the shell parser the hash-binding case reads", () => {
   // the boundary of each rule is the thing to test — not its happy path. Both
   // rows below marked `bash` were measured against
   // `bash --noprofile --norc -eo pipefail -c 'printf "<%s>\n" …'` rather than
-  // read out of the manual, and the second pair is the finding this table
-  // exists for: a spelling the helper once read as the committed word and the
-  // shell does not deliver.
+  // read out of the manual, and the second pair is a spelling the helper must
+  // not read as the committed word, because the shell does not deliver it.
   const WORD_TABLE: ReadonlyArray<readonly [string, string[], string]> = [
     ['pip download --no-deps', ["pip", "download", "--no-deps"], "plain"],
     ['pip "download" --no-deps', ["pip", "download", "--no-deps"], "quoted word"],
@@ -347,9 +344,8 @@ describe("the pull request suite workflow", () => {
   });
 
   it("names no job after a required context", async () => {
-    // A pin may name several files (issue 1090's split), so the value type is
-    // the accurate one: a `Record<string, string>` annotation would repeat the
-    // same lie the removed `as` cast told.
+    // A pin may name several files, so the value type is the accurate one: a
+    // `Record<string, string>` annotation would misstate that.
     const requiredChecks: Record<string, string | string[]> = JSON.parse(
       await readFile(resolve(".github/required-checks.json"), "utf8"),
     );
@@ -447,15 +443,14 @@ describe("the pull request suite workflow", () => {
     // the pull request>` moves pip off the index, and the run then passes against
     // a manifest whose digest is that directory's wheel and nothing to do with
     // PyPI's record — measured, rc=0, `Successfully downloaded zizmor`, with the
-    // manifest carrying a hash pip had never seen. `objectContaining` above is
-    // what let it through: it fixes the values that must be present and says
-    // nothing about the ones that may be.
+    // manifest carrying a hash pip had never seen. `objectContaining` above
+    // fixes the values that must be present and says nothing about the ones
+    // that may be, so on its own it lets such a key through.
     //
     // The check's whole value is that the hashes come from OUTSIDE the pull
     // request. An environment the pull request can steer is another way to put
-    // them back inside it, and this is the third time on this branch that a
-    // property held at one scope was not read at the next one out — the shell at
-    // job scope (F10), `defaults` at job scope, and now `env` at job scope.
+    // them back inside it, so the job's `env` is held to an exact set like the
+    // shell and `defaults` at job scope.
     expect(
       Object.keys(suite.env ?? {}).sort(),
       "the suite job's environment is an input to every step, so its key set is pinned " +
@@ -506,11 +501,11 @@ describe("the pull request suite workflow", () => {
 
   // The zizmor manifest's whole purpose is that `pip install --require-hashes`
   // rejects content matching no allowed hash — but on a PULL REQUEST that check
-  // had no home. actionlint.yml is the only other place it runs, and that leg is
+  // has no other home. actionlint.yml is the only other place it runs, and that leg is
   // pull_request_target with no `ref:`, so it installs MAIN's manifest, never
-  // the pull request's (issue 1094). A Dependabot bump carrying the previous
-  // release's hashes therefore passed every pull-request check and went red
-  // only on the push to main. This step is the pre-merge home, and it is here
+  // the pull request's. Without this step a Dependabot bump carrying the previous
+  // release's hashes passes every other pull-request check and goes red only on
+  // the push to main. This step is the pre-merge home, and it is here
   // because pr-suite is the one workflow that runs the request's own tree.
   it("binds the zizmor manifest's hashes to its version, on the pull request's own tree", () => {
     const step = stepRunning("--require-hashes");
@@ -522,36 +517,36 @@ describe("the pull request suite workflow", () => {
     expect(step.run).toContain("--require-hashes");
     expect(step.run).toContain("-r .github/requirements-zizmor.txt");
     // The step may carry no key that can skip it or swallow its exit status.
-    // Asserting `if` alone was not enough: it pins the absence of ONE
+    // Asserting `if` alone is not enough: it pins the absence of ONE
     // suppression key and leaves its siblings unpinned, so `continue-on-error:
-    // true` — or a `|| true` appended to the command — left this case green
-    // while the run concluded `success`, `await-pr-suite.ts` returned 0 and the
-    // merge went through with the check inert. That is the same failure this
-    // case exists to prevent, reached by a different key, so the assertion is
-    // over the whole key set: anything not in the allow-list below has to be
-    // added here deliberately, with its reason, rather than slipped in beside
-    // the command.
+    // true` — or a `|| true` appended to the command — would leave this case
+    // green while the run concludes `success`, `await-pr-suite.ts` returns 0
+    // and the merge goes through with the check inert. That is the same
+    // failure this case exists to prevent, reached by a different key, so the
+    // assertion is over the whole key set: anything not in the allow-list
+    // below has to be added here deliberately, with its reason, rather than
+    // slipped in beside the command.
     //
     // `shell` is NOT allow-listed, and its absence is the point rather than an
-    // oversight. It was allow-listed as inert, which is true of `shell: bash`
-    // and `shell: sh` (GitHub maps both to a `-e` form) and false of any custom
-    // string, which GitHub runs verbatim with no `-e`. Allow-listed, it paired
-    // with a bare `exit 0` — which no forbidden-token assertion sees — to make
-    // the suppression live. Two individually defensible entries composed into
-    // the defect. `timeout-minutes` stays: a timed-out step FAILS the job, so
-    // it cannot green-wash (verified — `timeout-minutes: 0.0001` fails, which is
-    // the point of allow-listing it).
+    // oversight. `shell: bash` and `shell: sh` are inert (GitHub maps both to
+    // a `-e` form), but any custom string is not: GitHub runs it verbatim with
+    // no `-e`. Allow-listed, it pairs with a bare `exit 0` — which no
+    // forbidden-token assertion sees — to make the suppression live, so two
+    // individually defensible entries compose into the defect.
+    // `timeout-minutes` stays: a timed-out step FAILS the job, so it cannot
+    // green-wash (verified — `timeout-minutes: 0.0001` fails, which is the
+    // point of allow-listing it).
     //
     // `working-directory` is NOT allow-listed either, and its absence is pinned
-    // by name below. It sat in this set as inert, and the claim was false: the
-    // step's `-r` path is relative, so the key decides WHICH requirements file
-    // pip reads. Pointed at a directory carrying a committed, self-consistent
-    // shadow `.github/requirements-zizmor.txt`, the step resolves and checksums
-    // bytes the pull request authored while the tree's pinned manifest is never
-    // read — every property this case pins stays green against it (measured at
-    // review: the key planted alone passed this file 51/51) and the check
-    // reports success without having bound anything. Dependabot cannot emit
-    // the key, but the guard is not written against one sender.
+    // by name below. The step's `-r` path is relative, so the key decides
+    // WHICH requirements file pip reads. Pointed at a directory carrying a
+    // committed, self-consistent shadow `.github/requirements-zizmor.txt`, the
+    // step resolves and checksums bytes the pull request authored while the
+    // tree's pinned manifest is never read — every property this case pins
+    // stays green against it (measured: the key planted alone passed this file
+    // 51/51) — and the check reports success without having bound anything.
+    // Dependabot cannot emit the key, but the guard is not written against one
+    // sender.
     const inert = new Set(["name", "run", "id", "timeout-minutes", "env"]);
     expect(
       Object.keys(step).filter((key) => !inert.has(key)),
@@ -582,41 +577,40 @@ describe("the pull request suite workflow", () => {
     // status-masking spellings is a guess about a language; "nothing but the
     // command" is a property of the command.
     //
-    // `set +e` is the one that made any of this necessary rather than merely
+    // `set +e` is the one that makes any of this necessary rather than merely
     // tidy: Actions runs an unset `shell:` as `bash --noprofile --norc -eo
     // pipefail {0}`, and `set +e` switches off the `-e` the runner supplies, so
-    // the failing download no longer aborts the block and the last command's
-    // status becomes the step's. Measured here: `set +e; false; echo done` exits
-    // 0 under the default shell, and `false; exit 0` exits 0 under a custom
-    // shell string. Both were live, and both were green against a denylist.
+    // the failing download does not abort the block and the last command's
+    // status becomes the step's. Measured: `set +e; false; echo done` exits 0
+    // under the default shell, and `false; exit 0` exits 0 under a custom shell
+    // string, and both pass a denylist of spellings.
     //
     // The assertion is STRUCTURAL: the block is split on shell control
-    // operators and must be exactly one command. Two earlier attempts were
-    // denylists over spellings — `/\|\||&/`, then a per-line shape check — and
-    // each was defeated by an operator it had not enumerated, `;` among them.
-    // The set here is closed instead. In POSIX sh a command sequence is joined
+    // operators and must be exactly one command. A denylist over spellings is
+    // defeated by any operator it has not enumerated, `;` among them, so the
+    // set here is closed instead. In POSIX sh a command sequence is joined
     // only by `;`, `&`, `&&`, `||`, `|`, `|&`, and newline; there is nothing
     // else, so a block whose segments number one cannot have had its exit
     // status diverted by any of them — including ones nobody thought to list,
-    // and including `2>&1`, which no longer needs a sanctioned escape because
-    // it is not an operator that starts a second command. The flag lines are
+    // and including `2>&1`, which needs no sanctioned escape because it is not
+    // an operator that starts a second command. The flag lines are
     // line-continuations of that one command, so they are joined before
     // splitting rather than counted as commands of their own — and only an ODD
     // backslash run is a continuation at all, which is why `joinContinuations`
     // counts the run rather than matching its last backslash. An even run is an
     // escaped backslash with a REAL newline after it, and joining that calls a
-    // two-command block one command: measured, admitted by the round-3 guard, and
-    // not live only because `pip download` rejects the stray `\` argument it
-    // leaves behind. A guarantee that rests on another program's argument parser
-    // is not this assertion's, so the parity is fixed here.
+    // two-command block one command (measured); `pip download` happens to
+    // reject the stray `\` argument it leaves behind, but a guarantee that rests
+    // on another program's argument parser is not this assertion's, so the
+    // parity is fixed here.
     //
     // What this does NOT settle, and is not claimed to: the shell the block runs
     // under. That is the other half of the composition, and it is a KEY
     // (`shell:`, or a `defaults.run.shell` at job or workflow level) rather
     // than anything inside the block — which is why `shell` is not allow-listed
     // on the step and why the job case below bans `defaults`. Two individually
-    // defensible halves, each green on its own, composed into a live
-    // suppression; the guard now constrains both or neither is claimed.
+    // defensible halves, each green on its own, compose into a live
+    // suppression; the guard constrains both.
     const segments = shellCommands(step.run!);
     expect(
       segments,
@@ -630,11 +624,7 @@ describe("the pull request suite workflow", () => {
     ).toMatch(/^pip download\b/);
     // ...and its CONTENT, structurally, by the same standard. "One command" is
     // a claim about how many commands run; it says nothing about WHICH, and a
-    // structural assertion replaces a lexical one only on the axes the
-    // structural one also constrains. This one had a lexical predecessor that
-    // the operator parse did not subsume — every continuation line had to start
-    // `--`, `-\w` or `pip download` — and round 3 dropped it without noticing,
-    // so for one commit `pip download … $(echo -r /dev/null)` passed this case.
+    // structural assertion constrains only the axes it measures.
     //
     // So this asserts what the command IS rather than enumerating what it must
     // not contain: the argument words, in order, by equality against the one
@@ -646,15 +636,13 @@ describe("the pull request suite workflow", () => {
     // ATTACKS and the list is always short one; enumerate the COMMAND and it is
     // finite on the first try.
     //
-    // Strictly stronger than the line rule it replaces, which accepted ANY
-    // `--anything` on any continuation line — including a second `--require-
-    // hashes` argument and any `--hash=` — so restoring that rule as well would
-    // be restoring a weaker duplicate. It is not, on its own, a proof that the
-    // line rule admitted nothing this refuses: round 4's re-review found a
-    // spelling this comparison ALSO admitted and the shell does not deliver
-    // (`--dest "…hash\-check"` — `\` inside double quotes is an escape in POSIX
-    // for five characters, not for any). That is fixed above, in `shellWords`,
-    // and pinned by its table.
+    // Strictly stronger than a line rule accepting ANY `--anything` on any
+    // continuation line — which would admit a second `--require-hashes`
+    // argument and any `--hash=` — so adding that rule as well would only add a
+    // weaker duplicate. The comparison is only as sound as the word split it
+    // compares: `--dest "…hash\-check"` must be split the way the shell delivers
+    // it (`\` inside double quotes is an escape in POSIX for five characters,
+    // not for any). `shellWords` does that, pinned by its table.
     //
     // The words are compared with quoting and escaping already resolved
     // (`shellWords`), so `--dest x` and `--dest "x"` are the same invocation
@@ -726,28 +714,28 @@ describe("the pull request suite workflow", () => {
   // suppression is the cheapest possible greenwash of the same check:
   // `continue-on-error: true` on the job makes a failed job green, and
   // `if: github.event_name == 'push'` skips the whole suite on pull requests.
-  // Both were live and both were green against every assertion in this file,
-  // and a 419-test sweep of the CI-workflow suites saw neither. The premise
-  // this file's other case asserts is about the WORKFLOW — "the hash binding
-  // must hold on every pull request" — so it has to hold of the job too.
+  // Both are live and both pass every other assertion in this file, and a
+  // 419-test sweep of the CI-workflow suites sees neither. The premise this
+  // file's other case asserts is about the WORKFLOW — "the hash binding must
+  // hold on every pull request" — so it has to hold of the job too.
   //
   // Carried to the job as the SAME whole-key-set allow-list the step case uses,
   // rather than as a third and fourth named key. That generalization is the
   // point: this repository already holds a top-level allow-list in
   // `tests/ci/concurrency.test.ts`, which demonstrably reds on a WORKFLOW-level
-  // `defaults:` — so the one spelling nobody read was the JOB-level one, exactly
-  // the asymmetry that let `defaults.run.shell` + a one-line `run: …; exit 0`
-  // through the guard file, a 420-test sweep, actionlint and zizmor while being a
-  // live suppression. An allow-list at the outer scope is the most dangerous
-  // evidence of coverage at the inner one: it shows the key is policed SOMEWHERE,
-  // and the somewhere is rarely where the next reader looks.
+  // `defaults:`, so the JOB-level spelling needs the same coverage: a
+  // `defaults.run.shell` with a one-line `run: …; exit 0` is a live suppression
+  // that passes the guard file without this case, a 420-test sweep, actionlint
+  // and zizmor. An allow-list at the outer scope is the most dangerous
+  // evidence of coverage at the inner one: it shows the key is policed
+  // SOMEWHERE, and the somewhere is rarely where the next reader looks.
   //
-  // `needs` was banned by the same rule and is allowed since issue 1334: the
-  // postgres-image job's output feeds the service image, and the reason it is
-  // safe is woven into the assertion's failure message below — `needs` is an
-  // ordering key, the suite still runs unconditionally (no `if`), and the
-  // nonexistent-job hazard the ban guarded against is closed by the jobs
-  // key-set pin plus actionlint's needs-reference validation.
+  // `needs` is allowed: the postgres-image job's output feeds the service
+  // image, and the reason it is safe is woven into the assertion's failure
+  // message below — `needs` is an ordering key, the suite still runs
+  // unconditionally (no `if`), and the hazard of a `needs` naming a nonexistent
+  // job is closed by the jobs key-set pin plus actionlint's needs-reference
+  // validation.
   it("carries no job-level suppression on the suite job", () => {
     const jobInert = new Set([
       "name",

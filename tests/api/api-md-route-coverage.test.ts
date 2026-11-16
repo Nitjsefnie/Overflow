@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * The route-coverage guard for API.md (issue 641): every route.ts handler
+ * The route-coverage guard for API.md: every route.ts handler
  * under src/app/api either appears in API.md as a path string or sits in the explicit
  * allowlist below naming where it is documented instead. The test reads files
  * only — no database, no Next.js runtime.

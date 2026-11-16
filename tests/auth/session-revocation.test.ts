@@ -9,24 +9,24 @@ import { closeSql } from "@/lib/db/client";
 import { revokeAccountSessions } from "@/lib/auth/session-guard";
 
 /**
- * Session revocation and the absolute lifetime, end to end (issue 1043): the
+ * Session revocation and the absolute lifetime, end to end: the
  * real `GET`/`POST` handlers exported from `src/auth.ts` are driven with real
  * `Request` objects against a disposable database — nothing of Auth.js is
  * mocked, and GitHub's endpoints are stubbed only where a test signs in.
  *
  * The cookie is minted the way `scripts/seed-board-benchmark.ts` mints the
- * benchmark cookie (the issue's reproduction mints it the same way), encoded
+ * benchmark cookie, encoded
  * with the app's own AUTH_SECRET, so each leg proves what a holder of a
  * copied cookie can actually get:
  *
  * - a stamped token whose account row is LIVE resolves, and the row's login
- *   names it — the pre-existing refresh behaviour, still intact;
+ *   names it;
  * - bumping the account's `session_epoch` (the operator one-liner, or the
  *   sign-out handler) kills every cookie the account holds, at its next
  *   refresh, without touching any other account;
  * - a cookie whose sign-in instant is at or past the 30-day absolute bound
  *   resolves to nothing, however often it was used in between;
- * - a pre-fix token carrying no epoch claim is dead at its first refresh;
+ * - a token carrying no epoch claim is dead at its first refresh;
  * - an account row that is gone entirely keeps today's MISSING pass-through
  *   (the epoch closes the revocation gap, not the stale-row gap).
  */
@@ -123,7 +123,7 @@ beforeEach(() => {
 
 // Workers are reused across files (isolate: false): the pinned clock and any global
 // stub belong to this file alone — a stub left installed would leak into every later
-// file this worker runs (issue 753).
+// file this worker runs.
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the application image with immutable provenance (issue 461).
+# Build the application image with immutable provenance.
 #
 # The committed mechanical build path for the container route: builds the
 # Dockerfile with its mandatory SOURCE_SHA build arg and derived base labels,
@@ -32,7 +32,7 @@ base_digest="$(node -p 'JSON.parse(process.argv[1]).baseDigest' "$base_labels")"
 
 echo "Building $image from revision $source_sha ..."
 # The build context is an export of the commit, streamed as a tar on stdin,
-# never the working directory (issue 648). The repository's .gitignore denies
+# never the working directory. The repository's .gitignore denies
 # by default, so an untracked file under an ignored path is invisible to the
 # git status check above, yet a `.` context would copy it into an image
 # labelled with this SHA. `git archive` holds exactly the commit's tracked

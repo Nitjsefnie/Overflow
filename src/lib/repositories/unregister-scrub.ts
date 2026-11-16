@@ -16,7 +16,7 @@ const SETTLEMENT_EVIDENCE_WINDOW_MS = 15 * 60 * 1000;
 
 /**
  * Scrubs the free text a repository's rows hold, in place, inside the
- * unregistration transaction (issue 681).
+ * unregistration transaction.
  *
  * Issue and pull request bodies, which no reader consults, and the issue's
  * done-when extract are nulled unconditionally; a repository that may return

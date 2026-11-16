@@ -300,7 +300,7 @@ export function scrubPublicationForSuppressions(publication: {
 }
 
 /**
- * The import-path check (issue 1071): inside the publication transaction,
+ * The import-path check: inside the publication transaction,
  * before any derived row or evidence fact is written, every suppressed
  * person's identity is scrubbed from what this pass is about to write.
  *

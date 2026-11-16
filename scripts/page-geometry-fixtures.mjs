@@ -1,18 +1,18 @@
 /**
- * The page-geometry gate's database fixtures, split out of
- * scripts/check-page-geometry.mjs because that file sits on its size
- * baseline: its recorded line count may not grow, so fixture code the gate
- * gains is fixture code the gate relocates into this sibling module — the
- * repository's documented remedy for a file over its folder ceiling.
+ * The page-geometry gate's database fixtures. The gate's own file,
+ * scripts/check-page-geometry.mjs, sits on its size baseline: its recorded
+ * line count may not grow, so fixture code the gate gains is fixture code the
+ * gate relocates into this sibling module — the repository's documented remedy
+ * for a file over its folder ceiling.
  *
  * Two fixtures live here:
  *
- *   - the session fixture (issue 453): the two fixed-ID users the signed-in
- *     contracts sign in as, and
- *   - the board fixture (issue 1067): one visible /issues card — a registered
- *     repository, its active sponsor, and one OPEN issue titled with 256 'a'
- *     characters, the audit's long unbroken title that overflows the board at
- *     narrow viewports, and a long unbroken done-when statement.
+ *   - the session fixture: the two fixed-ID users the signed-in contracts sign
+ *     in as, and
+ *   - the board fixture: one visible /issues card — a registered repository,
+ *     its active sponsor, and one OPEN issue titled with 256 'a' characters,
+ *     a long unbroken title that overflows the board at narrow viewports, and
+ *     a long unbroken done-when statement.
  *
  * Both seeders are idempotent (fixed row ids, upsert), open and close their
  * own client, and never delete or demote anything else; should a real row

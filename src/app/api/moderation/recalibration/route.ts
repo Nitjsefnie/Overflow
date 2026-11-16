@@ -19,9 +19,9 @@ const recalibrationQuerySchema = z
   .strict();
 
 /**
- * The moderator-facing recalibration figure (issue 330): the trigger verdict
- * over the latest SUBSTANTIATED audit's stored snapshot, beside every credit
- * adjustment already applied to the account.
+ * The moderator-facing recalibration figure: the trigger verdict over the
+ * latest SUBSTANTIATED audit's stored snapshot, beside every credit adjustment
+ * already applied to the account.
  */
 export function createModerationRecalibrationGetHandler(dependencies: ModerationCreditRouteDependencies) {
   return async function getModerationRecalibration(request: Request): Promise<Response> {

@@ -160,8 +160,7 @@ const productionToolDependencies: McpToolDependencies = {
       return new SettlementOverrideService(new PostgresSettlementOverrideStore());
     },
     // The same gate instance the REST route's export wires, so the MCP
-    // dispatch of the same operation shares the REST bound per identity
-    // (issue 1054).
+    // dispatch of the same operation shares the REST bound per identity.
     rateGate: overridesRouteRateGate,
   }),
   correctionList: createSettlementOverrideListGetHandler({
@@ -189,7 +188,7 @@ export type McpRouteDependencies = MemberRouteDependencies & {
 /**
  * One JSON-RPC message per POST, whose params can carry anything the HTTP
  * routes take — the registration catalog among them — so 1 MiB bounds the raw
- * read while carrying every legitimate request (issue 661).
+ * read while carrying every legitimate request.
  */
 const MCP_REQUEST_BODY_LIMIT_BYTES = 1024 * 1024; // 1 MiB
 

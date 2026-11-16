@@ -235,11 +235,10 @@ describe("webhook body-digest replay dedup", () => {
     });
 
     it("processes a fresh delivery id over a digest-less processed body", async () => {
-      // The mixed-version window's accepted cost: a PROCESSED receipt written
-      // without a digest cannot match a digest-carrying replay, so a fresh
-      // delivery id over the same body processes once more. The delivery-id
-      // rule stays the only protection until this release has written the
-      // digest itself.
+      // The accepted cost of digest-less receipts an earlier release wrote: a
+      // PROCESSED receipt without a digest cannot match a digest-carrying
+      // replay, so a fresh delivery id over the same body processes once more.
+      // The delivery-id rule is the only protection for such a receipt.
       const fixture = await materializeRepositoryFixture(sql);
       const sender = await githubSender(fixture);
       await seedLegacyReceipt(fixture.repositoryId, "gh-legacy-window", "PROCESSED");
@@ -363,7 +362,7 @@ describe("webhook body-digest replay dedup", () => {
       expect(await store.markProcessed(claim.receiptId, claim.leaseToken)).toBe(true);
 
       // No claim-side digest: the replay lookup matches nothing and the
-      // delivery-id-only rule decides, exactly as today.
+      // delivery-id-only rule decides.
       await expect(store.claimDelivery(storeDelivery("gh-nulldigest-2", projectId), {
         provider: "github", registrationId: fixture.repositoryId,
       })).resolves.toMatchObject({ status: "CLAIMED" });

@@ -38,7 +38,7 @@ services:
       # OVERFLOW_APP_URL must still name the address users browse to.
       - "${APP_HOST_BIND:-127.0.0.1}:3000:3000"
     healthcheck:
-      # Same readiness probe the image's HEALTHCHECK runs (issue 688), in
+      # Same readiness probe the image's HEALTHCHECK runs, in
       # postgres's healthcheck shape: bookworm-slim has no curl/wget, so the
       # command is a node fetch one-liner whose response status drives the
       # exit code. The migrate-then-start boot is tolerated by the retry

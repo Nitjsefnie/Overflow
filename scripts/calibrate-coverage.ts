@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Coverage floor calibrator (issue 592): raises the recorded measurement
-// and floor when real coverage has outgrown the record by more than the
-// hysteresis. CI runs this on main after the coverage report; the same run
-// by hand against a fresh summary does the same job.
+// Coverage floor calibrator: raises the recorded measurement and floor when
+// real coverage has outgrown the record by more than the hysteresis. CI runs
+// this on main after the coverage report; the same run by hand against a fresh
+// summary does the same job.
 //
 //   node scripts/calibrate-coverage.ts
 //

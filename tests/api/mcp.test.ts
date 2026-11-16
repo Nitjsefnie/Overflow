@@ -350,8 +350,8 @@ describe("authentication discovery for a credential-less request", () => {
   it("answers a POST with no Origin header and no Cookie with 401 pointing at the protected-resource metadata", async () => {
     const dependencies = endpointDependencies();
     // A real MCP client sends no Origin header and no credential on its first
-    // probe, which used to surface only the origin guard's bare 403. The
-    // discovery answer replaces that 403, and nothing downstream may run.
+    // probe, so the discovery answer replaces the origin guard's bare 403 and
+    // nothing downstream may run.
     const request = new Request(`${trustedOrigin}/api/mcp`, {
       method: "POST",
       headers: { "content-type": "application/json" },

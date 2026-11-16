@@ -47,7 +47,7 @@ updates:
   # updates (the intended behavior for the Nitjsefnie-Actions workflows,
   # which stay SHA-pinned by maintainer decision). Every action therefore
   # travels together in one grouped pull request per week, majors included —
-  # the old minor-and-patch group left a codeql-action v4 to v5 bump as one pull
+  # a minor-and-patch group leaves a codeql-action major bump as one pull
   # request per `uses:` line. That matters here because the three codeql-action
   # sub-actions (init, analyze, upload-sarif) are pinned to one SHA and used as a
   # matched set — init and analyze are two steps of the same analyze job in
@@ -69,8 +69,8 @@ updates:
   # any scheduled workflow. Thursday has no weekday-pinned cron. Every weekday
   # is otherwise occupied — four by lanes (Tuesday, Thursday, Friday, Sunday),
   # two by the weekday-pinned crons (Wednesday, Saturday) — and Monday is the
-  # dependabot default, so each of the two new lanes shares a day with an
-  # existing lane at a distinct minute rather than taking a free one.
+  # dependabot default, so the two Tuesday lanes and the two Sunday lanes each
+  # share their day at a distinct minute rather than taking a free one.
   # That weekly grouped pull request lands red on arrival by design:
   # tests/api/ci-workflows.test.ts pins those action SHAs, so the handler
   # completes the second edit (the test pins) before merging — CONTRIBUTING.md's
@@ -98,7 +98,7 @@ updates:
   # Matches the root Dockerfile. Its base image is
   # digest-pinned, so bumps arrive as tag+digest updates for that one image.
   # That digest is a shared literal across Dockerfile's two FROM lines, the
-  # provenance LABEL's base.digest (issue 461) and a constant in
+  # provenance LABEL's base.digest and a constant in
   # tests/deploy/container-image.test.ts, so a FROM-only bump lands red with
   # the rest stale: the handler makes the coordinated edit (all FROM lines,
   # LABEL, test constant) or the lane becomes an `ignore` entry by maintainer
@@ -118,7 +118,7 @@ updates:
       prefix: "ci"
       include: "scope"
     ignore:
-      # Declined in #771: node 26 enters LTS only on 2026-10-28 per the
+      # Node 26 enters LTS only on 2026-10-28 per the
       # nodejs.org release schedule (nodejs/Release schedule.json), and a Node
       # runtime major is not taken before LTS. Revisit on/after 2026-10-28:
       # remove this ignore entry, take the next node major proposal, and make
@@ -184,7 +184,7 @@ updates:
   # and leaves every `--hash=sha256:` at the old release's values, so
   # `pip install --require-hashes -r .github/requirements-zizmor.txt` fails with
   # "THESE PACKAGES DO NOT MATCH THE HASHES FROM THE REQUIREMENTS FILE".
-  # Measured on PR 1007 (the 1.29.0 -> 1.30.1 bump, against this exact base).
+  # Measured on the 1.29.0 -> 1.30.1 bump, against this exact base.
   #
   # WHY, traced through dependabot-core (python RequirementFileUpdater ->
   # RequirementReplacer, `updated_matched_declaration`): the hash refresh is
@@ -198,10 +198,10 @@ updates:
   # applies to every occurrence. Reproduced by running dependabot-core's own
   # regexes and constants (from requirement_parser.rb) over this file: with the
   # header comment present the hash branch does not fire and the edit lands on
-  # exactly the three lines PR 1007 changed (4, 15, 18) with the hash set
+  # exactly the three lines that bump changed (4, 15, 18) with the hash set
   # untouched; with the comment lines removed the same pass picks the real pin
   # line and the hash branch fires. (A simulation of upstream's regexes, not a
-  # run of dependabot-core itself, but its output matches PR 1007 exactly.)
+  # run of dependabot-core itself, but its output matches that bump exactly.)
   # So the header comment naming the version is load-bearing for this failure,
   # and every future bump hits it the same way.
   #
@@ -212,25 +212,23 @@ updates:
   # platform's subset) and is equally correct; the header explains why the GET
   # is the one it names. Read it there rather than taking a second recipe here.
   #
-  # A stale-hash arrival is now RED ON THE PULL REQUEST, before the merge:
+  # A stale-hash arrival is RED ON THE PULL REQUEST, before the merge:
   # pr-suite.yml runs `pip download --no-deps --require-hashes -r` against this
-  # file, in the one workflow that checks out and executes the request's own tree
-  # (issue 1094). pip resolves the named version from the index and refuses any
-  # artifact whose sha256 is not listed, so PR 1007's exact content fails there.
+  # file, in the one workflow that checks out and executes the request's own tree.
+  # pip resolves the named version from the index and refuses any artifact whose
+  # sha256 is not listed, so stale-hash content fails there.
   # Two properties make that the right home: pr-suite holds contents:read,
   # references no secret and uses no environment, and its outcome is read as DATA
   # by verify, which is what turns the failure into a blocked merge. The test
   # suite does NOT catch it and is not expected to — it must not depend on the
   # network. The zizmor case in tests/api/ci-workflows.test.ts asserts a version
   # FLOOR (>= 1.30.0) and the file's SHAPE ("every line carries --hash=sha256:",
-  # "at least two distinct hashes"); neither binds a hash to a version, so PR
-  # 1007's content passes them, correctly — the version floor is issue 1091's
-  # deliberate choice, and the hash binding is the workflow step's job.
+  # "at least two distinct hashes"); neither binds a hash to a version, so
+  # stale-hash content passes them, correctly — the version floor is a deliberate
+  # choice, and the hash binding is the workflow step's job.
   #
-  # So the handler's obligation is unchanged and now ENFORCED rather than
-  # advisory: regenerate the hashes on the branch. A bump that arrives without
-  # them is red, which is the outcome the previous revision of this comment
-  # wrongly claimed the test file already provided.
+  # So the handler's obligation is ENFORCED rather than advisory: regenerate the
+  # hashes on the branch. A bump that arrives without them is red.
   #
   # This is the same "handler completes the coordinated edit before merging"
   # regime as the two lanes above, with one file to regenerate instead of a

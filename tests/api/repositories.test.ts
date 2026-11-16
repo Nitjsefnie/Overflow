@@ -50,16 +50,16 @@ import {
 
 // Release stores evaluated with this file's mocked database client.
 vi.hoisted(() => { vi.resetModules(); });
-// The production exports below carry the module-scope rate bound (issue 1054)
-// and are driven here as one identity: stub a bound no test here can exhaust.
+// The production exports below carry the module-scope rate bound and are
+// driven here as one identity: stub a bound no test here can exhaust.
 vi.hoisted(() => { vi.stubEnv("RATE_LIMIT_REPOSITORIES_PER_HOUR", "100000"); });
 afterAll(() => { vi.resetModules(); });
 
 const { readSession } = vi.hoisted(() => ({ readSession: vi.fn() }));
 vi.mock("@/auth", () => ({ auth: readSession }));
-// The production wiring reads the live role through `getSql()` (issue 733),
-// and the unit tests here run without a database: the stub answers one live
-// MEMBER role row. The container suite below passes its own sql to
+// The production wiring reads the live role through `getSql()`, and the unit
+// tests here run without a database: the stub answers one live MEMBER role
+// row. The container suite below passes its own sql to
 // getCurrentUserRole explicitly, so the stub never stands in for a real
 // lookup there, and runMigrations keeps the real module's transaction client.
 const { sqlStub } = vi.hoisted(() => ({
@@ -85,8 +85,9 @@ beforeEach(() => {
   }
 });
 
-// A test whose subject legitimately emits server-side output (the abandoned-webhook
-// diagnostic, issue 451) names the method here before acting and the teardown skips it.
+// A test whose subject legitimately emits server-side output (the
+// abandoned-webhook diagnostic) names the method here before acting and the
+// teardown skips it.
 const consoleOutputAllowed = new Set<string>();
 
 afterEach(() => {
@@ -106,7 +107,7 @@ afterEach(() => {
   }
 });
 
-// Issue 97: the ambiguous 403 message states the ambiguity explicitly and ranks the
+// The ambiguous 403 message states the ambiguity explicitly and ranks the
 // wait-and-retry remedy before the authorization settings remedies.
 const ambiguitySentence = "GitHub answers 403 both when the Overflow OAuth application is not yet authorized and when it is temporarily limiting requests, and this response carries nothing that separates the two causes.";
 const waitInstruction = "Wait a minute and retry registration before changing anything.";
@@ -184,7 +185,7 @@ describe("POST /api/repositories", () => {
     });
   });
 
-  // Issue 599: the scope check runs while the wiring resolves, ahead of the
+  // The scope check runs while the wiring resolves, ahead of the
   // registration flow, so its refusal is mapped here — the stable code the
   // form and API clients act on.
   it("returns a structured 403 with the scope code when the stored token cannot administer webhooks", async () => {
@@ -224,7 +225,7 @@ describe("POST /api/repositories", () => {
     });
   });
 
-  // Issue 883: only the preserved cause names the collection and the ceiling.
+  // Only the preserved cause names the collection and the ceiling.
   it("logs the preserved cause when a wrapped label read tripped the collection-walk bound", async () => {
     consoleOutputAllowed.add("error");
     let tripped: Error | undefined;
@@ -377,7 +378,7 @@ describe("POST /api/repositories", () => {
     ] satisfies Array<[number, Record<string, string>, string, number, string]>)("classifies GitHub HTTP %s with %j as %s / HTTP %s", async (status, headers, code, responseStatus, delay) => {
       // A status no arm classifies reaches the generic 502, whose fixed message
       // names none of it, so on the bounded label read the log is where the
-      // status surfaces (issue 890); the other steps keep their silence.
+      // status surfaces; the other steps keep their silence.
       const unclassified = step === "labels" && code === "UPSTREAM_FAILURE";
       if (unclassified) consoleOutputAllowed.add("error");
       const dependencies = successfulDependencies();
@@ -417,7 +418,7 @@ describe("POST /api/repositories", () => {
     });
   });
 
-  // Issue 97's repro shape at the route: a 403 secondary rate limit arrives with nonzero
+  // The secondary-rate-limit shape at the route: a 403 arrives with nonzero
   // remaining budget, no Retry-After, and the marker in the body, so only the body separates
   // it from an authorization refusal — the route must answer it as HTTP 429 either way.
   const secondaryRateLimitBody = "You have exceeded a secondary rate limit. Please wait a few minutes before you try again.";
@@ -471,7 +472,7 @@ describe("POST /api/repositories", () => {
       const message = body.error.message as string;
       if (status === 403 && code === "GITHUB_ACCESS") {
         // The ambiguous 403 names the ambiguity and puts wait-and-retry before every
-        // settings URL instead of ranking authorization first (issue 97).
+        // settings URL.
         expect(message).toContain(ambiguitySentence);
         expect(message).toContain(waitInstruction);
         expect(message.indexOf(waitInstruction)).toBeLessThan(message.indexOf("https://github.com/settings/applications"));
@@ -1043,7 +1044,7 @@ describe("Overflow token registration", () => {
       vi.spyOn(PostgresRepositoryStore.prototype, "getGitHubAccessToken").mockResolvedValue("stored-oauth-token");
       vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState").mockResolvedValue("ACTIVE");
       vi.stubEnv("OVERFLOW_GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
-      // The granted-scope probe (issue 599) precedes the gateway: /user
+      // The granted-scope probe precedes the gateway: /user
       // answers with webhook administration; everything else is GraphQL.
       const request = vi.fn<typeof fetch>(async (input) =>
         String(input) === "https://api.github.com/user"
@@ -1072,7 +1073,7 @@ describe("Overflow token registration", () => {
     }
   });
 
-  // The production GitLab wire (issue 547): every other route test stubs the
+  // The production GitLab wire: every other route test stubs the
   // registration dependencies, so nothing else executes the limb of
   // buildRegistrationDependencies that picks OVERFLOW_GITLAB_WEBHOOK_URL over the
   // GitHub callback and reads the sponsor's PAT through the identity store.
@@ -1162,7 +1163,7 @@ describe("Overflow token registration", () => {
     const enforcement = vi.spyOn(PostgresRepositoryStore.prototype, "getEnforcementState")
       .mockResolvedValue("ACTIVE");
     vi.stubEnv("OVERFLOW_GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
-    // The granted-scope probe (issue 599) precedes the repository read: /user
+    // The granted-scope probe precedes the repository read: /user
     // answers with webhook administration so the flow proceeds, and the
     // repository read answers an outage.
     const fetchGitHub = vi.fn<typeof fetch>(async (input) =>
@@ -1282,7 +1283,7 @@ describe("Overflow token registration", () => {
   // A GitLab path submission whose forge lookup fails with something other
   // than 404 is an upstream problem, not a missing project: the raw
   // GitLabApiError must reach the route's catch-all and answer 502 — never a
-  // 404 that reads as "no such project" (issue 566).
+  // 404 that reads as "no such project".
   it("answers 502 UPSTREAM_FAILURE when a GitLab path lookup fails upstream", async () => {
     consoleOutputAllowed.add("error");
     const handler = createRepositoryPostHandler({
@@ -1322,7 +1323,7 @@ const {
 } = guardedRequests("/api/repositories");
 
 /**
- * Issue 599: the granted scopes are read from GitHub itself — the
+ * The granted scopes are read from GitHub itself — the
  * X-OAuth-Scopes header of an authenticated /user response — before the
  * registration flow is even constructed, for the cookie session and the
  * bearer token alike. Neither the scope the sign-in requested nor the JWT's
@@ -1959,7 +1960,7 @@ describe("DELETE /api/repositories", () => {
     });
   });
 
-  // The other half of the production GitLab wire (issue 547): the forge-first
+  // The other half of the production GitLab wire: the forge-first
   // hook deletion reads the sponsor's PAT through the identity store the
   // route constructs, and nothing else in this suite drives that wiring.
   it("deletes the GitLab hook through the sponsor's forge token via the production DELETE wiring", async () => {
@@ -2367,7 +2368,7 @@ function failingGitHubGateway(
 }
 
 /**
- * Issue 733: the session JWT outlives the account it was issued for, so every
+ * The session JWT outlives the account it was issued for, so every
  * write verb re-reads the account's role live. The deleted row is real: the
  * suite runs the migrations and the account deletion against a disposable
  * database, asserted through the real getCurrentUserRole.

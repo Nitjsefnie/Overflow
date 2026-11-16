@@ -427,14 +427,15 @@ export function unboundedGroupKeysIn(group: string): string[] {
  *
  * This is a check AGAINST UNEXPECTED KEYS, and that is the whole point of it.
  * Every other assertion in this file — and every assertion in
- * `tests/api/ci-workflows.test.ts` that is not issue 986's own — reads a key
- * the workflow is EXPECTED to carry: `concurrency` here, `name`/`on`/
- * `permissions`/`jobs` there. A key outside the set those assertions read is not
- * a gap in coverage, it is a channel nothing reads. An unpinned top-level `env:`
- * block planting a `${{ github.repository }}` survives both pin suites green and
- * survives `actionlint` and `zizmor` as well, because all three read it clean:
- * a key nobody asserts on is a key nobody is looking at. Issue 986 closed that
- * hole for `scorecard.yml` alone; this closes it for the directory.
+ * `tests/api/ci-workflows.test.ts` but its top-level key check for
+ * `scorecard.yml` — reads a key the workflow is EXPECTED to carry: `concurrency`
+ * here, `name`/`on`/`permissions`/`jobs` there. A key outside the set those
+ * assertions read is not a gap in coverage, it is a channel nothing reads. An
+ * unpinned top-level `env:` block planting a `${{ github.repository }}` survives
+ * both pin suites green and survives `actionlint` and `zizmor` as well, because
+ * all three read it clean: a key nobody asserts on is a key nobody is looking
+ * at. That `scorecard.yml` check closes the hole for one workflow; this closes
+ * it for the directory.
  *
  * **`env` is deliberately absent, and that is the load-bearing omission.** It is
  * a legitimate GitHub Actions key — a workflow may legitimately pin one, at the
@@ -479,7 +480,7 @@ const ALLOWED_TOP_LEVEL_KEYS = [
  * requires every file in `.github/workflows/` to have a row.
  */
 const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
-  // Issue 1090: each of these four pairs carries the same job name in BOTH
+  // Each of these four pairs carries the same job name in BOTH
   // legs, so a required-context conclusion arrives on a pull-request head and
   // on a main push alike. The name is deliberately NOT suffixed — the
   // check-run name is what branch protection and .github/required-checks.json
@@ -774,8 +775,8 @@ describe("the bounded workflows", () => {
     // guarantee, because it reads the SHIPPED group and the table constant can be
     // edited to match a wrong group. That is why the message names both things
     // this shape carries, not just the precedence trap: a reader who repointed
-    // the non-pull-request leg at github.run_id, re-opening issue 474, is not
-    // here because of parentheses.
+    // the non-pull-request leg at github.run_id, breaking the deploy guarantee,
+    // is not here because of parentheses.
     for (const [name] of Object.entries(BOUNDED)) {
       expect(
         workflows.get(name)!.concurrency?.group,
@@ -964,12 +965,10 @@ describe("the workflows left unbounded", () => {
         continue;
       }
       if (!reachable) continue;
-      // Back inside its original guard. Refactoring this loop hoisted it above
-      // the reachability check, which widened a pre-existing assertion to
-      // every entry in the table — including workflows this one is not about,
-      // like secret-scan.yml, which has no pull-request trigger at all. The
-      // widening was a side effect of the edit, not a decision, so the scope it
-      // had on main is the scope it keeps here.
+      // Keep this inside its guard, so it covers only the entries the
+      // reachability check selects. Outside it, the assertion would reach every
+      // entry in the table, including workflows with no pull-request trigger at
+      // all, like secret-scan.yml; the guard sets its scope.
       expect(entry.reason).toMatch(/cancel/i);
       expect(
         shipped,
@@ -983,16 +982,11 @@ describe("the workflows left unbounded", () => {
   });
 
   it("records only a premise this suite knows how to check", () => {
-    // Asserted against the RULES, not against the vocabulary. An earlier
-    // version matched `premiseOf(entry)` against a literal alternation of the
-    // two values the function could return, which no mutation could turn red:
-    // the function is typed to that union, the table supplies only those two,
-    // and its `?? "unreproducible"` default is a third copy of one of them.
-    // Every value it can produce matched, always, so it was not a runtime check
-    // at all — it read as one, and a reviewer trusting it as evidence of a
-    // closed vocabulary was wrong.
+    // Asserted against the RULES, not against the vocabulary: a check that matches
+    // the function's output against a literal list of its two values can never
+    // turn red, because every value it can produce is on that list.
     //
-    // What is checked now is the thing that can actually break: a premise this
+    // What is checked is the thing that can actually break: a premise this
     // suite has no rule for. `CANCELLATION_LICENCE` is keyed by premise and
     // exhaustive over the vocabulary, so widening `PREMISES` to a third value
     // without writing that value's rule fails the typecheck AND — because the
@@ -1034,8 +1028,8 @@ describe("the workflows left unbounded", () => {
     }
     // The guard above reads a filter, so an empty filter passes it vacuously.
     // This is what says the filter is not empty: at least one pinned producer
-    // must actually receive a pull-request event, which after issue 1090's
-    // split is the `-pr.yml` leg of each split context.
+    // must actually receive a pull-request event, which is the `-pr.yml` leg of
+    // each split context.
     expect(
       reachableCount,
       "no pinned required-check workflow receives a pull-request event, so the guard above " +
@@ -1054,11 +1048,11 @@ describe("the workflows left unbounded", () => {
  * The workflow filenames whose jobs are required check contexts, read from
  * .github/required-checks.json rather than hardcoded — the same file the deploy
  * gate resolves through, so a required check added there is covered here without
- * editing this suite. A pin may name several files (issue 1090's split), so
- * every path of every pin is read; dropping the list form would let a
- * required-check workflow escape the bound this suite enforces. A path is taken
- * as a basename, and anything that does not resolve to a workflow in the
- * directory is left for the caller's `workflows.has` assertion to name.
+ * editing this suite. A pin may name several files, so every path of every pin
+ * is read; dropping the list form would let a required-check workflow escape the
+ * bound this suite enforces. A path is taken as a basename, and anything that
+ * does not resolve to a workflow in the directory is left for the caller's
+ * `workflows.has` assertion to name.
  */
 function requiredCheckWorkflows(): string[] {
   // Typed as `unknown` and narrowed, not as `Record<string, string>`: a future

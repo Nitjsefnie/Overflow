@@ -125,10 +125,10 @@ function relativeImportClosure(repoRoot: string, entry: string): string[] {
   return [...visited].sort();
 }
 
-// Issue 688: the runtime image must ship production dependencies only,
+// The runtime image must ship production dependencies only,
 // declare its health against the readiness endpoint, and be able to write
 // its cache as the unprivileged user. These pins hold the Dockerfile text to
-// the fix; the "built image" suite below proves the properties on an actual
+// those requirements; the "built image" suite below proves the properties on an actual
 // build.
 describe("production runtime image (issue 688)", () => {
   it("copies the runtime node_modules from a production-only stage, not the build stage", () => {
@@ -185,10 +185,10 @@ describe("production runtime image (issue 688)", () => {
   });
 });
 
-// Issue 461: an image built from this Dockerfile must be traceable to the
-// reviewed source that produced it. A preserved image used to report
-// Config.Labels=null — nothing tied the running bytes to a source tree, and
-// rollback meant a mutable tag. These pins hold the Dockerfile to the fix.
+// An image built from this Dockerfile must be traceable to the
+// reviewed source that produced it: without a revision label nothing ties the
+// running bytes to a source tree, and rollback means a mutable tag. These pins
+// hold the Dockerfile to that.
 describe("image provenance (issue 461)", () => {
   it("declares SOURCE_SHA in the runtime stage and binds the revision label to it", () => {
     const arg = dockerfile.split("\n").findIndex((line) => line === "ARG SOURCE_SHA");
@@ -284,7 +284,7 @@ describe("built image", () => {
     { timeout: 1_200_000 },
     () => {
       const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
-      // The provenance guard (issue 461) refuses a build without the
+      // The provenance guard refuses a build without the
       // SOURCE_SHA build arg, so this supplies the real HEAD. When the tree
       // is dirty mid-development the arg is a formality for the Config.User
       // assertion below, not a claim about the tree it names; the clean-tree

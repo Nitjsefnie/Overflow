@@ -73,7 +73,7 @@ export async function materializeSettlements(
       changes += 1;
     } else if (current.fold_revision < FOLD_REVISION) {
       // Recomputed but unchanged: refresh the stamp without creating a CHANGE
-      // record or counting a delta for every row after a revision bump (issue 197).
+      // record or counting a delta for every row after a revision bump.
       await sql`update settlements set fold_revision = ${FOLD_REVISION} where id = ${current.id}`;
     }
   }

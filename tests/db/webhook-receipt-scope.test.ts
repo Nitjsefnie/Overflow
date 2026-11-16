@@ -438,8 +438,9 @@ function deliver(delivery: GitHubWebhookDelivery, scope: WebhookReceiptScope) {
   }, delivery, scope);
 }
 
-// SQL copied verbatim from origin/main at 09d9baa2: these run throughout the
-// next release's build and again after a rollback against the migrated schema.
+// The pre-migration release's SQL, verbatim (origin/main at 09d9baa2): these
+// run throughout the next release's build and again after a rollback against
+// the migrated schema.
 
 function legacyClaim(delivery: GitHubWebhookDelivery, leaseToken: string) {
   return sql`

@@ -9,16 +9,15 @@ import type { RouteCredentialReference } from "@/lib/security/route-credential";
  * flips to ACTIVE, the repositories the sanction took down come back within
  * the scope the prior state owns, and one moderation event records the lift.
  *
- * Extracted from reverseBan (the 1072 ban reversal) so the grant path of a
- * sanction contest (issue 1134) can run the same three writes inside its own
- * decision transaction instead of duplicating the SQL — a second copy of the
- * reactivation scope would drift from this one the way a second copy of any
- * invariant does. The caller owns the preconditions: the account row is
- * already locked FOR UPDATE in the caller's transaction, and the caller has
- * checked that the account's enforcement state is the sanction being lifted.
- * What this function adds is the transaction, so both paths compose it into
- * larger transactions — the reversal into its own, the grant into the
- * decision's.
+ * reverseBan (the ban reversal) and the grant path of a sanction contest both
+ * run these three writes, the grant inside its own decision transaction, so
+ * the SQL lives here once — a second copy of the reactivation scope would
+ * drift from this one the way a second copy of any invariant does. The caller
+ * owns the preconditions: the account row is already locked FOR UPDATE in the
+ * caller's transaction, and the caller has checked that the account's
+ * enforcement state is the sanction being lifted. What this function adds is
+ * the transaction, so both paths compose it into larger transactions — the
+ * reversal into its own, the grant into the decision's.
  *
  * The reactivation scope is the prior state's, not one shared scope:
  *
@@ -28,8 +27,8 @@ import type { RouteCredentialReference } from "@/lib/security/route-credential";
  *     were.
  *   - RECALIBRATING reactivates every inactive row the sponsor has not
  *     unregistered — closeRecalibration's scope, which the recalibration
- *     closure always applied and a granted contest over a live recalibration
- *     now applies identically.
+ *     closure and a granted contest over a live recalibration apply
+ *     identically.
  *
  * Both scopes clear the flag on what they reactivate, keeping the migration
  * 060 invariant — the flag is non-null exactly while the row is

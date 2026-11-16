@@ -2,8 +2,8 @@ import { logField } from "@/lib/webhooks/log-field";
 
 /**
  * One bounded line for an error @auth/core reports. The service journal is
- * size-bounded, and a request whose session cookie cannot be decrypted used
- * to cost it a multi-line, ANSI-coloured error block per request — the
+ * size-bounded, and a request whose session cookie cannot be decrypted would
+ * cost it a multi-line, ANSI-coloured error block per request — the
  * @auth/core default logger prints the error name, then the cause's full
  * stack, then the cause's details, and colours each with terminal escapes.
  * The `logger` option on the NextAuth configuration is the single lever for
@@ -16,7 +16,7 @@ import { logField } from "@/lib/webhooks/log-field";
  * - the fixed `[auth][error]` prefix, so journal greps for Auth.js errors
  *   keep working;
  * - the error's class name (`error.name` — `JWTSessionError` for the
- *   undecryptable-session path), so the class is named as the ruling asks;
+ *   undecryptable-session path), so the class is named in the line;
  * - the underlying cause's message (the @auth/core `cause.err` shape, or the
  *   error's own message when there is no cause), the one variable text —
  *   never the stack, never the details object, and never the cookie: the

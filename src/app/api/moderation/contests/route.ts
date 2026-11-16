@@ -45,13 +45,12 @@ export type SanctionContestModerationRouteDependencies = {
 };
 
 /**
- * The moderator's decision route for the disputes framework's sanction case
- * (issue 1125): a moderator records GRANTED or DENIED — with a reason — on an
- * OPEN contest request, and reads the OPEN queue the moderation page renders.
- * A grant lifts the contested sanction in the same transaction the decision
- * commits in; where the sanction was already gone the response says so
- * (sanctionAlreadyGone) and the journal line says so
- * (sanction.contest.decide.already_gone).
+ * The moderator's decision route for the disputes framework's sanction case:
+ * a moderator records GRANTED or DENIED — with a reason — on an OPEN contest
+ * request, and reads the OPEN queue the moderation page renders. A grant lifts
+ * the contested sanction in the same transaction the decision commits in; where
+ * the sanction was already gone the response says so (sanctionAlreadyGone) and
+ * the journal line says so (sanction.contest.decide.already_gone).
  *
  * The not-the-imposing-moderator rule is NOT this route's: it is enforced in
  * the store's transaction, against the database, where the imposer and the

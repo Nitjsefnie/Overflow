@@ -143,7 +143,7 @@ Screened against the recognised triggers, with the basis for each result:
 | Trigger | Result | Basis |
 | --- | --- | --- |
 | Scoring or ranking of people | **Triggered** | Settlement credit scoring, credit limits and the enforcement ladder (activities a–c above). |
-| Large-scale processing | No | One deployment, a handful of registered repositories, thousands of ledger rows; the largest historical table was a change log, since pruned — a running-deployment observation from the 2026-09-30 audit of the live stores, not a property of the reviewed tree. |
+| Large-scale processing | No | One deployment, a handful of registered repositories, thousands of ledger rows; a running-deployment observation of the live stores, not a property of the reviewed tree. |
 | Systematic monitoring | Partial | Reconciliation re-reads contributor activity on a schedule, but only within repositories registered with a sponsor token, and the processing is disclosed. |
 | Special-category data | None | No health, biometric, genetic, political, religious or similar fields anywhere in the schema (`db/migrations/`). |
 | Combining datasets | Inherent, disclosed | Forge identity is joined to ledger identity — the join is the product: contributor activity is priced into a ledger, and the notice discloses it. |

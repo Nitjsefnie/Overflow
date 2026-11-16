@@ -44,7 +44,7 @@ async function fixtureAnswers() {
 }
 
 /**
- * The whole recorded HTTP surface as the code derives it (issue 1056), in
+ * The whole recorded HTTP surface as the code derives it, in
  * the shape scripts/http-surface-snapshot.json records it minus the version:
  * the error envelope's shape, read off the real helper; each documented
  * route's success body shape and success status, from the answers its

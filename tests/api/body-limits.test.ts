@@ -36,15 +36,15 @@ afterAll(() => { vi.resetModules(); });
 useTrustedOrigin();
 
 /**
- * The per-route body limits issue 661 wires every authenticated JSON route's
- * body read through `readBodyWithinLimit` with. These are the route files' own
- * constants restated: a drift between a route constant and the value here is
- * exactly what the over-limit and exact-limit tests catch.
+ * The per-route body limits: every authenticated JSON route's body read goes
+ * through `readBodyWithinLimit` with these values. These are the route files'
+ * own constants restated: a drift between a route constant and the value here
+ * is exactly what the over-limit and exact-limit tests catch.
  *
- * The 8 KiB value is a deliberate raise from the plan's 4 KiB: the audit and
- * decision schemas carry `reasonText()`, whose 2000-character cap admits ~6 KB
- * UTF-8 bodies (2000 three-byte characters), so 4 KiB would refuse legitimate
- * max-length reasons before the schema could judge them.
+ * The 8 KiB value leaves room for the audit and decision schemas: they carry
+ * `reasonText()`, whose 2000-character cap admits ~6 KB UTF-8 bodies (2000
+ * three-byte characters), so a 4 KiB limit would refuse legitimate max-length
+ * reasons before the schema could judge them.
  */
 const ACCOUNT_DELETE_LIMIT_BYTES = 4 * 1024; // 4 KiB
 const AUDIT_DECISION_LIMIT_BYTES = 8 * 1024; // 8 KiB
@@ -393,8 +393,8 @@ describe("over-limit request bodies are refused with 413", () => {
   // The unregistration body shares the registration's limit through its own
   // reader: parseUnregisterInput bounds the DELETE read with the same
   // REPOSITORIES_BODY_LIMIT_BYTES. Pinned separately because the POST case
-  // never executes it — unwiring parseUnregisterInput left this suite green
-  // until this case existed (issue 661 review).
+  // never executes it: without this case, unwiring parseUnregisterInput
+  // leaves this suite green.
   it("DELETE /api/repositories refuses a body past 128 KiB before the registration wiring", async () => {
     const deps = repositoryDependencies();
     const response = await createRepositoryDeleteHandler(deps)(

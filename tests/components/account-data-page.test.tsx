@@ -139,7 +139,7 @@ describe("account-data notice page", () => {
   });
 
   it("points its external links at GitHub controls and Cloudflare agreements over https", async () => {
-    // The maintainer's channels render on the hosted origin (issue 1077).
+    // The maintainer's channels render on the hosted origin.
     vi.stubEnv("OVERFLOW_APP_URL", "https://overflow.nitjsefni.eu");
     await renderAccountDataPage();
 
@@ -166,7 +166,7 @@ describe("account-data notice page", () => {
   });
 
   it("reaches the request route from the deletion description", async () => {
-    // The maintainer's channels render on the hosted origin (issue 1077).
+    // The maintainer's channels render on the hosted origin.
     vi.stubEnv("OVERFLOW_APP_URL", "https://overflow.nitjsefni.eu");
     await renderAccountDataPage();
 
@@ -201,7 +201,7 @@ describe("account-data notice page", () => {
   });
 
   it("reaches the request route from the controls section too, for someone who cannot sign in", async () => {
-    // The maintainer's channels render on the hosted origin (issue 1077).
+    // The maintainer's channels render on the hosted origin.
     vi.stubEnv("OVERFLOW_APP_URL", "https://overflow.nitjsefni.eu");
     await renderAccountDataPage();
 
@@ -214,7 +214,7 @@ describe("account-data notice page", () => {
   });
 
   it("reaches the request route from the non-member section", async () => {
-    // The maintainer's channels render on the hosted origin (issue 1077).
+    // The maintainer's channels render on the hosted origin.
     vi.stubEnv("OVERFLOW_APP_URL", "https://overflow.nitjsefni.eu");
     await renderAccountDataPage();
 
@@ -313,7 +313,7 @@ describe("account-data notice page", () => {
   });
 
   it("opens with the controller section, which carries both contact routes", async () => {
-    // The maintainer's channels render on the hosted origin (issue 1077).
+    // The maintainer's channels render on the hosted origin.
     vi.stubEnv("OVERFLOW_APP_URL", "https://overflow.nitjsefni.eu");
     await renderAccountDataPage();
 
@@ -702,11 +702,10 @@ describe("controller identity renders from the instance's configuration (issue 1
       "no contact detail is invented for an operator who configured none",
     ).toHaveLength(0);
     // Scoped before document-wide on purpose: the deletion description is the
-    // mention a regression is likeliest to leave behind (it carried the tracker
-    // link unconditionally before issue 1077), so its own guard runs first and
-    // a deletion-section regression fails HERE, naming the location, instead of
-    // at the document-wide guard below — which would fire on a tracker link
-    // anywhere at all and leave this one unreachable.
+    // mention a regression is likeliest to leave behind, so its own guard runs
+    // first and a deletion-section regression fails HERE, naming the location,
+    // instead of at the document-wide guard below — which would fire on a tracker
+    // link anywhere at all and leave this one unreachable.
     expect(
       document
         .getElementById("account-data-deletion-heading")!

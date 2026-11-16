@@ -3,7 +3,7 @@ import { gitlabWebhookError, type GitLabWebhookStep } from "@/lib/repositories/g
 import { RepositoryRegistrationError } from "@/lib/repositories/register";
 
 /**
- * The GitLab hook deletion an unregistration performs (issue 547, behavior 3).
+ * The GitLab hook deletion an unregistration performs.
  * Forge-first, like the GitHub flow: the hook is deleted on the instance
  * BEFORE the local row is touched, so a refusal leaves the registration
  * exactly as it stood. The GitLab branch of `unregisterRepository`
@@ -69,8 +69,8 @@ export async function deleteGitLabWebhookForUnregistration(
     );
   }
   if (target.githubWebhookId === null) {
-    // A pre-547 GitLab registration: no hook was installed, so the desired
-    // end state already holds.
+    // A GitLab registration that predates the webhook path: no hook was
+    // installed, so the desired end state already holds.
     return { kind: "ALREADY_ABSENT" };
   }
   if (target.instanceUrl === null || target.instanceUrl.length === 0) {

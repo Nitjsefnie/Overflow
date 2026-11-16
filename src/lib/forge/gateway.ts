@@ -16,10 +16,10 @@ import type {
 /**
  * The forge seam: every public read and webhook operation the settlement
  * pipeline performs against a forge, stated over the GitHub types that are
- * already the pipeline's neutral vocabulary. GitHubGateway implements it with
- * zero behavior change; GitLabGateway implements it with the graded behaviors
- * the forge-evidence contract locks (reviews permanently empty, no workflow
- * evidence, labels fallback). Method signatures are GitHubGateway's, verbatim.
+ * already the pipeline's neutral vocabulary. GitHubGateway implements it;
+ * GitLabGateway implements it with the graded behaviors the forge-evidence
+ * contract locks (reviews permanently empty, no workflow evidence, labels
+ * fallback). Method signatures are GitHubGateway's, verbatim.
  */
 export interface ForgeGateway {
   getRepository(repository: GitHubRepositoryReference): Promise<GitHubRepository>;

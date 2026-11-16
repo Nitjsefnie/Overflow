@@ -1,6 +1,6 @@
 name: coverage comment
 
-# Issue 592 mechanism 3: the patch coverage report, commented onto the pull
+# The patch coverage report, commented onto the pull
 # request. The pr suite workflow (pr-suite.yml) measures it — that is where a
 # pull request's own code runs, under `pull_request` — but holds no
 # PR-writing token; this workflow_run job holds one and therefore touches
@@ -13,7 +13,7 @@ name: coverage comment
 #     kept accepted, while any other event's run measured no diff a pull
 #     request owns, so it exits silently;
 #   - the destination pull request is resolved from the triggering event
-#     only — its head repository, head branch and head SHA (issue 656): a
+#     only — its head repository, head branch and head SHA: a
 #     candidate from another repository, or whose head has moved past the
 #     event's SHA, is never selected; zero matches exits silently, more than
 #     one fails loudly, and a claim inside a same-repository artifact that

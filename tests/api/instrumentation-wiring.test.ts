@@ -404,7 +404,7 @@ describe("server instrumentation", () => {
   });
 });
 describe("server instrumentation log encoding (issue 1042)", () => {
-  // The issue 1042 hostile payload: one forge-supplied string that splits into
+  // A hostile payload: one forge-supplied string that splits into
   // a forged journal line shaped like a privileged-action report and carries
   // raw terminal escapes. The console sink renders an error object through its
   // stack — message raw — so these sites must pass one encoded token, never

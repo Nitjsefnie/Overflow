@@ -88,8 +88,8 @@ describe("fold parity between wide and narrowed evidence", () => {
 
 /**
  * A snapshot whose cached issues still carry every body — the shape a
- * pre-narrowing cache serialised. The fold's own input type claims no body
- * (issue 681), so the wide shape is a local augmentation of it.
+ * pre-narrowing cache serialised. The fold's own input type claims no body,
+ * so the wide shape is a local augmentation of it.
  */
 type WideSnapshot = Omit<RepositoryFoldSnapshot, "issues"> & {
   issues: Array<Omit<RepositoryFoldIssue, "closingPullRequests"> & {

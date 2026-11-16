@@ -316,7 +316,7 @@ export class PostgresModerationStore implements ModerationStore {
       `;
       // Clearing the flag here keeps the invariant two-sided: a row the
       // closure reactivates leaves with no sanction flag, so a later ban
-      // reversal (issue 1072) re-stamps it fresh at the next deactivation.
+      // reversal re-stamps it fresh at the next deactivation.
       const reactivatedRepositories = await transaction<{ id: string }[]>`
         update registered_repositories
         set active = true, sanction_deactivated_at = null, updated_at = now()
@@ -389,8 +389,8 @@ export class PostgresModerationStore implements ModerationStore {
       // state flip, the flag-scoped reactivation — only the rows the sanction
       // flagged come back, so a row inactive for any other reason, and a row
       // the sponsor left after the sanction, stay exactly as they were — and
-      // the BANNED → ACTIVE event. The grant path of a sanction contest
-      // (issue 1134) runs the same core inside its own decision transaction.
+      // the BANNED → ACTIVE event. The grant path of a sanction contest runs
+      // the same core inside its own decision transaction.
       const reactivatedRepositories = await liftSanctionInTransaction(transaction, {
         targetAccountId: target.id,
         priorState: "BANNED",
@@ -439,7 +439,7 @@ export class PostgresModerationStore implements ModerationStore {
       // change queues on one transaction-scoped advisory lock, so two mutual
       // revocations cannot each hold the other's actor row FOR UPDATE while
       // their audit inserts wait for a KEY SHARE on it (a 40P01 deadlock that
-      // surfaced as a 502), and the survivor count below is evaluated against a
+      // surfaces as a 502), and the survivor count below is evaluated against a
       // settled predecessor rather than an uncommitted one.
       await transaction`select pg_advisory_xact_lock(hashtext('overflow:moderator-role-changes'))`;
       const [target] = await transaction<{ id: string; github_login: string; role: "MEMBER" | "MODERATOR"; deleted_at: Date | null }[]>`

@@ -15,7 +15,7 @@ concurrency:
   # makes that true rather than aspirational — GitHub keeps ONE pending run per concurrency group
   # and cancels the older pending one even at cancel-in-progress false, so with the default single
   # slot the second of three /claim comments landing on one issue while a run is in progress is
-  # dropped unanswered (Nitjsefnie-Actions/claim#30). The queue is the only setting that holds the
+  # dropped unanswered. The queue is the only setting that holds the
   # arrivals instead of replacing them; cancel-in-progress alone buys nothing here.
   group: claim-${{ github.event.issue.number }}
   cancel-in-progress: false
@@ -27,8 +27,7 @@ jobs:
     # whether a run starts at all. What it must NOT do is pre-filter the event: a job whose `if`
     # does not match starts no run, so /claim on a pull request or on a closed issue is met with
     # silence. claim answers such a command with a reply that DECLINES it, and that reply is the
-    # only thing telling the author the workflow saw them at all
-    # (Nitjsefnie-Actions/claim#82 replaced the pre-filter with exactly that).
+    # only thing telling the author the workflow saw them at all.
     if: >-
       github.event.comment.user.type != 'Bot'
       && (contains(github.event.comment.body, '/claim')

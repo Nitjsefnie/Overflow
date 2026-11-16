@@ -307,7 +307,7 @@ describe("migration 038: forge identities and provider columns", () => {
   it("keeps the token column out of the list query itself, not just out of the view mapping", async () => {
     // The view mapping already projects the token away; this pin holds the
     // QUERY to the same containment, so a secret is never fetched to be
-    // dropped. Reviewed mutant: re-adding encrypted_token to the select.
+    // dropped. The mutant it kills: re-adding encrypted_token to the select.
     const { readFile } = await import("node:fs/promises");
     const { fileURLToPath } = await import("node:url");
     const storeSource = await readFile(

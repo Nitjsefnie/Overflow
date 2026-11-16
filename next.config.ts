@@ -66,19 +66,19 @@ if (distDir) {
   }
 }
 
-// Framing protection (issue 677): refuse cross-site framing everywhere via
+// Framing protection: refuse cross-site framing everywhere via
 // X-Frame-Options: DENY, the fallback for clients without CSP frame-ancestors
 // support. The CSP leg — frame-ancestors 'none' — is deliberately NOT set
 // here: Next merges headers() and proxy response headers by overwriting
 // same-named keys, so a CSP emitted in this array never reaches the wire and
 // would only mask the proxy's. The one delivered Content-Security-Policy
 // lives in src/proxy.ts, which single-sources frame-ancestors 'none'
-// alongside the per-request nonce script-src (issue 1046 review).
+// alongside the per-request nonce script-src.
 const frameProtectionHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
 ];
 
-// Defense in depth (issue 1046): stop MIME sniffing and cap referrer leakage
+// Defense in depth: stop MIME sniffing and cap referrer leakage
 // on every response, set globally beside the framing pair so no route misses
 // them.
 const hardeningHeaders = [
@@ -92,7 +92,7 @@ const nextConfig: NextConfig = {
   // agent documentation is not generated, so a dev run must write nothing.
   agentRules: false,
   // Next sets X-Powered-By: Next.js <version> on responses by default; that
-  // advertises the framework to attackers, so the header stays off (issue 1046).
+  // advertises the framework to attackers, so the header stays off.
   poweredByHeader: false,
   ...(distDir ? { distDir, typescript: { tsconfigPath } } : {}),
   async headers() {

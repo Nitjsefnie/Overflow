@@ -39,7 +39,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Issue 1334: the same reference resolution ci.yml's postgres-image job
+  # The same reference resolution ci.yml's postgres-image job
   # does — the PostgreSQL service image is read at run time from the
   # digest-pinned ci/Dockerfile, so a Dependabot bump of that file is
   # exercised by this suite's own database before it lands.
@@ -125,21 +125,21 @@ jobs:
           python-version: "3.15"
 
       # Binds .github/requirements-zizmor.txt's hashes to the version on its pin
-      # line, on the PULL REQUEST's own tree (issue 1094). `--require-hashes`
+      # line, on the PULL REQUEST's own tree. `--require-hashes`
       # makes pip resolve `zizmor==<version>` from the index and refuse any
       # artifact whose sha256 is not in the file, so a manifest that kept the
       # previous release's hashes under a bumped version fails here — before the
       # merge, in the one workflow that checks out and runs the request's bytes.
       #
-      # This had no home on a pull request: actionlint.yml is the only other
-      # place the flag is used, and its pull_request_target leg checks out main's
-      # tip with no `ref:` (its `actions/checkout` step), so it installs MAIN's
-      # manifest and cannot see the request's. A Dependabot bump with stale hashes
-      # therefore merged green and reddened the required `actionlint` context on
-      # the push to main instead. Dependabot-core's own hash refresh does not
-      # fire on this file either — the manifest's header comment naming the old
-      # version is what its declaration scan matches first — so the arrival is
-      # reliably stale and this is the only pre-merge catcher.
+      # actionlint.yml is the only other place the flag is used, and its
+      # pull_request_target leg checks out main's tip with no `ref:` (its
+      # `actions/checkout` step), so it installs MAIN's manifest and cannot see
+      # the request's. Without this step a Dependabot bump with stale hashes
+      # merges green and reddens the required `actionlint` context on the push
+      # to main instead. Dependabot-core's own hash refresh does not fire on
+      # this file either — the manifest's header comment naming the old version
+      # is what its declaration scan matches first — so the arrival is reliably
+      # stale and this is the only pre-merge catcher.
       #
       # `pip download`, not an install: nothing is executed and no package is
       # placed on the runner, only resolved and checksummed. `--no-deps` keeps it
@@ -151,7 +151,7 @@ jobs:
       # SCOPE, stated rather than left to be assumed: with no --platform flag pip
       # resolves the artifact for THIS runner, so what is verified here is the
       # platform's entry against the version — the case that actually occurs (a
-      # bump carrying the whole previous hash set, as PR 1007 does). It is not
+      # bump carrying the whole previous hash set). It is not
       # proof that all eleven entries belong to the version: a manifest stale in
       # only some other platform's wheel would pass here. Verified, not assumed —
       # a manifest with this platform's wheel correct and the other ten entries
@@ -178,7 +178,7 @@ jobs:
             --dest "${RUNNER_TEMP}/zizmor-hash-check" \
             -r .github/requirements-zizmor.txt
 
-      # ShellCheck over THIS request's own scripts (issue 1038): pr-suite is
+      # ShellCheck over THIS request's own scripts: pr-suite is
       # the one workflow whose checkout is the pull request's tree, so this is
       # where the request's scripts are linted. ci.yml's shellcheck job is
       # main's leg of the same gate; ci-pr.yml deliberately carries none — it

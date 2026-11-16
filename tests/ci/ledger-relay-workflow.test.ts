@@ -11,8 +11,8 @@ import { RELAY_JOB_NAME, RELAY_JOB_TIMEOUT_MINUTES } from "../../scripts/ledger-
  * OVERFLOW_LEDGER_INSTALLATION_ID literals pinned in its step env, so a silently
  * altered literal repoints every relay posting at another App installation
  * whose check-runs protection and the deploy gate read as the ledger App's —
- * and the suite gave it no cover: the final review's mutant (5118624 for
- * 5118623) survived all 129 tests. This suite holds the workflow file to the
+ * and no other suite covers it: a mutant literal (5118624 for 5118623)
+ * survived all 129 other tests. This suite holds the workflow file to the
  * exact literals; the script-side wiring around them is covered by
  * tests/scripts/ledger-relay.test.ts.
  *

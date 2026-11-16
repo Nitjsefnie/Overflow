@@ -17,12 +17,12 @@ import { GitLabApiError } from "@/lib/gitlab/client";
  * route does.
  *
  * The token is resolved on the first read rather than before the fold starts,
- * and that is the whole point of routing through this helper. A wrapper that
- * resolved it up front threw before the fold could reach its inactive
- * short-circuit, which completes a deactivated repository without touching the
- * forge at all. So a repository deactivated while it held a job, whose
- * sponsor's token has since gone, burned every retry and settled as FAILED — a
- * state the sweep never revives, because it enqueues active repositories only.
+ * and that is the whole point of routing through this helper. Resolving it up
+ * front would throw before the fold reached its inactive short-circuit, which
+ * completes a deactivated repository without touching the forge at all. A
+ * repository deactivated while it holds a job, whose sponsor's token has gone,
+ * would then burn every retry and settle as FAILED — a state the sweep never
+ * revives, because it enqueues active repositories only.
  *
  * `createGateway` (GitHub) and `resolveForgeToken` (GitLab) are injectable for
  * tests; production wires the real gateway and the identity store's

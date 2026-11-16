@@ -29,9 +29,9 @@ type ApiTokenStatus = Serialized<StoredApiTokenStatus>;
 /**
  * What the member can be told about the token on screen.
  *
- * `expired` alone no longer says what it used to: an unconfirmed token fails its
- * delivery window, a confirmed one reaches the lifetime, and both arrive here as
- * `expired: true` (issue 847). The remedy is the same in both cases, so the panel
+ * `expired` covers two states: an unconfirmed token fails its delivery window,
+ * a confirmed one reaches the lifetime, and both arrive here as
+ * `expired: true`. The remedy is the same in both cases, so the panel
  * offers the same remedy — but the reason is not the same, and the states are
  * kept apart here so nothing downstream can fold them back together.
  *

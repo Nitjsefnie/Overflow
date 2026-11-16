@@ -9,9 +9,9 @@ const signIn = vi.hoisted(() => vi.fn());
 
 vi.mock("@/auth", () => ({ signIn, auth: async () => null }));
 
-// Issue 700: the forms submit through the real server actions, which now open
-// with the origin guard, so the request headers must name the trusted origin
-// (useTrustedOrigin sets the app URL).
+// The forms submit through the real server actions, which open with the origin
+// guard, so the request headers must name the trusted origin (useTrustedOrigin
+// sets the app URL).
 vi.mock("next/headers", async () => (await import("../support/trusted-origin")).trustedRequestHeaders());
 
 useTrustedOrigin();
@@ -91,9 +91,9 @@ describe("landing page", () => {
       .toHaveAttribute("href", "https://github.com/apps/overflow-registration/installations/new");
   });
 
-  // Issue 599: a contributor grants nothing beyond public identity, so the
-  // first action requests the explicit empty scope and lands on the member
-  // destination; the per-call scope overrides the provider default.
+  // A contributor grants nothing beyond public identity, so the first action
+  // requests the explicit empty scope and lands on the member destination; the
+  // per-call scope overrides the provider default.
   it("submits contributor GitHub sign-in through a server action with no scope", async () => {
     render(<LandingPage />);
 
@@ -165,7 +165,7 @@ describe("landing page", () => {
     expect(container.querySelector(".landing-mark")).toBeNull();
   });
 
-  // Issue 680: a new user can read the terms and rules before any account exists.
+  // A new user can read the terms and rules before any account exists.
   it("links /terms and /rules beside the /account-data link, after the sign-in forms", () => {
     render(<LandingPage />);
 
@@ -443,7 +443,7 @@ const CH_MEASURED = new Set<SubtreeElement>(["h1", "lede"]);
 
 const BASE_WIDTH = 1440;
 const NARROW_WIDTH = 390;
-// Both columns were measured at x600; the rewrite reads vh at the 625px target.
+// Both columns were measured at x600; the guard resolves vh at the 625px target.
 const MEASURED_HEIGHT = 600;
 const VIEWPORT_HEIGHT = 625;
 const ROOT_FONT_SIZE = 16;

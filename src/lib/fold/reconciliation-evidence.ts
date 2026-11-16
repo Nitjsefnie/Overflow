@@ -16,7 +16,7 @@ export const RECONCILIATION_EVIDENCE_FORMAT = 4;
 
 /**
  * Fixed nonblank string that replaces every nonblank cached comment body when
- * the evidence cache serialises (issue 681). The fold reads a comment body only
+ * the evidence cache serialises. The fold reads a comment body only
  * through `body.trim().length > 0` while selecting a settlement rationale, so a
  * nonblank placeholder preserves every settlement decision exactly, and a blank
  * body maps to "" so it stays non-qualifying.

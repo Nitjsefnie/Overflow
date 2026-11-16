@@ -49,7 +49,7 @@ on:
     - cron: "*/10 * * * *"
 
 permissions:
-  # actions: write exists only for the rerun-heal (issue 861): when a producer
+  # actions: write exists only for the rerun-heal: when a producer
   # run was cancelled out of the shared pending concurrency slot while its pull
   # request's head is still live, the relay re-dispatches it. The rerun
   # authenticates as this workflow's own repo-scoped github.token, NOT the

@@ -4,13 +4,10 @@
  * Three legal pages state the sanction effects — the terms page's "How
  * sanctions work" section, the rules page's "Moderation" section and the
  * /account-data notice's "Scoring and sanctions" section — and stating them
- * three times by hand is the drift this repository has already been through
- * once: the terms page promised a sanction could be contested while the rules
- * it pointed at carried no such case (see src/lib/disputes.ts for that
- * history). One exported source removes the same gap here. Each page renders
- * this list, and no page can state a sanction effect the others do not: an
- * edit to a fact is one edit, and a fact that stops being true stops being
- * claimed on all three pages at once.
+ * three times by hand invites drift. One exported source closes that gap: each
+ * page renders this list, and no page can state a sanction effect the others do
+ * not: an edit to a fact is one edit, and a fact that stops being true stops
+ * being claimed on all three pages at once.
  *
  * The wording is the text a reader is held to, so it moves the way a legal
  * document moves: through src/lib/legal-revisions.ts, never as a quiet copy

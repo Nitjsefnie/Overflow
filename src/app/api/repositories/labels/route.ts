@@ -33,9 +33,9 @@ export type LabelsRouteDependencies = {
 
 /**
  * The repository's existing label names, for the registration form's catalog
- * selectboxes (issue 258). Labels are never created here; a catalog may only
- * pick labels the repository already has, and registration verifies that
- * server-side as the backstop.
+ * selectboxes. Labels are never created here; a catalog may only pick labels
+ * the repository already has, and registration verifies that server-side as
+ * the backstop.
  */
 export function createLabelsGetHandler(dependencies: LabelsRouteDependencies) {
   return async function getRepositoryLabels(request: Request): Promise<Response> {
@@ -66,20 +66,21 @@ export function createLabelsGetHandler(dependencies: LabelsRouteDependencies) {
       const labels = await readRepositoryLabels(gateway, reference);
       return Response.json({ labels: [...labels] });
     } catch (error) {
-    // Issue 327: a 401 is GitHub rejecting the authorization Overflow holds —
-    // the token expired or was revoked, so retrying cannot fix it. Same
-    // credential vocabulary as the registration endpoint's githubSetupError
-    // (github-registration-flow.ts); the message names the one remedy that refreshes the token.
+    // A 401 is GitHub rejecting the authorization Overflow holds — the token
+    // expired or was revoked, so retrying cannot fix it. Same credential
+    // vocabulary as the registration endpoint's githubSetupError
+    // (github-registration-flow.ts); the message names the one remedy that
+    // refreshes the token.
     if (error instanceof GitHubApiError && classifyGitHubApiFailure(error) === "CREDENTIALS") {
       return errorResponse(401, "GITHUB_CREDENTIALS", "GitHub rejected the authorization Overflow holds for this account (HTTP 401) while trying to read the repository labels. To refresh the authorization, sign out of Overflow and sign in again with GitHub, then retry.");
     }
-    // Issue 338: a 403 or 404 carrying no rate-limit evidence is GitHub refusing
-    // or withholding the labels read — GitHub answers 404 rather than 403 when
-    // it will not reveal a resource, and a bare 403 cannot separate a missing
+    // A 403 or 404 carrying no rate-limit evidence is GitHub refusing or
+    // withholding the labels read — GitHub answers 404 rather than 403 when it
+    // will not reveal a resource, and a bare 403 cannot separate a missing
     // application authorization from a secondary rate limit. Same access
-    // vocabulary as the registration endpoint's githubSetupError (github-registration-flow.ts);
-    // a 403 that does carry rate-limit evidence falls through to the
-    // rate-limit arm below.
+    // vocabulary as the registration endpoint's githubSetupError
+    // (github-registration-flow.ts); a 403 that does carry rate-limit evidence
+    // falls through to the rate-limit arm below.
     if (error instanceof GitHubApiError && classifyGitHubApiFailure(error) === "ACCESS") {
       if (error.status === 404) {
         return errorResponse(
@@ -109,19 +110,19 @@ export function createLabelsGetHandler(dependencies: LabelsRouteDependencies) {
 
 /**
  * The GitHub label walk, with the failures this route records before it maps
- * them (issues 883, 890).
+ * them.
  *
  * The bound on this walk is the collection-walk bound: it throws a plain `Error`
  * naming the collection and the ceiling the walk stopped at. It is not a
  * `GitHubApiError` at all — no status, no rate-limit evidence — so it matches no
  * arm the caller's catch classifies.
  *
- * The gate here is exactly "no arm classified this" (issue 890), which is those
- * two failures together: the walk's own bound, and a `GitHubApiError` whose
+ * The gate here is exactly "no arm classified this", which is those two
+ * failures together: the walk's own bound, and a `GitHubApiError` whose
  * status none of the caller's arms can explain, a 500 among them. Both reach the
  * generic 502, a fixed string that names neither the collection and ceiling nor
  * the status, so the error object is the only carrier of either to an operator —
- * and a GitHub 5xx used to be recorded nowhere at all. The classified arms stay
+ * and nothing else on this route records a GitHub 5xx. The classified arms stay
  * silent, and that is the whole of their exemption: each already answered the
  * submitter with a message naming the remedy for what GitHub reported about its
  * own authorization or its own availability.
@@ -227,7 +228,7 @@ function parseGitLabProjectReference(project: string): { id: number } | { owner:
 const gitlabProjectNotFoundMessage = "No GitLab project with that id or path is visible through your linked identity. Check the project id or path and that the identity still has access, then retry.";
 
 /**
- * The GitLab arm of the labels read (issue 546): the catalog selectboxes read
+ * The GitLab arm of the labels read: the catalog selectboxes read
  * a GitLab project's labels through the submitter's verified linked identity
  * — its decrypted PAT is the gateway credential, exactly as on the
  * registration path. The resolution order is fixed: the cipher key gate, the
@@ -321,7 +322,7 @@ async function gitlabLabelsResponse(
 
 /**
  * The GitLab label walk, with the failures this route records before it maps
- * them (issue 892).
+ * them.
  *
  * The bound on this walk is the collection-walk bound: it throws a plain `Error`
  * naming the collection and the ceiling the walk stopped at. It is not a
@@ -333,7 +334,7 @@ async function gitlabLabelsResponse(
  * none of the caller's arms can explain, a 500 among them. Both reach the
  * generic 502, a fixed string that names neither the collection and ceiling
  * nor the status, so the error object is the only carrier of either to an
- * operator — and a GitLab 5xx used to be recorded nowhere at all. The
+ * operator — and nothing else on this route records a GitLab 5xx. The
  * classified arms stay silent, and that is the whole of their exemption: each
  * already answered the submitter with a message naming the remedy for what
  * GitLab reported about its own identity or its own availability.
@@ -398,11 +399,10 @@ async function getSession(): Promise<LabelsRouteSession | null> {
 
 /**
  * The direct export Next.js routes on: a thin wrapper delegating to the
- * factory with the production dependency functions — the same construction
- * sites the pre-refactor handler used. The arrows build their store or
- * gateway per call, and nothing they build is retained between requests; the
- * database client behind them is the shared pooled getSql() client, which
- * outlives requests by design.
+ * factory with the production dependency functions. The arrows build their
+ * store or gateway per call, and nothing they build is retained between
+ * requests; the database client behind them is the shared pooled getSql()
+ * client, which outlives requests by design.
  */
 export const GET = createLabelsGetHandler({
   getSession,

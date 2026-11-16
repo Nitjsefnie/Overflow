@@ -63,8 +63,7 @@ export type SelfWorkCalibrationOverrideEvidence = {
  * Migration 003 gives `settlements` both `settlements_issue_unique unique
  * (issue_id)` and `settlements_pull_request_issue_unique`, so a second
  * settlement on one issue cannot be written; it gives `self_work_calibrations`
- * only `unique (pull_request_id, issue_id)`, replacing the `unique` on
- * `pull_request_id` alone that migration 001 declared, so a second calibration
+ * only `unique (pull_request_id, issue_id)`, so a second calibration
  * on one issue through a second pull request can be. Nothing at all forbids a
  * settlement and a calibration on the same issue. What holds those two open
  * cases shut is the `continue` after the calibration push in

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Refuse a commit subject whose scope names a workflow but whose type is not ci.
 
-Issue 988 brings the checks used by the claim and pr-gate actions into
-Overflow's already-required verify job. CONTRIBUTING.md allows a workflow's
+The checks used by the claim and pr-gate actions run in Overflow's
+already-required verify job. CONTRIBUTING.md allows a workflow's
 name as a commit scope only with type `ci`. This check enforces only that
 scope rule: it does not check the Conventional Commits format CONTRIBUTING.md
 prescribes, which review checks.

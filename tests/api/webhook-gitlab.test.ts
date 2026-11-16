@@ -422,7 +422,7 @@ describe("GitLab webhook route", () => {
     }
   });
 
-  // The GitLab twin of the GitHub receiver's burst guard (issue 852): 429 is
+  // The GitLab twin of the GitHub receiver's burst guard: 429 is
   // answered from the token bucket before a header is read and before a
   // credential is looked up. The bucket is the real limiter module's, drained
   // through the handler itself; timestamps are explicit — no wall clock, no

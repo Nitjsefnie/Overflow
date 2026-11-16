@@ -18,8 +18,7 @@ const spacingSeconds = 5;
  * The delay the client is given in the case that ends it between attempts, and the window that
  * case then watches. The window is deliberately LONGER than the delay — an uncancelled retry has
  * had two and a half times its own delay to arrive by the end of it, so the window can tell a
- * cancelled retry from one that was merely outrun. A window shorter than the delay cannot, and
- * saying so was the defect in this file's first version of that case.
+ * cancelled retry from one that was merely outrun. A window shorter than the delay cannot.
  */
 const retryDelaySeconds = 1;
 const cancelWindowMs = 2500;
@@ -78,9 +77,8 @@ interface DeathProxy {
 
 /**
  * A local proxy in front of the container, so the moment of death is deterministic and so what
- * the unreachable server does *afterwards* can be chosen per case. Adapted from the probe filed
- * with Overflow issue 164; the accept counter is the record the spacing and shutdown cases assert
- * on, in place of elapsed time.
+ * the unreachable server does *afterwards* can be chosen per case. The accept counter is the
+ * record the spacing and shutdown cases assert on, in place of elapsed time.
  */
 async function startDeathProxy(target: { host: string; port: number }): Promise<DeathProxy> {
   const sockets = new Set<net.Socket>();
@@ -181,8 +179,7 @@ async function until(condition: () => boolean) {
 
 /**
  * A socket that dies while its connection is still opening — before the startup handshake has
- * finished, while postgres.js still holds the query that opened it as `initial`. Overflow issue
- * 164.
+ * finished, while postgres.js still holds the query that opened it as `initial`.
  *
  * The close path returned early for that state, so everything below the return was skipped: the
  * settle a pending `end()` needs, and the `closedTime`/retry-counter/`delay` bookkeeping the next
@@ -245,7 +242,7 @@ describe("a connection whose socket dies while it is still opening", () => {
         // From here on the peer accepts every attempt and closes it without speaking the protocol,
         // so nothing that would clear `initial` — an error event, a protocol message, a completed
         // handshake — ever arrives again. The shutdown is registered inside this callback, before
-        // the client can observe the close, which is the interleaving Overflow issue 164 measured.
+        // the client can observe the close, which is the interleaving that exposes the defect.
         proxy.mode = "acceptclose";
         shutdown = sql.end();
         void shutdown.then(

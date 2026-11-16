@@ -16,7 +16,7 @@ export { DATA_SUBJECT_TOMBSTONE_LOGIN };
 
 /**
  * The data-subject request procedure for a person keyed by forge provider and
- * instance origin and numeric forge id (issue 1071): an operator export of every row naming the
+ * instance origin and numeric forge id: an operator export of every row naming the
  * person, and a removal that applies one documented decision per store and
  * records a suppression the reconciliation import checks on every later pass.
  *
@@ -464,7 +464,7 @@ export type ForgePersonRemovalOutcome =
     };
 
 /**
- * The per-person removal (issue 1071): one documented decision per store,
+ * The per-person removal: one documented decision per store,
  * applied inside one transaction that takes the fold's own repository
  * advisory locks for every registered repository of the provider, so a
  * concurrent reconciliation pass either commits before the removal (and is

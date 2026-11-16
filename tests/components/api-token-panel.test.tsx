@@ -173,7 +173,7 @@ describe("API token panel", () => {
     expect(document.getElementById("api-token-expired")).toBeVisible();
   });
 
-  // Issue 847. An unconfirmed token that failed its 30-minute delivery window
+  // An unconfirmed token that failed its 30-minute delivery window
   // reads `expired: true`, exactly like a confirmed one that reached ninety
   // days. Those are different facts — same remedy, different reason — so the
   // member must be able to tell them apart. Pinned by element id and tone, NOT

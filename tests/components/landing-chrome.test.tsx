@@ -38,11 +38,11 @@ const PROVEN_PUBLIC_ROUTES = new Set([
   "/third-party-notices.txt",
 ]);
 
-// Issue 38: the signed-out entry route rendered a bare main.landing-page with no
-// site chrome, while every signed-in page carried the header, navigation and
-// footer through AppShell. These cases walk the route itself (with the session
-// mocked away) because the behavior a reader depends on lives in the composition:
-// the chrome around the landing content, not the content components alone.
+// The signed-out entry route carries the site chrome (header, navigation and
+// footer through AppShell) like every signed-in page does. These cases walk the
+// route itself (with the session mocked away) because the behavior a reader
+// depends on lives in the composition: the chrome around the landing content,
+// not the content components alone.
 describe("signed-out landing chrome", () => {
   beforeEach(() => {
     // Signed out by default; the member-redirect case overrides this once.

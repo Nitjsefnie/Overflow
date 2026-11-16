@@ -6,10 +6,10 @@ import { startPostgresContainer, type StartedPostgres } from "../support/postgre
 import { closeSql, getSql } from "@/lib/db/client";
 
 /**
- * Issue 665: reconciliation once recorded a no-op CHANGE row for every
- * settlement and self-work calibration on every pass (issue 659), because the
- * stored and fold timestamps differed only in form ("...:28.000Z" vs
- * "...:28Z"). The maintenance script under test must count and delete exactly
+ * Reconciliation recorded a no-op CHANGE row for every settlement and
+ * self-work calibration on every pass when the stored and fold timestamps
+ * differed only in form ("...:28.000Z" vs "...:28Z"), and those rows stay
+ * stored. The maintenance script under test must count and delete exactly
  * those rows: CHANGE rows for SETTLEMENT or SELF_WORK_CALIBRATION whose
  * before and after states carry the same keys and differ only where timestamp
  * fields hold the same instant in two notations.
@@ -134,8 +134,8 @@ const seeds: SeedRow[] = [
     before: { githubIssueId: 504, kind: "SPONSOR_ABSENCE", githubPullRequestId: null, reason: "closed at 2026-09-01T12:00:00.000Z" },
     after: { githubIssueId: 504, kind: "SPONSOR_ABSENCE", githubPullRequestId: null, reason: "closed at 2026-09-01T12:00:00Z" }, spurious: false },
   // Each of the following pins ONE filter limb as the only reason the row is
-  // kept (review fix round 1, item A): with the limb loosened, the row is
-  // over-deleted and the byte-identical assertion fails.
+  // kept: with the limb loosened, the row is over-deleted and the byte-identical
+  // assertion fails.
   { name: "unwritable closure CHANGE kept only by its entity kind", entityKind: "UNWRITABLE_CLOSURE", changeKind: "CHANGE",
     before: { githubIssueId: 506, kind: "SPONSOR_ABSENCE", githubPullRequestId: null, reason: "closed", mergedAt: "2026-09-01T12:00:00.000Z" },
     after: { githubIssueId: 506, kind: "SPONSOR_ABSENCE", githubPullRequestId: null, reason: "closed", mergedAt: "2026-09-01T12:00:00Z" }, spurious: false },
@@ -146,7 +146,7 @@ const seeds: SeedRow[] = [
     before: settlementState(), after: settlementState({ mergedAt: "2026-09-01T12:00:00Z" }), spurious: false },
   { name: "CHANGE with both states null kept only by the object guards", entityKind: "SETTLEMENT", changeKind: "CHANGE",
     before: null, after: null, spurious: false },
-  // Guard-limb pins (review fix round 1, items E and F).
+  // Guard-limb pins.
   { name: "sub-millisecond fraction is a real difference", entityKind: "SETTLEMENT", changeKind: "CHANGE",
     before: settlementState(), after: settlementState({ settledLabelAppliedAt: "2026-09-01T11:00:00.0000001Z" }), spurious: false },
   { name: "a zone-less timestamp against a zoned one is a real difference", entityKind: "SETTLEMENT", changeKind: "CHANGE",
@@ -154,7 +154,7 @@ const seeds: SeedRow[] = [
   { name: "a regex-shaped invalid date against its valid notation is a real difference", entityKind: "SETTLEMENT", changeKind: "CHANGE",
     before: settlementState({ settledRationaleCommentedAt: "2026-13-45T00:00:00Z" }),
     after: settlementState({ settledRationaleCommentedAt: "2026-13-45T00:00:00.000Z" }), spurious: false },
-  // Offset-notation pins (final review, Minor 1): a mutant casting to
+  // Offset-notation pins: a mutant casting to
   // `timestamp` instead of `timestamptz` discards the offset, so these two
   // flip direction — the same-instant row would be kept and the
   // different-instant row deleted.

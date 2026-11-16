@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
 /**
- * The responsive header contract (issue 40).
+ * The responsive header contract.
  *
  * The header is a three-column grid on desktop and stacks at and below a
  * single measured breakpoint: the wordmark and the session controls share the

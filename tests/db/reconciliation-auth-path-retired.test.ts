@@ -10,11 +10,11 @@ import type { ReconciliationGateway } from "@/lib/fold/reconcile";
 import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 
 /**
- * Issue 1362, item 10: a repository whose row holds
+ * A repository whose row holds
  * `reconciliation_auth_path = 'github-app-installation'`, and one registered
  * through the registration App (`registration_method = 'app'`), folds with the
  * sponsor's stored OAuth token and the stored columns keep their values: the
- * fold reads the column never, and no writer exists any more.
+ * fold never reads the column, and no writer for it exists.
  */
 
 let container: StartedTestContainer | undefined;

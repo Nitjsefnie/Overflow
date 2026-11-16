@@ -8,7 +8,7 @@ import { materializeRepositoryFixture } from "../support/materialized-repository
 import { startPostgresContainer } from "../support/postgres-container";
 
 /**
- * Issue 659: the materializer decides whether a stored settlement or self-work
+ * The materializer decides whether a stored settlement or self-work
  * calibration changed by comparing a state built from the database row with a
  * state built from the fold. The row side renders every timestamp through
  * Date#toISOString (always with milliseconds); the fold carries GitHub's own

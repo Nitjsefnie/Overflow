@@ -182,7 +182,7 @@ describe("DELETE /api/account", () => {
     expect(deps.endSession).toHaveBeenCalledTimes(1);
   });
 
-  // The operator journal (issue 1122): a deletion that leaves no live
+  // The operator journal: a deletion that leaves no live
   // moderator writes exactly one fixed console.warn line — the gap and the
   // operator's recovery path, never any personal data. The exact-match
   // assertion pins the whole string, which is what keeps it personal-data-free.

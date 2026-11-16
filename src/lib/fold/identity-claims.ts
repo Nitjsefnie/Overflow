@@ -26,12 +26,12 @@ export async function claimGitHubIdentity(
     throw new Error("GitHub user id must be a positive integer.");
   }
   await sql.begin(async (transaction) => {
-    // Fence against concurrent fold publications (issue 472): a publication takes
+    // Fence against concurrent fold publications: a publication takes
     // its repository's registered_repositories row lock as its own first statement,
     // so claiming under every such row lock orders a claim against every
     // publication transaction — one committing between the publication's identity
-    // re-resolution and its materialization writes can no longer be overwritten by
-    // the stale snapshot. The claim's write scope is every repository, so the
+    // re-resolution and its materialization writes cannot be overwritten by the
+    // stale snapshot. The claim's write scope is every repository, so the
     // fence's scope is every repository; row locks release at COMMIT/ROLLBACK, so
     // unlike the per-repository advisory locks there is no session-lock pool
     // hazard. Ordered by id so two concurrent claims serialize without deadlock;
@@ -124,7 +124,7 @@ export async function claimForgeIdentity(
   }
   const instanceUrl = normalizeInstanceUrl(input.instanceUrl);
   await sql.begin(async (transaction) => {
-    // The same publication fence claimGitHubIdentity takes (issue 472).
+    // The same publication fence claimGitHubIdentity takes.
     await transaction`select id from registered_repositories order by id for update`;
     const selfWorkSettlements = await transaction<IdentityClaimSettlementRow[]>`
       select
@@ -186,7 +186,7 @@ export async function claimForgeIdentity(
 
 /**
  * Re-resolve the identities a stale fold snapshot left unclaimed, so publishing
- * it does not undo a claim made since the snapshot was taken (issue 446).
+ * it does not undo a claim made since the snapshot was taken.
  *
  * A fold captured before a contributor's Overflow account existed marks their
  * settlements UNCLAIMED (creditor unrecorded, only a GitHub user id) and their

@@ -1104,7 +1104,7 @@ describe("recalibration adjustment reversal API", () => {
   });
 });
 
-// The shared reason cap (issue 690): every free-text reason and plan field the
+// The shared reason cap: every free-text reason and plan field the
 // moderation routes carry accepts exactly MAX_REASON_LENGTH characters after
 // trim and refuses one more with the route's own validation answer, before any
 // service or store is reached.
@@ -1300,13 +1300,12 @@ describe("reason length caps", () => {
   });
 });
 
-// Issue 116: the moderator gate used to exist as private copies answering the
-// same failures differently. These pin the one shared contract through every
-// moderation route family, whatever file houses the handler: a backing-store
-// failure while authorizing is the codebase's 502 UPSTREAM_FAILURE answer (the
-// one requiredMemberSession already gives in the overrides routes and
-// tests/api/settlement-overrides.test.ts pins), a missing session stays 401,
-// and a demoted moderator is refused with one message everywhere.
+// These pin the one shared contract through every moderation route family,
+// whatever file houses the handler: a backing-store failure while authorizing
+// is the codebase's 502 UPSTREAM_FAILURE answer (the one requiredMemberSession
+// already gives in the overrides routes and tests/api/settlement-overrides.test.ts
+// pins), a missing session stays 401, and a demoted moderator is refused with
+// one message everywhere.
 type GateDependencies = {
   getSession: () => Promise<unknown>;
   findAccountByTokenHash: (hash: Buffer) => Promise<unknown>;
@@ -1465,7 +1464,7 @@ describe("the shared moderator authorization gate", () => {
   });
 });
 
-// A bearer ovf_ token now authenticates every moderator-gated family as the
+// A bearer ovf_ token authenticates every moderator-gated family as the
 // account that minted it, on the same terms as that account's session: the
 // programmatic request carries no Origin header, the owner's CURRENT role is
 // read at request time, and the one credential rejection is the repositories

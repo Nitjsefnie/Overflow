@@ -4,10 +4,9 @@ import { getSql } from "@/lib/db/client";
 
 /**
  * One account whose enforcement state is BANNED — the moderation page's
- * reversal section renders one reversal control per entry (issue 1072). The
- * shape mirrors the dashboard's recalibrating-account projection: the
- * confirmed-pattern count is context for the moderator, never reset by a
- * reversal.
+ * reversal section renders one reversal control per entry. The shape mirrors
+ * the dashboard's recalibrating-account projection: the confirmed-pattern
+ * count is context for the moderator, never reset by a reversal.
  */
 export type BannedAccountProjection = {
   id: string;
@@ -25,8 +24,7 @@ type BannedAccountRow = {
  * The banned-account projection beside the dashboard's
  * `listRecalibratingAccounts`: same ordering, same validated row shape, one
  * enforcement state different. It lives outside the dashboard module because
- * it serves the moderation page's reversal controls (issue 1072), not a
- * dashboard surface.
+ * it serves the moderation page's reversal controls, not a dashboard surface.
  */
 export async function listBannedAccounts(
   dependencies: { sql?: DashboardSql } = {},

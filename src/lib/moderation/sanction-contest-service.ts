@@ -1,7 +1,7 @@
 import type { EnforcementState } from "@/lib/db/types";
 
 /**
- * The sanction half of the disputes framework (issue 1125): a sanctioned
+ * The sanction half of the disputes framework: a sanctioned
  * account asks for its sanction to be contested, and a moderator decides.
  *
  * The store refuses anything but the account's live sanction — a contest
@@ -15,7 +15,7 @@ import type { EnforcementState } from "@/lib/db/types";
  * other live moderator exists, and the row records a sole-moderator
  * decision), and a decision writes its own moderation event. A GRANTED
  * decision lifts the contested sanction in the same transaction, through the
- * shared reversal core the 1072 ban reversal runs (src/lib/moderation/
+ * shared reversal core the ban reversal runs (src/lib/moderation/
  * sanction-lift.ts); the outcome's effect tells the caller which of the three
  * shapes landed — the sanction lifted, the grant recorded over a sanction
  * already gone, or a denial recorded. A DENIED decision moves nothing.

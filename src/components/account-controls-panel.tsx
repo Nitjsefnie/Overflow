@@ -35,7 +35,7 @@ type AccountControlsPanelProps = {
    * (`role = 'MODERATOR' and deleted_at is null`, with no other live
    * moderator). When true, the deletion section warns before the confirm
    * field that no in-product moderator will remain. The deletion itself is
-   * never blocked: this shapes a warning, not a gate (issue 1122).
+   * never blocked: this shapes a warning, not a gate.
    */
   isLastLiveModerator?: boolean;
   /**

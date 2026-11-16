@@ -10,11 +10,10 @@ what remains unknown; do not put credentials in the incident record.
 The private contact route is GitHub's private vulnerability reporting on the
 Nitjsefnie/Overflow repository; its report entry point is
 https://github.com/Nitjsefnie/Overflow/security/advisories/new, and the
-setting was verified enabled on 2026-09-30 (`gh api
+setting is enabled (`gh api
 repos/Nitjsefnie/Overflow/private-vulnerability-reporting` returns
 `{"enabled":true}`). Sensitive incident reports and sensitive data-subject
 requests go there; non-sensitive contact stays on the public issue tracker.
-This follows #650 and #679, which remain the source of the contact decision.
 
 Nitjsefnie keeps the incident log in `/var/lib/overflow/breach-log/` on the
 service host: a directory owned by root, mode 0700, holding one Markdown
@@ -24,7 +23,6 @@ yet; create it at first use with `install -d -m 0700
 repository and never copied into it. The responding operator writes entries
 as they respond; Nitjsefnie owns the record and its notification decisions.
 
-Private vulnerability reporting: see #642. Alerting: see #651.
 
 Steps: [detect and triage](#detect-and-triage), [contain](#contain),
 [scope](#scope), [recover](#recover), [record](#record),
@@ -61,10 +59,9 @@ sooner, and a unit start predating privileged-action logging cannot supply
 that missing evidence.
 
 Security log lines carrying client IP addresses have a **configured 90-day
-retention horizon** in a root-only export outside the size-bound journal,
-following the sponsor's retention decision in #1076. On this host,
-`overflow-journal-export.timer` runs daily at 00:20 UTC with `Persistent=true`;
-`overflow-journal-export.service` invokes
+retention horizon** in a root-only export outside the size-bound journal. On
+this host, `overflow-journal-export.timer` runs daily at 00:20 UTC with
+`Persistent=true`; `overflow-journal-export.service` invokes
 `/usr/local/sbin/overflow-journal-export.sh`. It exports complete UTC days of
 `overflow.service` to `/var/log/overflow-journal/overflow-YYYY-MM-DD.log.gz`,
 catches up days still available in the journal, skips existing day files and
@@ -252,7 +249,7 @@ journalctl -u overflow --utc --no-pager -o short-iso-precise \
 ```
 
 The line names the receiver and the running decline count, in this exact
-shape (issue 1053):
+shape:
 
 ```text
 Webhook rate limit engaged for the github receiver (declines so far: 12).
@@ -551,14 +548,14 @@ reconciliation worker and its recurring sweep, and automatic settlement pricing
 from repository labels. What stops is the codebase half: merges, issue triage,
 `offered:` and `settled:` labelling, deployment, secret rotation, and any
 change to branch protection, a registration's webhook or the App. The deleted
-case is not covered by that list, and the reason is now settled: at least two
-of its five entries read this repository, and the deleted case removes the
-repository. The reconciliation worker and automatic settlement pricing
-therefore stop with it — not because of the account, but because their source is
-gone — while the service, the webhook receivers and GitHub sign-in run on the
-deployment host and keep running. If any access remains, take the fork or clone
-first: it is the only copy of the settlement evidence that will exist, while
-the three entries that survive run on the host without it.
+case is not covered by that list: at least two of its five entries read this
+repository, and the deleted case removes the repository. The reconciliation
+worker and automatic settlement pricing therefore stop with it — not because of
+the account, but because their source is gone — while the service, the webhook
+receivers and GitHub sign-in run on the deployment host and keep running. If any
+access remains, take the fork or clone first: it is the only copy of the
+settlement evidence that will exist, while the three entries that survive run on
+the host without it.
 
 **Reconciliation reads through a personal credential; the relay does not.**
 The fold reconciles every GitHub repository with its sponsor's OAuth token —
@@ -582,12 +579,12 @@ Each is a stated fact that says what to do about it.
 1. **A deleted account takes the App with it.** The Overflow Ledger App belongs
    to `Nitjsefnie`, and installations under a deleted personal account are
    removed with it — the same GitHub Docs page, the same platform behaviour.
-   This is not an unknown any more, and the consequence is worth stating
-   plainly: after a deletion there is no App, so the relay has no identity to
-   post check-runs as, and no required check is satisfied by anyone, the App
-   having been the only producer branch protection accepts. The App's identity belongs to the account,
-   and the account is gone. And the username is freed rather than reserved, so
-   the App is not recoverable by re-registering either.
+   The consequence is worth stating plainly: after a deletion there is no App, so
+   the relay has no identity to post check-runs as, and no required check is
+   satisfied by anyone, the App having been the only producer branch protection
+   accepts. The App's identity belongs to the account, and the account is gone.
+   And the username is freed rather than reserved, so the App is not recoverable
+   by re-registering either.
 2. **The relay fires unattended today, and a gate would change that.** Read
    from the GitHub API, the `overflow-ledger` environment's only protection
    rule is `branch_policy` — protected branches, `can_admins_bypass` false —
@@ -742,13 +739,12 @@ decision and its timing are recorded in the breach log (see
 The supervisory authority is Úřad pro ochranu osobních údajů (ÚOOÚ), the
 Czech Republic's supervisory authority for personal data protection
 (https://uoou.gov.cz). That characterisation is evidence-based, not a legal
-opinion: the controller is Nitjsefnie personally (maintainer decision of
-2026-09-28, recorded in #679), and the evidence of establishment points at
-the Czech Republic, through the maintainer's public GitHub profile and
-organisations (for example Consultest-CZ) and the .cz domains operated by
-the account. Whether that evidence amounts to establishment is
-specialist-dependent in character; the authority above is stated on that
-evidence.
+opinion: the controller is Nitjsefnie personally, and the evidence of
+establishment points at the Czech Republic, through the maintainer's public
+GitHub profile and organisations (for example Consultest-CZ) and the .cz
+domains operated by the account. Whether that evidence amounts to
+establishment is specialist-dependent in character; the authority above is
+stated on that evidence.
 
 The statutory frame that decision applies, cited as the articles stand in
 the regulation:

@@ -1181,7 +1181,7 @@ describe("member dashboard", () => {
     }
   });
 
-  // The pre-confirm warning's seam (issue 1122): the page computes the two
+  // The pre-confirm warning's seam: the page computes the two
   // booleans and passes them down; the controls panel renders the warning from
   // them alone.
 

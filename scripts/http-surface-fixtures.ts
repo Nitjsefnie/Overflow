@@ -68,8 +68,8 @@ import type {
 } from "../src/lib/repositories/register.ts";
 
 /**
- * Typed derivation fixtures for the routes the HTTP surface snapshot pins
- * (issue 912). Every stub is typed against the route's or flow's real
+ * Typed derivation fixtures for the routes the HTTP surface snapshot pins.
+ * Every stub is typed against the route's or flow's real
  * dependency interface — never a module-level singleton — and answers
  * representative typed values: ISO strings for timestamps, uuid-ish strings
  * for ids, nonempty arrays for lists, and one fixed instant (`fixtureNowMs`)
@@ -347,7 +347,7 @@ export function fixtureAccountExportRouteDependencies(): AccountExportRouteDepen
 }
 
 // ---------------------------------------------------------------------------
-// The moderation and override routes (issue 912, task 3). The moderator gate
+// The moderation and override routes. The moderator gate
 // (requiredModeratorSession) re-reads the role from the injected
 // getCurrentRole, so every moderation stub answers MODERATOR there — a
 // MEMBER answer is answered 403 before any handler logic runs.
@@ -431,7 +431,7 @@ const fixtureRecalibrationClosure: RecalibrationClosure = {
 };
 
 /**
- * The ban reversal's closure payload (issue 1072): the reactivated repositories
+ * The ban reversal's closure payload: the reactivated repositories
  * as ids — the reversal's narrower scope is the point, so the caller sees
  * exactly which repositories came back.
  */
@@ -634,7 +634,7 @@ export const fixtureCloseRecalibrationInput = {
   plan: "Return the account to active after the review.",
 };
 
-/** The PATCH /api/moderation/reversal body: the ban reverses (issue 1072). */
+/** The PATCH /api/moderation/reversal body: the ban reverses. */
 export const fixtureBanReversalInput = {
   targetAccountId: fixtureTargetId,
   reason: "The flagged pattern was re-reviewed and does not hold.",

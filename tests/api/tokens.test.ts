@@ -30,7 +30,7 @@ import {
 vi.hoisted(() => { vi.resetModules(); });
 afterAll(() => { vi.resetModules(); });
 
-// The production wiring reads the live role through `getSql()` (issue 733),
+// The production wiring reads the live role through `getSql()`,
 // and the unit tests here run without a database: the stub answers one live
 // MEMBER role row. The container suite below passes its own sql to
 // getCurrentUserRole explicitly, so the stub never stands in for a real
@@ -401,7 +401,7 @@ function mintRequest(headers: Record<string, string> = {}): Request {
 }
 
 /**
- * Issue 733: the session JWT outlives the account it was issued for, so the
+ * The session JWT outlives the account it was issued for, so the
  * route re-reads the account's role live before minting. The deleted row here
  * is real: the suite runs the migrations and the account deletion against a
  * disposable database, and the refusal is asserted through the real

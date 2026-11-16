@@ -8,7 +8,7 @@ import { listEligibleIssues } from "@/lib/dashboard/eligible-issues";
 import type { DashboardSql } from "@/lib/dashboard/queries";
 
 /**
- * Two pins on the plan mode the board statement is served in (issue 838):
+ * Two pins on the plan mode the board statement is served in:
  *
  * 1. SERVED MODE — the served statement is never a named prepared statement.
  *    The driver's tagged-template path caches every statement under a name,
@@ -226,7 +226,7 @@ async function seedPlanWorld(): Promise<void> {
   await insertUnclaimedIssues(deltaOne, unclaimedPerSponsor);
   await insertUnclaimedIssues(umbraOne, 3);
   // A settled backlog beside every open board, as production repositories and
-  // the benchmark world's repositories alike carry (issue 691's world is 80%
+  // the benchmark world's repositories alike carry (the benchmark world is 80%
   // unclaimed-open, 20% settled history).
   for (const repository of [auroraOne, borealisOne, cascadeOne, deltaOne, umbraOne]) {
     await insertClosedIssues(repository, 1_000);

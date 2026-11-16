@@ -17,8 +17,8 @@ import { guardedRequests, useTrustedOrigin } from "../support/trusted-origin";
 import { startPostgresContainer } from "../support/postgres-container";
 
 /**
- * Issue 661, task 5: what a lock-wait cancellation (57014) does to each caller
- * path, and the deadline posture the rescope landed on.
+ * What a lock-wait cancellation (57014) does to each caller path, and the
+ * deadline posture in force.
  *
  * The fold's publication transaction legitimately holds its repository's
  * registered_repositories row for the whole transaction, and at real scale

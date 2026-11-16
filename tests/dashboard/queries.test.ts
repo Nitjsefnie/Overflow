@@ -1607,13 +1607,11 @@ describe("calibration comparison per repository", () => {
     ]);
   });
 
-  // Issue 435: every request ran the two cohort selections twice — once for
-  // the pooled comparison and once for the per-repository breakdown — because
-  // each projection selected for itself. The selection is now the one loader
-  // both projections derive from, so a projection cannot read at all. The
-  // stub records every statement and scripts exactly one answer pair: a
-  // second selection has no answer left and fails the harness loudly, and the
-  // count below pins that outright.
+  // Both projections derive from one cohort loader, so neither runs a
+  // selection of its own: each request runs the two cohort selections once,
+  // not once per projection. The stub records every statement and scripts
+  // exactly one answer pair: a second selection has no answer left and fails
+  // the harness loudly, and the count below pins that outright.
   describe("one cohort selection for both projections", () => {
     it("reads each cohort once and derives both projections from that one selection", async () => {
       const selfWorkRows = [

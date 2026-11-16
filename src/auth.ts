@@ -53,15 +53,15 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
   // answers every auth route `500 [auth][error] UntrustedHost` otherwise. Left
   // unset, `@auth/core` derives trust from `AUTH_URL`/`AUTH_TRUST_HOST`/
   // `VERCEL`/`CF_PAGES` (or non-production NODE_ENV) — so a deployment
-  // configured from only the documented settings answered every sign-in route
-  // 500 while readiness answered 200 (issue 649). Derive the flag from APP_URL
+  // configured from only the documented settings would answer every sign-in route
+  // 500 while readiness answers 200. Derive the flag from APP_URL
   // instead, the origin the origin guard already enforces, so the documented
   // environment signs in; an operator-set AUTH_URL or AUTH_TRUST_HOST keeps
   // the precedence it has under @auth/core's own derivation.
   trustHost: authTrustHost(),
   // The service journal is size-bounded and shared with the privileged-action
-  // audit lines, and a request whose session cookie cannot be decrypted used
-  // to cost it a multi-line, ANSI-coloured error block per request: the
+  // audit lines, and a request whose session cookie cannot be decrypted would
+  // otherwise cost it a multi-line, ANSI-coloured error block per request: the
   // @auth/core default logger prints the error, then the cause's stack, then
   // the cause's details. The `logger` option is the single lever for every
   // @auth/core error path, so the error member emits exactly one bounded
@@ -76,7 +76,7 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
   },
   providers: [
     GitHub({
-      // The least-privilege default (issue 599): public identity only, so any
+      // The least-privilege default: public identity only, so any
       // unlabelled signIn("github") grants nothing. The repository-registration
       // sign-in passes GITHUB_REPOSITORY_REGISTRATION_SCOPE per call, which
       // overrides this. Explicitly empty, never omitted — see
@@ -95,7 +95,7 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
   ],
   session: { strategy: "jwt" },
   events: {
-    // The per-account revocation act (issue 1043): for the JWT strategy
+    // The per-account revocation act: for the JWT strategy
     // @auth/core 0.41.3 decodes the cookie's JWT and fires this with it
     // (actions/signout.js), catching handler errors and clearing the cookie
     // regardless — so a database blip at sign-out still clears the cookie but
@@ -120,22 +120,21 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
       });
     },
     async jwt({ token, profile, account }) {
-      // The cookie holds only what the account-data page states (issue 678):
-      // the public GitHub identity and Overflow's hints. The e-mail a token
-      // minted before this change still carries leaves here, on every
-      // invocation, so one refresh strips it — and so does the picture claim
-      // @auth/core seeds from the profile's avatar URL, which Overflow stopped
-      // collecting (issue 1075): @auth/core puts it in the base token it hands
-      // this callback, so deleting it here is the one choke point both a mint
-      // and a refresh pass through.
+      // The cookie holds only what the account-data page states: the public
+      // GitHub identity and Overflow's hints. A token from an earlier build may
+      // still carry an e-mail; it leaves here on every invocation, so one
+      // refresh strips it — and so does the picture claim @auth/core seeds from
+      // the profile's avatar URL, which Overflow does not collect: @auth/core
+      // puts it in the base token it hands this callback, so deleting it here is
+      // the one choke point both a mint and a refresh pass through.
       delete token.email;
       delete token.picture;
       // The scopes GitHub reports granting arrive once, on the initial OAuth
       // callback (account.scope). Reduced to one boolean hint: it decides
       // whether the registration page shows its form or the widening
       // sign-in, never whether registration proceeds — the route re-reads
-      // the grant from GitHub. A JWT issued before the hint existed carries
-      // nothing here and reads as not capable.
+      // the grant from GitHub. A JWT issued by a build without the hint
+      // carries nothing here and reads as not capable.
       if (account?.provider === "github") {
         token.canAdministerWebhooks = grantsWebhookAdministration(parseGrantedScopes(account.scope));
         // When the holder last completed a GitHub sign-in, in whole epoch
@@ -148,12 +147,11 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
 
       const identity = readGitHubIdentity(profile);
       if (identity === null) {
-        // The absolute lifetime first (issue 1043): a token whose sign-in
+        // The absolute lifetime first: a token whose sign-in
         // instant is at or past the 30-day maximum dies here, however often
         // the cookie was used in between — the sliding `exp` the framework
         // re-issues can no longer outrun the sign-in. A token with no usable
-        // instant dies too: fail-closed, because a pre-claim token is exactly
-        // the unbounded cookie the issue is about.
+        // instant dies too: fail-closed, because such a token is unbounded.
         if (isSessionExpired(token.authenticatedAt, Math.floor(Date.now() / 1000))) {
           return null;
         }
@@ -176,8 +174,8 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
           return null;
         }
         // A LIVE row compares epochs: a token minted before this account's
-        // current session generation (a pre-fix token has no claim at all)
-        // ends here. A MISSING row keeps today's pass-through — no epoch to
+        // current session generation (a token with no claim at all counts as
+        // one) ends here. A MISSING row keeps today's pass-through — no epoch to
         // compare against is the stale-session route, not this gate's scope.
         if (captured?.state === "LIVE" && typeof token.userId === "string" && isEpochRejected(token.sessionEpoch, captured.sessionEpoch)) {
           return null;
@@ -202,7 +200,7 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
         delete token.role;
       }
       if (typeof token.userId === "string") {
-        // Stamp the account's current session epoch (issue 1043): the claim
+        // Stamp the account's current session epoch: the claim
         // the refresh compares against. Deliberately outside the try above —
         // a failed read errors the sign-in (fail-closed at minting) rather
         // than minting a cookie that dies at its first refresh.
@@ -221,8 +219,8 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
         (session.user as typeof session.user & { role?: UserRole }).role = token.role;
         (session.user as typeof session.user & { canAdministerWebhooks?: boolean }).canAdministerWebhooks =
           token.canAdministerWebhooks === true;
-        // A JWT issued before the claim existed carries none, and reads as a
-        // sign-in too old to mint a token.
+        // A JWT issued by a build without the claim carries none, and reads
+        // as a sign-in too old to mint a token.
         if (typeof token.authenticatedAt === "number" && Number.isFinite(token.authenticatedAt)) {
           (session.user as typeof session.user & { authenticatedAt?: number }).authenticatedAt =
             token.authenticatedAt;
@@ -237,7 +235,7 @@ export const { handlers: { GET, POST }, auth, signIn, signOut } = NextAuth({
 /**
  * The signIn callback's persistence step: validates the encryption
  * configuration, resolves the role, applies the stored-token continuity
- * ruling (issue 1154), and upserts the account. Exported for the storage-path
+ * ruling, and upserts the account. Exported for the storage-path
  * regression suite (tests/auth/sign-in-token-continuity.test.ts); its only
  * production caller is the signIn callback's `persist` argument — the
  * optional `fetchImpl` parameter stays at its default there.
@@ -262,7 +260,7 @@ export async function upsertGitHubIdentity(
   // sealed during a rotation window. Encryption of anything new stays on the
   // current key; the stored-token probe decrypts with the whole set.
   const tokenKeys = tokenKeySetFrom(tokenEncryptionKey, readEnv("TOKEN_ENCRYPTION_KEY_PREVIOUS"));
-  // Stored-token continuity (issue 1154): GitHub issues a new authorization
+  // Stored-token continuity: GitHub issues a new authorization
   // carrying only the scopes the sign-in requested, so a contributor sign-in
   // mints a zero-scope token that must not overwrite the token the sponsor's
   // active registered repositories' webhook repairs still spend. Probe the
@@ -338,8 +336,8 @@ async function probeGrantedScopes(accessToken: string, fetchImpl: typeof fetch):
  * the repositories either; both store the NEW token. Every other failure — a
  * transport throw, a deadline, an unreliable status (an outage or a rate
  * limit) — leaves the stored token's capability UNKNOWN, and the verdict is
- * `unanswered`: the continuity ruling reads that as keep, the unchanged
- * fail-safe direction.
+ * `unanswered`: the continuity ruling reads that as keep, the fail-safe
+ * direction.
  */
 async function probeStoredToken(
   existingToken: Buffer,

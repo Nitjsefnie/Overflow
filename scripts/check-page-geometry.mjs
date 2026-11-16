@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 /**
  * CI-enforced layout-regression check: measure reader-visible page geometry in
- * a real browser against the pages a real build serves (issue 111).
+ * a real browser against the pages a real build serves.
  *
  * Why this exists: jsdom does no layout. The component suite renders markup and
  * stylesheets but never computes geometry, so a stylesheet edit can push the
  * landing page's sign-in button below the fold with the whole suite green —
- * eleven such mutants were measured while fixing the earlier landing-page
- * issue. This check is the class-level cover:
+ * eleven such mutants were measured. This check is the class-level cover:
  *
  *   - a page's primary control moved below the fold,
  *   - an element cut off horizontally,
@@ -29,8 +28,8 @@
  *
  * No new npm dependencies: the script drives Chrome over the DevTools protocol
  * with Node's built-in WebSocket, and starts/stops its own `next start` server.
- * The session fixture (issue 453) mints its JWT with node:crypto and seeds its
- * users through the `postgres` client the app itself already depends on.
+ * The session fixture mints its JWT with node:crypto and seeds its users through
+ * the `postgres` client the app itself already depends on.
  */
 
 import { spawn } from "node:child_process";
@@ -87,8 +86,7 @@ const repoRoot = resolve(import.meta.dirname, "..");
 
 /**
  * The port the spawned measurement server binds, overridable so concurrent
- * runs on one machine need not squat each other's port (issue 514: three
- * simultaneous sightings in one night). Mirrors the LAYOUT_CHECK_CHROME
+ * runs on one machine need not squat each other's port. Mirrors the LAYOUT_CHECK_CHROME
  * discovery override. Unset or empty keeps the default; anything that is
  * not a plain decimal integer from 1 to 65535 is refused, naming the
  * variable and the offending value. The value is validated at startup
@@ -118,8 +116,8 @@ const BASE_URL = (flaggedValue("--base-url") ?? `http://127.0.0.1:${PORT}`).repl
 
 /**
  * The environment a spawned `next start` needs, verified BEFORE anything is
- * launched (issue 471): the production server cannot render any page without
- * a database, and a missing one used to surface only after the spawn as
+ * launched: the production server cannot render any page without a database,
+ * and a missing one would otherwise surface only after the spawn as
  * "page did not render (HTTP 500)", which reads as a layout regression.
  * Empty string counts as missing — the server cannot connect with it either.
  */
@@ -129,7 +127,7 @@ const REQUIRED_ENV = ["DATABASE_URL"];
  * Next.js loads repo-root .env files at server startup, so a developer whose
  * DATABASE_URL lives only in one of these has a working flow today; its
  * presence satisfies the preflight even when the variable is absent from the
- * environment. Exactly the production set Next.js loads (issue 471).
+ * environment. Exactly the production set Next.js loads.
  */
 const ENV_FILE_NAMES = [".env", ".env.local", ".env.production", ".env.production.local"];
 
@@ -142,11 +140,11 @@ function repoEnvFileExists() {
  * Load the repo-root `.env` into the run's environment, the way the
  * preflight's remedy and USAGE advertise and the spawned server experiences
  * them. The server loads the .env family itself at startup — but the run's
- * seeding and secret reads happen in THIS process, so without this a
- * preflight-passing .env-only run threw "DATABASE_URL is not set" from the
- * very variable the preflight had just declared satisfied (issue 453 round
- * 4; the db:migrate --env-file-if-exists contract is the precedent, and its
- * tests/scripts/db-migrate-env-file.test.ts the pin shape).
+ * seeding and secret reads happen in THIS process, so without this load a
+ * .env-only run that passes the preflight would still throw "DATABASE_URL is
+ * not set" from the very variable the preflight declared satisfied. The
+ * db:migrate --env-file-if-exists contract is the precedent, and its
+ * tests/scripts/db-migrate-env-file.test.ts is the pin shape.
  *
  * Semantics: `.env` at the repo root only; a missing file is a no-op; an
  * already-exported variable wins over the file value (an empty exported
@@ -170,7 +168,7 @@ export async function loadRepoEnvFile({ repoRoot: root = repoRoot, env = process
     // (not only after whitespace), and keep a `#` inside quotes. Matching
     // them is load-bearing: a DATABASE_URL whose password carries `#` must
     // parse the same for the seeding read as for the server it renders
-    // against (reviewer differential, round-4 polish).
+    // against.
     const quote = value.startsWith('"') || value.startsWith("'") ? value[0] : undefined;
     if (quote !== undefined && value.endsWith(quote) && value.length >= 2) {
       value = value.slice(1, -1);
@@ -194,7 +192,7 @@ export async function loadRepoEnvFile({ repoRoot: root = repoRoot, env = process
  * real repo root, the way the launch tests drive launchChromeWithRetry with
  * a fake spawn. Exported for those tests; the script calls it on the spawn
  * path only — with --base-url the target server's environment is not this
- * process's business (issue 471).
+ * process's business.
  */
 export function missingRequiredEnv(env = process.env, envFileExists = repoEnvFileExists) {
   return REQUIRED_ENV.filter((name) => {
@@ -205,14 +203,13 @@ export function missingRequiredEnv(env = process.env, envFileExists = repoEnvFil
 
 /**
  * The refusal message for a run whose required environment is unsatisfied,
- * composed from the missing names (issue 471). The remedy names the
- * repo-root .env file EXACTLY — the only env file this check's own process
- * loads (loadRepoEnvFile above) — not the wider Next.js family the spawned
- * server reads: a developer following the printed remedy with the variable
- * solely in .env.local would otherwise self-contradict mid-run (round-4
- * polish). Extracted so a test can pin the message's content — both
- * remedies and the variable name — against the same composition the script
- * prints, the way a mutant that drops a remedy cannot slip past the suite.
+ * composed from the missing names. The remedy names the repo-root .env file
+ * EXACTLY — the only env file this check's own process loads (loadRepoEnvFile
+ * above) — not the wider Next.js family the spawned server reads: a developer
+ * following the printed remedy with the variable solely in .env.local would
+ * otherwise self-contradict mid-run. Extracted so a test can pin the message's
+ * content — both remedies and the variable name — against the same composition
+ * the script prints, the way a mutant that drops a remedy cannot slip past the suite.
  */
 export function missingEnvMessage(missing) {
   return (
@@ -223,11 +220,11 @@ export function missingEnvMessage(missing) {
 }
 
 /**
- * The session fixture (issue 453): the reusable pieces a signed-in contract
- * needs. Seeding creates two fixed-ID users; minting produces the session
- * cookie value the server accepts for one of them; delivery is CDP's
- * Network.setCookie in the contract loop below. Later geometry cases inherit
- * the whole mechanism by adding a contract row with `authAs`.
+ * The session fixture: the reusable pieces a signed-in contract needs. Seeding
+ * creates two fixed-ID users; minting produces the session cookie value the
+ * server accepts for one of them; delivery is CDP's Network.setCookie in the
+ * contract loop below. Later geometry cases inherit the whole mechanism by
+ * adding a contract row with `authAs`.
  */
 
 /**
@@ -266,9 +263,8 @@ function derivedKeyThumbprint(cek) {
  * writes the session cookie — derived from the installed
  * `node_modules/@auth/core/jwt.js` and its jose 6.2.11 dependency, not from
  * memory, and pinned by the interop test in
- * tests/scripts/check-page-geometry-session.test.ts. The plan's first-pass
- * sketch differed from the installed code in three ways; the installed code
- * wins everywhere:
+ * tests/scripts/check-page-geometry-session.test.ts. The installed code wins
+ * everywhere, including these three details:
  *
  *   - hkdf info is NOT empty: `Auth.js Generated Encryption Key (<salt>)`,
  *     output 64 bytes for A256CBC-HS512 (jwt.js getDerivedEncryptionKey).
@@ -325,11 +321,11 @@ export function mintSessionCookieValue({ secret, userId, role, now = Date.now() 
  * The AUTH_SECRET the session cookie is minted with — the target server
  * derives its decryption key from the same value, so only an exact match is
  * accepted. Required on the first authed contract only; a run with no authed
- * contracts never asks for it. The refusal names CONTRIBUTING (issue 555):
- * its check list is where the requirement is written down, and a repro that
- * followed that list alone had nothing else to learn the variable from.
- * Exported so a test can pin the message's content — the variable name, the
- * pointer and the emptiness contract — the way missingEnvMessage is pinned.
+ * contracts never asks for it. The refusal names CONTRIBUTING: its check list
+ * is where the requirement is written down, and a contributor following that
+ * list alone has nothing else to learn the variable from. Exported so a test
+ * can pin the message's content — the variable name, the pointer and the
+ * emptiness contract — the way missingEnvMessage is pinned.
  */
 export function fixtureAuthSecret() {
   const secret = process.env.AUTH_SECRET;
@@ -347,12 +343,12 @@ export function fixtureAuthSecret() {
  * Deliver the session cookie on the page's flat DevTools session. The Network
  * domain must be enabled on the session FIRST (main enables it right after
  * Page.enable) — an unenabled domain answers "'Network.setCookie' wasn't
- * found" (a probe-proven -32601, issue 453 review) — and a set that DevTools
- * itself reports as failed must be a hard error, never a silent continue:
- * every authed contract would otherwise read as a session bounce instead of
- * surfacing the delivery refusal. Exported for the session tests, which drive
- * it with a fake DevTools client (the same pattern launchChromeWithRetry and
- * missingRequiredEnv are exported for).
+ * found" (a probe-proven -32601) — and a set that DevTools itself reports as
+ * failed must be a hard error, never a silent continue: every authed contract
+ * would otherwise read as a session bounce instead of surfacing the delivery
+ * refusal. Exported for the session tests, which drive it with a fake DevTools
+ * client (the same pattern launchChromeWithRetry and missingRequiredEnv are
+ * exported for).
  */
 export async function setSessionCookie(client, sessionId, value, baseUrl) {
   const result = await client.send("Network.setCookie", {
@@ -414,7 +410,7 @@ export function authedLandingState(targetUrl, href, staleDocument) {
  * selector alone cannot make the distinction.
  *
  * `authAs` (optional) signs the page in as a fixture user while measuring —
- * "member" or "moderator" (issue 453). The session cookie is set fresh before
+ * "member" or "moderator". The session cookie is set fresh before
  * each authed contract's navigation (overwriting the previous role's cookie),
  * and a navigation that bounces to / , /session?... , or /dashboard (a role
  * bounce) is a ROW-LEVEL render failure of that contract naming the landed
@@ -437,8 +433,8 @@ const PAGE_CONTRACTS = [
       [1366, 625],
       [1280, 700],
       [390, 600],
-      // issue 1067 @320: RED ran with scrollWidth 330px vs 320 (the hero h1's
-      // clamp floor widened the hero). Bottom 571.6px (this box); 650 leaves 78.4px.
+      // @320 guards the hero h1's clamp floor widening the hero (scrollWidth
+      // measured 330px vs 320). Bottom 571.6px (this box); 650 leaves 78.4px.
       [320, 650],
     ],
     primaryAction: ".landing-hero .action-button",
@@ -458,8 +454,8 @@ const PAGE_CONTRACTS = [
    * (src/app/account-data/page.tsx, Controller and contact). The style proof
    * reads the element BASE styles: the global `a { color: inherit }` rule,
    * which an unstyled <a> does not carry — its UA read is the link default.
-   * issue 1067 @320: the long GitHub link texts did not wrap (RED ran with
-   * scrollWidth 421px vs 320).
+   * At 320px the long GitHub link texts must wrap (unwrapped, scrollWidth
+   * measured 421px vs 320).
    */
   {
     page: "/account-data",
@@ -481,7 +477,7 @@ const PAGE_CONTRACTS = [
   },
 
   /*
-   * The signed-in contracts (issue 453). Each row's renderRoot is the
+   * The signed-in contracts. Each row's renderRoot is the
    * `<main id="main-content">` anchor AppShell renders on every authed page
    * (src/components/app-shell.tsx) — present only when the page truly
    * rendered, never on an error page or a bounce. `authAs` signs the run in
@@ -496,17 +492,15 @@ const PAGE_CONTRACTS = [
    * different element type means re-deriving it.
    *
    * Fold heights are measured, not guessed — against BOTH environments that
-   * enforce them. The first pass pinned ~30-40px of headroom over this box's
-   * measurements alone, and CI red-lined /dashboard's two narrow rows: its
-   * text-wrap-sensitive ledger-note link laid out ~42-57px taller on the
-   * GitHub runner (1042.9px bottom at 780 wide vs 985.6px here; 1163.7px vs
-   * 1121.7px at 520) while every other row matched to the decimal. The rule
-   * now: each fold gives ~100px of headroom over the WORSE of the two
-   * environments' bottoms, and a row with under 60px on either gets raised
-   * even when it passes. Per-row comments carry the measured bottoms (this
-   * box's number first, the runner's where the two differ). The rows pin the
-   * fixture's empty-ledger state — what CI's scratch database renders — not
-   * an arbitrary member's data.
+   * enforce them. /dashboard's text-wrap-sensitive ledger-note link lays out
+   * ~42-57px taller on the GitHub runner (1042.9px bottom at 780 wide vs
+   * 985.6px here; 1163.7px vs 1121.7px at 520) while every other row matches
+   * to the decimal. So each fold gives ~100px of headroom over the WORSE of
+   * the two environments' bottoms, and a row with under 60px on either gets
+   * raised even when it passes. Per-row comments carry the measured bottoms
+   * (this box's number first, the runner's where the two differ). The rows pin
+   * the fixture's empty-ledger state — what CI's scratch database renders —
+   * not an arbitrary member's data.
    */
 
   // The ledger-note aside's "Register one repository" link (src/app/dashboard/page.tsx):
@@ -524,12 +518,10 @@ const PAGE_CONTRACTS = [
       // Measured bottom 775.6px on both environments; 810 left ~34px, so
       // 880 pins ~104px.
       [1280, 880],
-      // THIS is the row class that taught the two-environment rule: the
-      // ledger-note link text-wrapped taller on the GitHub runner —
-      // bottom 985.6px here vs 1042.9px there (the 780px breakpoint stacks
-      // the dashboard grid, and the runner's fonts wrapped the link onto an
-      // extra line). 1020 (a ~34px pin over the local number) failed CI at
-      // 1042.9. 1140 gives ~97px over the WORSE measurement.
+      // The ledger-note link text-wraps taller on the GitHub runner: bottom
+      // 985.6px here vs 1042.9px there (the 780px breakpoint stacks the
+      // dashboard grid, and the runner's fonts wrap the link onto an extra
+      // line). 1140 gives ~97px over the WORSE measurement.
       [780, 1140],
       // Same wrap spread at this width: bottom 1121.7px here vs 1163.7px on
       // the runner (the 520px breakpoint's narrower shell and single-column
@@ -563,11 +555,10 @@ const PAGE_CONTRACTS = [
       // fields stack at the 780px breakpoint); 725 left ~34px, so 795 pins
       // ~104px.
       [780, 795],
-      // Measured bottom 755.6px on this tree (the 719.6px recorded earlier
-      // predates it); 820 leaves ~64px, above the raise threshold.
+      // Measured bottom 755.6px on this tree; 820 leaves ~64px, above the raise threshold.
       [520, 820],
-      // issue 1067 @320 with the board fixture's card seeded: RED ran with
-      // scrollWidth 3330px vs 320 (the 256-'a' title link did not wrap).
+      // At 320px with the board fixture's card seeded, the 256-'a' title link
+      // must wrap, not overflow the page horizontally.
       // Measured bottom 789.2px (this box); 890 pins ~101px.
       [320, 890],
     ],
@@ -795,10 +786,9 @@ function stderrTail(text) {
 
 /**
  * Launch Chrome and wait for its DevTools endpoint, retrying the whole launch
- * while attempts remain (issue 447): a slow Chrome start on a loaded runner
- * used to get one flat 20s budget and fail the required check, so the budget
- * is now per attempt and each failed attempt is retried with a fresh one. A
- * failed attempt's child is stopped before relaunching so nothing
+ * while attempts remain: the budget is per attempt, and each failed attempt is
+ * retried with a fresh one, so a slow Chrome start on a loaded runner gets
+ * another try. A failed attempt's child is stopped before relaunching so nothing
  * leaks. Every rejection carries the captured stderr tail, so a genuine
  * launch failure is diagnosable from the CI log alone, and the three failure
  * classes — an early exit, a spawn failure, an alive-but-silent start — are
@@ -874,14 +864,13 @@ async function readFileHead(path) {
  * to honor a session cookie for a host it does not trust, and under a
  * production server (`next start`) it grants that trust only from the
  * environment (installed @auth/core lib/utils/env.js: trustHost comes from
- * AUTH_URL or AUTH_TRUST_HOST). Measured live (issue 453): without it, every
- * authed contract's request is answered UntrustedHost and bounces to /,
- * reading exactly like a rejected session. The gate's own server is a
- * loopback measurement target, so it spawns with AUTH_TRUST_HOST=true unless
- * the caller's environment already carries an explicit trust decision — the
- * helper never downgrades one. A --base-url target's environment is not this
- * process's business; its operator needs the same setting, and the
- * auth-bounce failure message names it.
+ * AUTH_URL or AUTH_TRUST_HOST). Without it, every authed contract's request
+ * is answered UntrustedHost and bounces to /, reading exactly like a rejected
+ * session. The gate's own server is a loopback measurement target, so it
+ * spawns with AUTH_TRUST_HOST=true unless the caller's environment already
+ * carries an explicit trust decision — the helper never downgrades one. A
+ * --base-url target's environment is not this process's business; its operator
+ * needs the same setting, and the auth-bounce failure message names it.
  */
 export function spawnedServerEnv(env = process.env) {
   const existing = env.AUTH_TRUST_HOST;
@@ -1126,10 +1115,10 @@ const viewportLabel = ([width, height]) => `${width}x${height}`;
  * This run's HTTP status for a page, for render-failure diagnosis. Fetches
  * with redirect:"manual" so a bounced contract reports its real 307 — the
  * default follow would land the status on the redirect target (a role
- * bounce read "HTTP 200", naming the /dashboard page the bounce PRODUCED
- * instead of the /moderation response that caused it). The other
- * render-failure paths read the same as before: a dead server still answers
- * "no response", and error pages do not redirect.
+ * bounce would read "HTTP 200", naming the /dashboard page the bounce
+ * PRODUCED instead of the /moderation response that caused it). The other
+ * render-failure paths are unaffected by the manual redirect: a dead server
+ * answers "no response", and error pages do not redirect.
  */
 async function probeStatus(page) {
   try {
@@ -1144,17 +1133,17 @@ async function probeStatus(page) {
 async function main() {
   // The gate process itself needs DATABASE_URL (seeding) and AUTH_SECRET
   // (the session fixture) from the same .env the preflight advertises — the
-  // spawned server loads it for itself, but these reads happen in-process
-  // (issue 453 round 4). Real environment wins, matching migrate's
-  // --env-file-if-exists behavior; .env at the repo root only.
+  // spawned server loads it for itself, but these reads happen in-process.
+  // Real environment wins, matching migrate's --env-file-if-exists behavior;
+  // .env at the repo root only.
   await loadRepoEnvFile();
 
   const spawned = !process.argv.includes("--base-url");
 
-  // The environment preflight (issue 471) runs only when this run spawns its
-  // own server, and before mkdtemp, startServer and launchChromeWithRetry, so
-  // a refusal leaves nothing spawned and nothing listening on the port — the
-  // same convention as the chrome-not-found and .next-not-found refusals.
+  // The environment preflight runs only when this run spawns its own server,
+  // and before mkdtemp, startServer and launchChromeWithRetry, so a refusal
+  // leaves nothing spawned and nothing listening on the port — the same
+  // convention as the chrome-not-found and .next-not-found refusals.
   if (spawned) {
     const missing = missingRequiredEnv();
     if (missing.length > 0) {
@@ -1172,8 +1161,8 @@ async function main() {
     const workDir = owner.createWorkDir();
     if (spawned) await startServer(workDir, owner);
 
-    // The session fixture (issue 453) seeds before any contract runs — in
-    // --base-url mode too: the database is whatever DATABASE_URL names.
+    // The session fixture seeds before any contract runs — in --base-url mode
+    // too: the database is whatever DATABASE_URL names.
     const databaseUrl = readEnv("DATABASE_URL");
     if (databaseUrl === undefined || databaseUrl === "") {
       throw new Error(
@@ -1183,8 +1172,8 @@ async function main() {
       );
     }
     const fixtureUsers = await seedFixtureUsers({ databaseUrl });
-    // The board fixture (issue 1067): the one /issues card the new 320px
-    // contract rows measure their overflow against.
+    // The board fixture: the one /issues card the 320px contract rows measure
+    // their overflow against.
     await seedBoardFixtureCard({ databaseUrl });
     // The run's first write, made visible at the moment it happens — host
     // and database name only, never the credentials in the URL.
@@ -1197,9 +1186,9 @@ async function main() {
     }
     console.log(`seeded fixture users into ${seededInto}`);
 
-    // The launch retries itself (issue 447): a failed attempt is killed and
-    // relaunched inside launchChromeWithRetry, so reaching this line means
-    // the child is alive and its DevTools endpoint is known.
+    // The launch retries itself: a failed attempt is killed and relaunched
+    // inside launchChromeWithRetry, so reaching this line means the child is
+    // alive and its DevTools endpoint is known.
     const { child, browserUrl } = await launchChromeWithRetry({
       command: chrome,
       // Chrome's TMPDIR scratch dies with workDir on SIGKILL; short enough for its socket.
@@ -1223,7 +1212,7 @@ async function main() {
       const { targetId } = await client.send("Target.createTarget", { url: "about:blank" });
       const { sessionId } = await client.send("Target.attachToTarget", { targetId, flatten: true });
       await client.send("Page.enable", {}, sessionId);
-      // Network domain commands (the session-cookie set, issue 453) answer
+      // Network domain commands (the session-cookie set) answer
       // "'Network.setCookie' wasn't found" until the domain is enabled on the
       // flat session; enabling it on a signed-out-only run is harmless.
       await client.send("Network.enable", {}, sessionId);
@@ -1231,9 +1220,9 @@ async function main() {
       const rows = [];
       pageLoop:
       for (const contract of PAGE_CONTRACTS) {
-        // An authed contract re-sets its session cookie before EVERY
-        // navigation: the member/moderator switch overwrites the same cookie,
-        // and a re-set is idempotent and cheap (issue 453).
+        // An authed contract re-sets its session cookie before EVERY navigation:
+        // the member/moderator switch overwrites the same cookie, and a re-set is
+        // idempotent and cheap.
         if (contract.authAs !== undefined) {
           const role = AUTH_AS_ROLES[contract.authAs];
           if (role === undefined) {

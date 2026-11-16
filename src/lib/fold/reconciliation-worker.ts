@@ -5,7 +5,7 @@ import type { ClaimedReconciliationJob, ReconciliationJobReason } from "@/lib/fo
 import { FailureLogger } from "@/lib/worker/failure-logger";
 
 /**
- * The lease-heartbeat site's failure key (issue 661). One key for the site,
+ * The lease-heartbeat site's failure key. One key for the site,
  * not one per job: an outage fails every in-flight fold's heartbeat together,
  * so their failures are one outage's count, and the site as a whole is what
  * stays visible through it.
@@ -47,7 +47,7 @@ export type ReconciliationWorkerDependencies = {
    */
   onFailure?(repositoryId: string, error: unknown): void | PromiseLike<unknown>;
   /**
-   * Bounds the lease-heartbeat site's failure logging (issue 661): the first
+   * Bounds the lease-heartbeat site's failure logging: the first
    * heartbeat failure of an outage prints in full, repeats inside the logger's
    * quiet window are counted silently, and a renewal that succeeds after
    * failures prints one recovery line. Omitted, each job bounds its own
@@ -94,18 +94,18 @@ export const RECONCILIATION_LEASE_RENEWAL_INTERVAL_MS = 5_000;
 /**
  * Heartbeats prove liveness, not progress: a fold awaiting hung I/O can renew
  * forever. Ten minutes is roughly eleven times the observed fifty-two-second
- * fold, allowing slow folds while bounding renewal at a third of the old
- * thirty-minute lease. SQL admits renewal only before the absolute deadline,
- * including writes queued in the connection pool. The last lease can therefore
- * expire at most one twenty-second lease window after the deadline; the deadline
- * is an admission limit, not the instant the lease ends.
+ * fold, allowing slow folds while bounding renewal. SQL admits renewal only
+ * before the absolute deadline, including writes queued in the connection pool.
+ * The last lease can therefore expire at most one twenty-second lease window
+ * after the deadline; the deadline is an admission limit, not the instant the
+ * lease ends.
  *
  * This surrenders the job; it does not unwedge the fold or rescue its repository.
  * If its lock session survives, a hung fold still holds the advisory lock.
  * An external reclaimer hits the sixty-second
  * lock deadline and enters retry backoff, eventually reaching FAILED after
- * enough attempts, with a visible last_failure_at. That is the same end state
- * as under the old lease, reached sooner instead of renewing RUNNING forever.
+ * enough attempts, with a visible last_failure_at, instead of renewing RUNNING
+ * forever.
  */
 export const RECONCILIATION_LEASE_MAX_RENEWAL_MS = 10 * 60_000;
 
@@ -136,12 +136,12 @@ export const RECONCILIATION_WORKER_POLL_INTERVAL_MS = 5_000;
  * folds, and while those folds succeed their requests total at most sixteen.
  * That is not a bound on all in-flight HTTP requests: a failed concurrent map
  * returns before its other requests settle, so requests from a failed fold
- * outlive it while its drain starts more work (issue 209). This constant does
+ * outlive it while its drain starts more work. This constant does
  * not bound those requests. Where the client's request deadline applies
  * (ten seconds by default), orphan accumulation scales roughly with the fold
  * failure rate times that deadline, rather than growing forever. This is not
- * a bound enforced here: the REST diff body can outlive its header timeout
- * (issue 203), and review pagination uses separately timed GraphQL requests.
+ * a bound enforced here: the REST diff body can outlive its header timeout,
+ * and review pagination uses separately timed GraphQL requests.
  * Raising the drain bound still
  * spends more GitHub budget as well as more coordination connections.
  *
@@ -207,10 +207,9 @@ export type ReconciliationJobOutcome =
  * and scripts/reconcile.ts folds directly without claiming a queue lease.
  *
  * A genuinely hung fold keeps its entry and defers that repository as long as
- * it hangs: exclusion costs recovery for that one repository. Before this
- * branch, a hung fold blocked the whole worker instead, so this is not a
- * regression against main. The entry's lifetime includes cleanup's lifetime,
- * so a never-settling injected renewal setup or cancellation retains it too.
+ * it hangs: exclusion costs recovery for that one repository. The entry's
+ * lifetime includes cleanup's lifetime, so a never-settling injected renewal
+ * setup or cancellation retains it too.
  *
  * A duplicate claim consumes an attempt; its extra deferral UPDATE refunds
  * that attempt only when the write succeeds. Repeatedly failing deferral
@@ -328,7 +327,7 @@ function startLeaseRenewal(
   const renewalDeadline = new Date(now().getTime() + RECONCILIATION_LEASE_MAX_RENEWAL_MS);
   // Omitted, this job bounds its own heartbeat with a fresh logger; the
   // server's wiring passes one logger across every job, which is what bounds
-  // the site as a whole (issue 661).
+  // the site as a whole.
   const failureLogger = dependencies.leaseHeartbeatFailureLogger ?? new FailureLogger();
   let stopped = false;
   let renewing = false;
@@ -371,7 +370,7 @@ function startLeaseRenewal(
         return;
       }
       // A renewal that answers is the heartbeat's positive signal: after
-      // failures it ends the outage with the recovery line (issue 661).
+      // failures it ends the outage with the recovery line.
       failureLogger.success(LEASE_HEARTBEAT_FAILURE_KEY);
     } catch (error) {
       reportHeartbeatFailure(error);
@@ -464,7 +463,7 @@ async function deferralTime(
  *
  * Each tick fills the slots that are free when it starts. Only ticks at
  * capacity are dropped rather than queued: the durable jobs remain for a later
- * tick after a slot is released. One long fold no longer blocks other
+ * tick after a slot is released. A long fold does not block other
  * repositories' pickup, but a worker at capacity still does.
  *
  * Snapshot the available count once: a drain member can throw synchronously,
@@ -472,11 +471,11 @@ async function deferralTime(
  * inFlight to reach capacity would then spin forever. A failed store instead
  * costs up to four attempts per poll at the default, and retries stay poll-paced.
  *
- * An idle poll now makes up to capacity indexed claim queries against the
- * table's one row per repository: forty-eight a minute at the default, rather
- * than twelve. That small query cost buys prompt use of free slots. Work starts
- * in a burst; peak fold concurrency and coordination connections stay at four
- * at the default, but claims and lease renewals become more synchronized.
+ * An idle poll makes up to capacity indexed claim queries against the
+ * table's one row per repository: forty-eight a minute at the default. That
+ * small query cost buys prompt use of free slots. Work starts in a burst; peak
+ * fold concurrency and coordination connections stay at four at the default,
+ * but claims and lease renewals become more synchronized.
  *
  * A drain that rejects — the store itself being briefly unreachable is the
  * ordinary case — is reported and swallowed. Node throws on an unhandled

@@ -16,7 +16,7 @@ export type RepositoryFormValues = {
 
 type Feedback = { kind: "error" | "success" | "warning"; message: string; code?: string } | null;
 
-/** The route's refusal for a stored authorization GitHub reports as unable to administer webhooks (issue 599). */
+/** The route's refusal for a stored authorization GitHub reports as unable to administer webhooks. */
 const WEBHOOK_SCOPE_REQUIRED_CODE = "GITHUB_WEBHOOK_SCOPE_REQUIRED";
 
 type OpeningLabelRow = OpeningDifficultyLabel & { rowId: string };
@@ -52,7 +52,7 @@ type RepositoryFormProps = RegistrationAppDisplayProps & {
   canAdministerGitHubWebhooks?: boolean;
 };
 
-// Labels start empty: issue 258 removed label creation from registration, so a
+// Labels start empty: registration creates no labels, so a
 // catalog may only pick labels the repository already has. The selectboxes are
 // fed from the labels route once the repository reference is complete.
 const defaultValues: RepositoryFormValues = {

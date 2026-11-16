@@ -125,8 +125,8 @@ describe("an sql.array parameter in a new client's first query", () => {
 
   // A reserve is not executed as the connection's opening query: the connection is handed to it
   // once the type fetch completes, so its first query is built later than the cases above. This
-  // case already passed before the repair; it pins that moving where the types are applied did
-  // not break the path a reserve takes through the same startup.
+  // case also passes without the repair; it pins that where the types are applied does not break
+  // the path a reserve takes through the same startup.
   it("binds as an array in the first query sent on a freshly reserved connection", async () => {
     const rows = await withColdClient(1, async (sql) => {
       const reserved = await sql.reserve();

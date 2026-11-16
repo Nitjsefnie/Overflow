@@ -21,16 +21,16 @@ import {
  * `ReadWriteDirectories=` (systemd's still-live alias for `ReadWritePaths=`) or
  * `BindReadOnlyPaths=` cannot be added without a human putting them here first.
  *
- * Closed on names is only half of it, and the missing half was a hole: every key
- * here also carries a pinned value, checked by `pins a value for every directive
- * on the reviewed set`. `StandardOutput=` is why. It was admitted by name with
- * its value left open, and systemd opens a `file:`, `append:` or `truncate:`
- * target as PID 1 — as root, before the mount namespace and before the drop to
- * `User=` — so `StandardOutput=truncate:/etc/cron.d/overflow` truncates a
- * root-owned file outside the sandbox on every start, and `append:` writes
- * process-controlled bytes into one. Measured on systemd 257.13: a transient
- * unit with `User=overflow` and `ProtectSystem=strict` created a root-owned file
- * in a directory that is read-only inside its own namespace.
+ * Closed on names is only half of it: every key here also carries a pinned
+ * value, checked by `pins a value for every directive on the reviewed set`.
+ * `StandardOutput=` is why. Admitted by name with its value open, it lets
+ * systemd open a `file:`, `append:` or `truncate:` target as PID 1 — as root,
+ * before the mount namespace and before the drop to `User=` — so
+ * `StandardOutput=truncate:/etc/cron.d/overflow` truncates a root-owned file
+ * outside the sandbox on every start, and `append:` writes process-controlled
+ * bytes into one. Measured on systemd 257.13: a transient unit with
+ * `User=overflow` and `ProtectSystem=strict` created a root-owned file in a
+ * directory that is read-only inside its own namespace.
  */
 const REVIEWED_SERVICE_KEYS: ReadonlySet<string> = new Set([
   "AmbientCapabilities",
@@ -142,7 +142,7 @@ const requiredServiceSwitches: ReadonlyArray<string> = [
  * `[Service]` is.
  *
  * `[Service]` is not the only section that can weaken the sandbox, and leaving
- * this one open was a hole: `JoinsNamespaceOf=postgresql.service` in `[Unit]`
+ * this one open would be a hole: `JoinsNamespaceOf=postgresql.service` in `[Unit]`
  * puts the service inside another unit's namespaces, so `PrivateTmp=yes` stays
  * set and stops being private. Measured on systemd 257.13 with three transient
  * units: one wrote a file into its own private `/tmp`, a second carrying
@@ -548,9 +548,9 @@ describe("Overflow off-host backup units", () => {
   });
 
   it("loads the osc token from its canonical file as a credential", () => {
-    // The copy in /etc/overflow/backup.env is what a rotation silently broke:
-    // the unit reads the token from the canonical file at every start, so a
-    // rotation needs no Overflow-side edit. PID 1 opens the file before the
+    // The unit reads the token from the canonical file at every start, so a
+    // rotation needs no Overflow-side edit; a copy kept in
+    // /etc/overflow/backup.env would go stale on rotation. PID 1 opens the file before the
     // sandbox is assembled and hands the content over through
     // CREDENTIALS_DIRECTORY, which the script bridges to DISCORD_TOKEN.
     const credentials = entries().filter((entry) => entry.key === "LoadCredential");

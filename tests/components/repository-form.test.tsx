@@ -348,7 +348,7 @@ describe("repository registration form", () => {
     expect((await screen.findByRole("alert")).textContent).toBe(message);
   });
 
-  // Issue 599: the page's gate reads a JWT hint, so a session whose grant was
+  // The page's gate reads a JWT hint, so a session whose grant was
   // since revoked or narrowed still reaches the form; the route's authoritative
   // scope refusal is what tells it. The refusal must then carry a working
   // remedy, or the sponsor is left reloading a page that keeps showing the form.

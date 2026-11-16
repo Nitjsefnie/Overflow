@@ -14,7 +14,7 @@ export type GitLabWebhookStep = "create the project webhook" | "delete the proje
  * union is the route's contract surface; the messages carry the forge.
  *
  * - 401: the instance rejected the linked identity's token itself — the same
- *   shape issue 93 pins for GitHub. Retrying cannot fix the token.
+ *   shape the GitHub flow pins. Retrying cannot fix the token.
  * - 403: the token answers but may not manage hooks here.
  * - 404: the instance hides the project or the hook (or both are gone).
  * - 429: the instance is rate-limiting; the one transient refusal.

@@ -39,7 +39,7 @@ describe("docker-compose.yml", () => {
 
   it("starts the postgres service from POSTGRES_IMAGE with its reviewed shape", () => {
     const postgres = compose.services.postgres;
-    // The same-value check (issue 1335): the helper reads its image from this
+    // The same-value check: the helper reads its image from this
     // file, so compose and the DB suites start one written pin. It catches
     // every stale divergence; a re-literalization of POSTGRES_IMAGE to the
     // compose image's CURRENT value is the one shape it cannot see, and the
@@ -101,7 +101,7 @@ describe("docker-compose.yml", () => {
   });
 
   it("holds no postgres digest literal beside the one compose writes", () => {
-    // Issue 1335: the image is written once, in docker-compose.yml. The
+    // The image is written once, in docker-compose.yml. The
     // equality above cannot see a re-literalization of POSTGRES_IMAGE to the
     // compose image's CURRENT value — same value, same green — so this scan
     // is what holds that shape: both files stay literal-free, and a future

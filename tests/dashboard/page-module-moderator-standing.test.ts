@@ -13,7 +13,7 @@ import type { SqlClient } from "@/lib/db/types";
  * The redirect guard (tests/dashboard/page-module-redirect-guard.test.ts) is a
  * source scan, and DashboardContent renders are handed their props from the
  * outside, so without this a mutant hardwiring `false` into the page's
- * computation survives (review round, mutant E2).
+ * computation survives.
  *
  * The mocks stop at the boundaries the page cannot answer for in a unit run —
  * the session gate and the ledger read — plus the SQL client seam, which the

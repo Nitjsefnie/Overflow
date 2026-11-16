@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The orphan sweep (issue 885), the ledger relay's THIRD duty, called from
+// The orphan sweep, the ledger relay's THIRD duty, called from
 // scripts/ledger-relay.ts in a finally after every mirror path, including
 // refusals. The sweep also carries the rerun-heal for displaced starts.
 //

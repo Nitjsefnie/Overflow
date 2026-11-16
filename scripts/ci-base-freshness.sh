@@ -42,8 +42,8 @@ fi
 # with the pull request. Pull both file lists, refuse on anything that makes
 # either list unrepresentative, then intersect. A rename (or copy) changes
 # BOTH paths — the API reports the old one in previous_filename — so each
-# projection counts the previous path too (issue 685): either side renaming a
-# file the other just edited is an overlap, not a disjoint advance.
+# projection counts the previous path too: either side renaming a file the
+# other just edited is an overlap, not a disjoint advance.
 if [ -z "${OVERFLOW_PR_NUMBER:-}" ]; then
   fail_ "PR_NUMBER is not set — the pull request's changed-file list cannot be fetched, so the advance cannot be judged. Refusing."
 fi
@@ -74,7 +74,7 @@ fi
 
 # The truncation bound counts API ENTRIES, not projected lines: a renamed or
 # copied entry projects to two lines, so a truncated compare inflated past 300
-# lines would slip a -eq 300 line-count check (issue 685). `.files | length`
+# lines would slip a -eq 300 line-count check. `.files | length`
 # is the entry count the API truncates at exactly 300.
 advance_entry_count=$(gh api "repos/$OVERFLOW_REPO_SLUG/compare/$OVERFLOW_BASE_SHA...$current" --jq '.files | length') || {
   fail_ "could not count the advance's files (gh api failed) — refusing to certify on a failed API call."

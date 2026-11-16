@@ -1,5 +1,5 @@
 /**
- * Issue 878: a GitHub collection walk must terminate.
+ * A GitHub collection walk must terminate.
  *
  * A walk ends only when the instance stops advertising a continuation — here a
  * `next` Link relation. Nothing else about that header can stop it: a walk that
@@ -13,18 +13,17 @@
  * ceiling, so a read that was cut off cannot be passed off as a complete one —
  * a caller handed a truncated catalog would go on to refuse a scheme that does
  * exist. How far that message travels belongs to the callers, not to this
- * module, and the two repository routes that bound a GitHub walk now carry it
- * that far (issue 883): `githubSetupError` keeps the error it was handed as the
- * `cause` of the `RepositoryRegistrationError` it returns, the registration
- * route's error response logs that cause, and the labels route records the
- * error the walk throws. So the walk is bounded, the failure is typed, and a
- * trip on either route is visible to an operator. The GitLab sibling's label
- * read still lands on a generic 502 with nothing recorded, so the two providers
- * are not yet at parity — that is the GitLab half of the same gap, and the
- * reason this change is GitHub-only. Parity is not blanket even there: a throw
- * on the reconciliation path is caught by the worker and logged with the error
- * object it was handed, so this bound is not uniformly silent across the two
- * providers' call sites.
+ * module. The two repository routes that bound a GitHub walk carry it that far:
+ * `githubSetupError` keeps the error it was handed as the `cause` of the
+ * `RepositoryRegistrationError` it returns, the registration route's error
+ * response logs that cause, and the labels route records the error the walk
+ * throws. So the walk is bounded, the failure is typed, and a trip on either
+ * route is visible to an operator. The GitLab sibling's label read still lands
+ * on a generic 502 with nothing recorded, so the two providers are not yet at
+ * parity; the bound is GitHub-only for that reason. Parity is not blanket even
+ * there: a throw on the reconciliation path is caught by the worker and logged
+ * with the error object it was handed, so this bound is not uniformly silent
+ * across the two providers' call sites.
  *
  * Sizing, and what each number costs. Both are POLICY values, not measurements
  * of any repository, and the arithmetic between them is load-bearing:
@@ -60,16 +59,11 @@
  *
  * The row ceiling is a MEMORY ceiling, and the honest reading of it is that a
  * legitimate maximum-size catalog is read into memory in full: a walk that
- * gets near it holds every row it has accumulated, up to 10 000 label rows.
- * That is MORE than the walk this bound replaced held, not the same: that walk
- * projected each page into a `Set<string>` as it went and kept only the
- * distinct names, never a parsed row, whereas this one accumulates the rows
- * and projects them once the walk ends. So a walk at the ceiling holds 10 000
- * parsed rows alongside the Set it projects from them. The increase is the
- * price of a bound at all — it is what buys a walk that terminates instead of
- * one that does not — and unlike the walk it replaced it is finite. Anything
- * smaller would make the ceiling a likelier cause of a failed registration
- * than a cause of protection from one.
+ * gets near it holds every row it has accumulated, up to 10 000 label rows,
+ * alongside the Set it projects from them, since the rows are projected once
+ * the walk ends. That cost is the price of a bound at all: it is what makes the
+ * walk terminate. Anything smaller would make the ceiling a likelier cause of a
+ * failed registration than a cause of protection from one.
  */
 export const MAX_WALK_ITEMS = 10_000;
 export const MAX_WALK_PAGES = 200;
@@ -85,10 +79,9 @@ export class CollectionWalkBound<T> {
    *
    * A body that is not an array gets past both checks: `NaN > MAX_WALK_ITEMS`
    * is false, and the element-wise loop then raises an incidental `TypeError`
-   * rather than the typed error. The walk this replaced raised that same
-   * `TypeError`, so it is not a regression, but it is the one hostile response
-   * that does not get the typed error. Rejecting it belongs to the response
-   * parser, which is not this module's business.
+   * rather than the typed error. That makes it the one hostile response that
+   * does not get the typed error. Rejecting it belongs to the response parser,
+   * which is not this module's business.
    */
   public add(page: T[]): void {
     this.pages += 1;

@@ -219,7 +219,7 @@ export async function derivePatchOverride(): Promise<DerivedAnswer> {
 }
 
 /**
- * The moderation and override routes' success answers (issue 912, task 3), keyed
+ * The moderation and override routes' success answers, keyed
  * "METHOD /path" in the spelling API.md documents dynamic segments with
  * (<id> for [id]). The derivation is split off
  * scripts/http-surface-derive.ts because that module's tooling ceiling

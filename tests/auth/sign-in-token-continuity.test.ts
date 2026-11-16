@@ -177,7 +177,7 @@ function perTokenProbe(table: Record<string, () => Response>): typeof fetch {
 }
 
 /**
- * The incident's healthiest shape: the stored token is hook-capable, the new
+ * The healthiest shape: the stored token is hook-capable, the new
  * contributor sign-in grants nothing. Continuity keeps the stored token only
  * through the stored probe answering with its administration scopes.
  */

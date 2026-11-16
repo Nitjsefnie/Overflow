@@ -103,8 +103,8 @@ describe("account re-registration after deletion", () => {
     const row = await identityRow(seeded.id);
     expect(row.deleted_at).toBeNull();
     expect(row.github_login).toBe("octocat");
-    // The avatar is not restored — sign-in no longer collects it (issue 1075) —
-    // while the login and the token are: the on-conflict arm touches the
+    // The avatar is not restored — sign-in does not collect it — while the
+    // login and the token are: the on-conflict arm touches the
     // identity columns sign-in still owns, and the scrubbed-check holds with
     // the avatar nulled and the row live again.
     expect(row.avatar_url).toBeNull();
@@ -152,8 +152,8 @@ describe("account re-registration after deletion", () => {
     const outcome = await deleteAccount(sql, 9_900_002, { confirm: true });
     expect(outcome.kind).toBe("DELETED");
 
-    // The pre-fix shape: rows deleted before the reset shipped kept their
-    // MODERATOR role. Planted directly, so the case holds for them too.
+    // Rows deleted before account deletion reset the role still carry
+    // MODERATOR. Planted directly, so the case holds for them too.
     await sql`update users set role = 'MODERATOR' where id = ${seeded.id}`;
 
     const restored = await upsertGitHubAccount({

@@ -684,10 +684,10 @@ function mintFailureMessage(warning: string): string {
 /**
  * The entry: mint the App installation token when all three LEDGER_* variables
  * are present — a mint failure with credentials present fails the check closed
- * (issue 1026: a broken App key must stay distinguishable from the issue-1024
- * permission gap, so there is no GH_TOKEN fallback on the enforced legs) —
- * then run the whole check with the minted token, and — on a neutral outcome —
- * post the App-owned neutral check run best-effort. Never throws.
+ * (a broken App key must stay distinguishable from a permission gap, so there is
+ * no GH_TOKEN fallback on the enforced legs) — then run the whole check with the
+ * minted token, and — on a neutral outcome — post the App-owned neutral check run
+ * best-effort. Never throws.
  */
 export async function runScript(
   env: Record<string, string | undefined>,

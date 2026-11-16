@@ -22,7 +22,7 @@ import type { SponsorGatewayInput } from "@/lib/fold/repository-size";
 import { readContributorMailConfig } from "@/lib/accounts/work-mail-config";
 
 /**
- * The drain site's failure key (issue 661): the whole-drain hook the schedule
+ * The drain site's failure key: the whole-drain hook the schedule
  * reports through when the store itself is unreachable. Distinct from the
  * lease-heartbeat site's key, so one outage does not suppress the other's
  * first failure.
@@ -30,12 +30,10 @@ import { readContributorMailConfig } from "@/lib/accounts/work-mail-config";
 export const RECONCILIATION_DRAIN_FAILURE_KEY = "reconciliation-drain";
 
 /**
- * Everything register() does on the Node.js runtime, split out of
- * src/instrumentation.ts so that module can hold the literal
- * `process.env.NEXT_RUNTIME` gate the bundler folds per runtime. Nothing here,
- * including the Node-only dynamic imports below, reaches the Edge
- * Instrumentation bundle; on the Node.js server this is wired and gated exactly
- * as it was before the split.
+ * Everything register() does on the Node.js runtime lives here, so that
+ * src/instrumentation.ts can hold the literal `process.env.NEXT_RUNTIME` gate
+ * the bundler folds per runtime. Nothing here, including the Node-only dynamic
+ * imports below, reaches the Edge Instrumentation bundle.
  */
 export async function registerNodejs(): Promise<void> {
   installJournalLevels();
@@ -83,7 +81,7 @@ export async function registerNodejs(): Promise<void> {
     new PostgresForgeIdentityStore(getSql()).getForgeToken(userId, instanceUrl);
   const markCredentialRejected = (userId: string, identityId: string) =>
     new PostgresForgeIdentityStore(getSql()).markTokenRejected(userId, identityId);
-  // One logger for the worker's two bounded failure sites (issue 661): the
+  // One logger for the worker's two bounded failure sites: the
   // drain's own key below, and the lease-heartbeat site's key inside the
   // worker. Shared so both sites' quiet windows run on one clock, separate
   // keys so neither site's outage suppresses the other's first failure.
@@ -118,20 +116,20 @@ export async function registerNodejs(): Promise<void> {
           // a repository that keeps failing to fold. The error can carry
           // member-chosen GitLab text and the console sink renders an error
           // object through its stack — message raw — so it is encoded into one
-          // bounded single-line token (issue 1042).
+          // bounded single-line token.
           console.error(`Reconciliation failed for repository ${repositoryId}`, errorLogToken(error));
         },
       });
       // A drain that resolves is the drain site's positive signal: after a
-      // failed drain it ends the outage with the recovery line (issue 661).
+      // failed drain it ends the outage with the recovery line.
       failureLogger.success(RECONCILIATION_DRAIN_FAILURE_KEY);
       drainSummaryLogger.record(outcomes);
       return outcomes;
     },
     onFailure: (error) => {
       // First failure of an outage passes through in full; the bound lives in
-      // the logger (issue 661). The message passes through with it, so the one
-      // allowed line is exactly the line the unbounded site printed.
+      // the logger. The message passes through with it, so the one allowed
+      // line is exactly the line an unbounded log would print.
       failureLogger.failure(
         RECONCILIATION_DRAIN_FAILURE_KEY,
         "Reconciliation worker could not drain the job queue",

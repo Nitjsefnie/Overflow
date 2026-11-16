@@ -53,24 +53,24 @@ export type ApiTokenRouteDependencies = {
   getSession: () => Promise<ApiTokenRouteSession | null>;
   /**
    * The account's role read live at request time. A session JWT outlives the
-   * account it was issued for (issue 733), so minting re-reads the row rather
-   * than trusting the session: a null here is a deleted (or missing) account.
+   * account it was issued for, so minting re-reads the row rather than trusting
+   * the session: a null here is a deleted (or missing) account.
    */
   getCurrentRole: (userId: string) => Promise<UserRole | null>;
   createTokenStore: () => Promise<ApiTokenIssuer>;
   /** The current instant in epoch milliseconds; `Date.now` unless a test pins it. */
   now?: () => number;
   /**
-   * The keyed expensive-route bound (issue 1054), checked after every
-   * authorization refusal and before a token is minted. The production wiring
-   * passes this file's module-scope gate; a handler built without one — a
-   * test factory call — stays unbounded.
+   * The keyed expensive-route bound, checked after every authorization refusal
+   * and before a token is minted. The production wiring passes this file's
+   * module-scope gate; a handler built without one — a test factory call —
+   * stays unbounded.
    */
   rateGate?: RouteRateGate;
 };
 
 // One keyed limiter per route file, born at the wall clock: its buckets are
-// keyed by the acting credential identity and never evict (issue 1054).
+// keyed by the acting credential identity and never evict.
 const apiTokenRateLimiter = createRateLimiter({ nowMs: () => Date.now() });
 const apiTokenRateGate = createRouteRateGate({
   className: "tokens",

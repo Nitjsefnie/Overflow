@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Coverage floor ratchet (issue 592): fails when line coverage drops below
+// Coverage floor ratchet: fails when line coverage drops below
 // the floor recorded in scripts/coverage.json.
 //
 //   node scripts/check-coverage-floor.ts [--summary <path>]

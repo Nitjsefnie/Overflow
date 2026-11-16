@@ -13,8 +13,8 @@ import {
  * bearer credential is attached deliberately and never rides along on a
  * cross-site request, so its origin is not consulted — but both paths must be
  * JSON, and both are refused before the token is hashed, the session is read,
- * or the body is parsed. This is the repositories route's established guard,
- * lifted so every credential-widening route shares one spelling of it.
+ * or the body is parsed. Every credential-widening route shares this one
+ * spelling of the guard.
  */
 
 /**

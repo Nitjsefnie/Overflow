@@ -5,7 +5,7 @@
 // triggering run's fields explicitly through env (never an event payload), so
 // parsing is validation. An absent GITHUB_WORKFLOW_RUN_ID means a
 // workflow_dispatch recovery: LEDGER_DISPATCH_RUN_ID names the run to re-read
-// from the API. With neither, LEDGER_SWEEP_ONLY=true (issue 1116) makes the
+// from the API. With neither, LEDGER_SWEEP_ONLY=true makes the
 // start sweep-only — no triggering run, so no mirror and no heal — and the
 // mode is fail-closed on ambiguity: a value other than exactly "true" or
 // "false" throws, and sweep-only alongside any run id throws.
@@ -30,7 +30,7 @@ export interface TriggeringRun {
   runAttempt: number;
   /**
    * When the run began executing, per the run body's `run_started_at` — the
-   * rerun-heal's primary never-started signal (issue 1037): a run whose
+   * rerun-heal's primary never-started signal: a run whose
    * started-at names a time was executing when it was cancelled, so the
    * cancellation was deliberate and the heal must not touch it. Null when the
    * run names none. The workflow_run path ALWAYS carries null here: the
@@ -43,9 +43,9 @@ export interface TriggeringRun {
    * The full name ("OWNER/REPO") of the repository the run's head commit
    * lives in, per the run body's `head_repository.full_name`; empty when the
    * run's fields carry none (the workflow_run path's env carries none). The
-   * refusal gate compares it against this repository's slug (issue 1115): a
+   * refusal gate compares it against this repository's slug: a
    * known mismatch is decided by liveness — a same-repo head reads the
-   * commit's associated pulls, a fork head (issue 1142) the base repository's
+   * commit's associated pulls, a fork head the base repository's
    * open pulls at `head=<owner>:<branch>` — while empty (a deleted fork's
    * null head_repository among them) throws before any listing is consulted.
    * Empty does NOT mean "same repository": the gate fetches the run body to
@@ -58,7 +58,7 @@ export interface TriggeringRun {
 export type Trigger =
   | { kind: "workflow_run"; run: TriggeringRun }
   | { kind: "dispatch"; runId: string }
-  // Issue 1116: a scheduled start, or a workflow_dispatch without a run_id,
+  // A scheduled start, or a workflow_dispatch without a run_id,
   // whose sole duty is the orphan sweep. Named by LEDGER_SWEEP_ONLY=true and
   // no run id anywhere; fail-closed on any ambiguity (see parseTrigger).
   | { kind: "sweep-only" };
@@ -127,7 +127,7 @@ function normalizedConclusion(value: string | undefined): string | null {
 }
 
 /**
- * A missing or invalid attempt reads as 1 (issue 861): the heal's cap
+ * A missing or invalid attempt reads as 1: the heal's cap
  * compares against the run's own attempt number, which both trigger paths
  * carry — GITHUB_WORKFLOW_RUN_ATTEMPT on the workflow_run path, run_attempt in
  * the fetched body on the dispatch path.

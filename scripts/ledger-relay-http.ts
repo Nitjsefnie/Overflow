@@ -12,10 +12,10 @@ export const API_HEADERS = {
 export const BACKOFF_MS = [1_000, 2_000];
 export const REQUEST_TIMEOUT_MS = 30_000;
 export const RUN_DEADLINE_MS = 10 * 60_000;
-/** The margin between a rate limit's reset and the run deadline (issue 1355). */
+/** The margin between a rate limit's reset and the run deadline. */
 export const RATE_LIMIT_RESET_MARGIN_MS = 5_000;
 
-/** An exhausted-rate-limit response; a sweep-only relay defers on it (issue 1355). */
+/** An exhausted-rate-limit response; a sweep-only relay defers on it. */
 export class RateLimitExceededError extends Error {
   readonly resetMs: number;
 
@@ -61,10 +61,10 @@ interface ApiRequest {
 
 /**
  * Three attempts, 1s then 2s backoff; other 4xx responses fail immediately. A
- * rate-limited 403 or 429 (issue 1355) waits out its named reset only while
+ * rate-limited 403 or 429 waits out its named reset only while
  * another attempt remains and the reset plus margin fits the deadline, and
- * otherwise throws RateLimitExceededError at once (issue 1363). A GET whose
- * last attempt was 5xx throws ServerErrorExhaustedError (issue 1532).
+ * otherwise throws RateLimitExceededError at once. A GET whose
+ * last attempt was 5xx throws ServerErrorExhaustedError.
  */
 export async function apiCall<T>(
   deps: RelayHttpDeps, request: ApiRequest, what: string, retryTransient = true,
@@ -136,7 +136,7 @@ export async function apiCall<T>(
   throw new Error(message);
 }
 
-/** The reset a rate-limited 403/429 names (issue 1355), or undefined when none. */
+/** The reset a rate-limited 403/429 names, or undefined when none. */
 function rateLimitResetMs(response: Response, text: string, nowMs: number): number | undefined {
   if (response.status !== 403 && response.status !== 429) return undefined;
   const rateLimited = response.headers.get("x-ratelimit-remaining") === "0" ||

@@ -89,7 +89,7 @@ describe("API token usage and issuance identity", () => {
     // Pinned 50 milliseconds behind the statement's own clock: the lookup's
     // write lands at least one round trip later, and two writes inside one
     // wall-clock millisecond floor to equal getTime() values — the collision
-    // this read once flaked on. Fifty milliseconds stays inside the throttle's
+    // this read must avoid. Fifty milliseconds stays inside the throttle's
     // minute, so the scenario is unchanged, and the unconfirmed path bypasses
     // the throttle regardless (confirmed_at is null).
     const [before] = await sql<{ last_used_at: Date }[]>`

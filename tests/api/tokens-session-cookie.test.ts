@@ -100,8 +100,8 @@ afterEach(() => {
 
 async function sessionCookie(claims: Record<string, unknown>): Promise<string> {
   const value = await encode({
-    // The epoch stamp sign-in writes (issue 1043): without it the cookie is a
-    // pre-fix token and dies at its first refresh against the live row.
+    // The epoch stamp sign-in writes: a cookie without it dies at its first
+    // refresh against the live row.
     token: { sub: userId, userId, role: "MEMBER", sessionEpoch: 0, ...claims },
     secret: authSecret,
     salt: sessionCookieName,
@@ -141,7 +141,7 @@ describe("POST /api/tokens with only a session cookie", () => {
   });
 
   it("ends a cookie carrying no recorded GitHub sign-in at the refresh, and stores no token", async () => {
-    // The absolute lifetime (issue 1043) refuses a token with no sign-in
+    // The absolute lifetime refuses a token with no sign-in
     // instant at the refresh, so the session resolves to nothing and the mint
     // sees an unauthenticated request (401) rather than the route's own
     // re-authentication refusal (403). No token is stored either way.

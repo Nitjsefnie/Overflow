@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
 /**
- * The failure answers each documented route can give (issue 1056), derived
+ * The failure answers each documented route can give, derived
  * statically for the HTTP surface snapshot's `failures` section.
  *
  * Non-envelope constructions must be covered by invoked failure fixtures;

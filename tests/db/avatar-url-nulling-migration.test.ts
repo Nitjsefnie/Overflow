@@ -5,12 +5,11 @@ import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
 
 /**
- * Migration 063 (issue 1075): nothing stores the GitHub avatar URL anymore,
- * so the migration nulls what earlier releases wrote. The column stays — old
- * rows need no drop — and the `users_deleted_account_scrubbed_check` must
- * still read the post-migration state as scrubbed: a deleted row carries a
- * null avatar, and a live row may carry one only in the pre-migration shape
- * this migration erases.
+ * Migration 063: nothing stores the GitHub avatar URL, so the migration nulls
+ * the avatar URLs rows already hold. The column stays — rows need no drop — and
+ * the `users_deleted_account_scrubbed_check` must still read the post-migration
+ * state as scrubbed: a deleted row carries a null avatar, and a live row may
+ * carry one only in the pre-migration shape this migration erases.
  */
 
 const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;

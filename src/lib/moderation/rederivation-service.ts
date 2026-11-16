@@ -10,7 +10,7 @@ import {
 } from "@/lib/moderation/service";
 
 /**
- * The moderator-facing view of issue 197's third obligation: which derived rows
+ * The moderator-facing view of the re-derivation obligation: which derived rows
  * a repository holds that the current fold logic produced, and which are still
  * the output of an older revision of it.
  */
@@ -70,8 +70,7 @@ export class RepositoryRederivationService {
   }
 
   /**
-   * Asks for one repository's derived rows to be recomputed — issue 197's second
-   * obligation.
+   * Asks for one repository's derived rows to be recomputed.
    *
    * The repository is resolved before the request is written rather than letting
    * the queue's foreign key refuse it, so an unknown target answers NOT_FOUND

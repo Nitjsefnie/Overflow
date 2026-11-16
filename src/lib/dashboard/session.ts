@@ -10,10 +10,10 @@ export type MemberPageSession = {
     name: string;
     /**
      * Whether the granted GitHub scopes let this token administer repository
-     * webhooks (issue 599) — the JWT's hint from the initial sign-in, so a
-     * contributor grant or a JWT older than the hint reads false. Decides
-     * which surface the registration page shows; never whether a
-     * registration proceeds, which the route re-reads from GitHub.
+     * webhooks — the JWT's hint from the initial sign-in, so a contributor grant or a
+     * JWT older than the hint reads false. Decides which surface the registration
+     * page shows; never whether a registration proceeds, which the route re-reads
+     * from GitHub.
      */
     canAdministerWebhooks: boolean;
   };

@@ -7,7 +7,7 @@ import { parse } from "yaml";
 import { renderMarkdown } from "../../scripts/patch-coverage.ts";
 
 /**
- * Issue 656: the coverage comment job holds a PR-writing token, so which pull
+ * The coverage comment job holds a PR-writing token, so which pull
  * request it writes to and what it writes there must come from the trusted
  * workflow_run event — its head repository, head branch and head SHA — and
  * never from anything a fork-controlled ci run produced.
@@ -331,7 +331,7 @@ describe("the coverage comment workflow's run blocks", () => {
       },
     );
 
-    // ci runs on pull_request_target (issue 822), whose run carries the pull
+    // ci runs on pull_request_target, whose run carries the pull
     // request's own head SHA and the BASE repository as head_repository — so
     // the same binding resolves, unchanged, and a fork head falls out of the
     // repository+SHA match as a silent exit.

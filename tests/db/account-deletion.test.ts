@@ -457,7 +457,7 @@ describe("account deletion as pseudonymisation", () => {
 
     expect(exported.apiToken).not.toBeNull();
     expect(new Date(exported.apiToken!.createdAt).toISOString()).toEqual(exported.apiToken!.createdAt);
-    // Main's 046 migration gave every token a bounded lifetime; the export
+    // Every token has a bounded lifetime (migration 046); the export
     // carries the expiry alongside the creation instant, never the hash.
     expect(new Date(exported.apiToken!.expiresAt).toISOString()).toEqual(exported.apiToken!.expiresAt);
     expect(Object.keys(exported.apiToken!).sort()).toEqual(["confirmedAt", "createdAt", "expiresAt", "lastUsedAt"]);
@@ -813,7 +813,7 @@ describe("account deletion as pseudonymisation", () => {
     expect(row!.role).toBe("MEMBER");
   });
 
-  // The last-live-moderator flag (issue 1122): "live" is
+  // The last-live-moderator flag: "live" is
   // `role = 'MODERATOR' and deleted_at is null`, and the deleting account is
   // the last one only when no OTHER live moderator exists. Each case cleans up
   // after itself — every moderator it seeds ends the case deleted — so the

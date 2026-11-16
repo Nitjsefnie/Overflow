@@ -1,10 +1,10 @@
 // The Overflow Ledger App half of the Actions event-policy check: minting the
 // App installation token the check runs under when the LEDGER_* credentials are
 // present, and posting the App-owned neutral check run that records
-// cannot-verify when the policy list 403s to that token (issue 1024).
+// cannot-verify when the policy list 403s to that token.
 // A mint failure with credentials present fails the check closed — the
 // orchestration in check-actions-event-policy.ts turns the warning below into
-// a failure with no GH_TOKEN fallback (issue 1026). The neutral check run stays
+// a failure with no GH_TOKEN fallback. The neutral check run stays
 // best-effort: its failure is a warning that never fails the job.
 
 import { readEnv } from "../src/lib/env.ts";
@@ -46,7 +46,7 @@ function ledgerAppCredentials(
  * RS256 App JWT from its exported mintAppJwt, then the installation-token
  * POST it performs inside runRelay. Best-effort: credentials absent gives
  * an empty outcome with no warning; any mint failure gives a warning, and the
- * caller fails the check closed on it (issue 1026). Never throws.
+ * caller fails the check closed on it. Never throws.
  */
 export async function mintInstallationToken(
   env: Record<string, string | undefined>,
@@ -65,7 +65,7 @@ export async function mintInstallationToken(
           Accept: "application/vnd.github+json",
           "X-GitHub-Api-Version": "2022-11-28",
         },
-        // Issue 1051: the minimal permission set both scripts' calls derive —
+        // The minimal permission set both scripts' calls derive —
         // never the App's whole grant, which without a `permissions` field is
         // what GitHub puts on the token.
         body: JSON.stringify({

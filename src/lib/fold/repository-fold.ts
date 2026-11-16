@@ -61,8 +61,7 @@ export type RepositoryFoldSnapshot = {
     difficultyScheme: DifficultyScheme;
     /**
      * The repository's catalog history, earliest first. Empty means the current
-     * catalog governs every instant, which is the one-catalog behavior every
-     * repository had before catalogs became versioned (issue 180).
+     * catalog governs every instant.
      */
     difficultySchemeVersions: DifficultySchemeVersion[];
     /** The forge this repository lives on; absent means GitHub (pre-038 rows). */
@@ -80,7 +79,7 @@ export type RepositoryFoldSnapshot = {
   issues: RepositoryFoldIssue[];
 };
 
-/** A cached issue as the fold reads it: no body text, which the fold never reads (issue 681). */
+/** A cached issue as the fold reads it: no body text, which the fold never reads. */
 export type RepositoryFoldIssue = {
   id: number;
   number: number;
@@ -109,7 +108,7 @@ export type RepositoryFoldIssue = {
   closingPullRequestsUnreadable?: true;
 };
 
-/** A closing pull request, without the body text the fold never reads (issue 681). */
+/** A closing pull request, without the body text the fold never reads. */
 export type RepositoryFoldPullRequest = {
   id: number;
   number: number;
@@ -391,9 +390,9 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
     // An opening is pinned to the catalog governing when the issue was created:
     // the materialized opening rating is immutable, so re-resolving it under a
     // catalog the sponsor later changed would either fail the run or look like
-    // a mutation (issue 180). Settled evidence resolves by its own window
-    // below. With no version history the current catalog governs every
-    // creation instant, which is the one-catalog behavior.
+    // a mutation. Settled evidence resolves by its own window below. With no
+    // version history the current catalog governs every creation instant,
+    // which is the one-catalog behavior.
     const openingScheme = difficultySchemeInForceAt(
       snapshot.repository.difficultySchemeVersions ?? [],
       Date.parse(issue.createdAt),
@@ -417,7 +416,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
     // A closure is priced by the catalog in force when its evidence window
     // closed — merge + the same grace every rejection sentence quotes — so a
     // sponsor appending a later catalog never re-prices an earlier settled
-    // figure (issue 180). The selector never reads the clock: the instant is
+    // figure. The selector never reads the clock: the instant is
     // GitHub's merge time, stable across every re-derivation of the same
     // evidence. The opening above is likewise pinned to its issue's creation.
     const settledResolution = pullRequest === null
@@ -636,7 +635,7 @@ function resolveOpening(
   // Bounded by TIME rather than by position in the history. Ordering here is
   // decided by whichever event GitHub happened to record first, and creating an
   // issue with labels and an assignee in one call records the assignment first
-  // — which used to drop the issue from the fold entirely.
+  // — which a positional bound would drop from the fold entirely.
   const firstAssignment = orderedHistory.find((event) => event.kind === "ASSIGNED");
   const openingDeadline = firstAssignment === undefined
     ? Number.POSITIVE_INFINITY
@@ -999,11 +998,11 @@ function resolveSettledDifficulty(
   }
   const windowCloseTime = mergeTime + EVIDENCE_ORDERING_GRACE_MS;
   // The comment's role is to show the sponsor was deliberate, not to restate
-  // the label the sponsor had just applied (issue 297): the label already
-  // carries the value, and a body that merely contains the label text proves
-  // nothing about agreement — it rejected honest prose ("Settled at 7 points")
-  // while accepting contradictory prose. What qualifies is a nonblank comment
-  // by the sponsor inside the window, and nothing about its wording.
+  // the label the sponsor had just applied: the label already carries the
+  // value, and a body that merely contains the label text proves nothing about
+  // agreement — matching it would reject honest prose ("Settled at 7 points")
+  // while accepting contradictory prose. What qualifies is a nonblank comment by
+  // the sponsor inside the window, and nothing about its wording.
   const candidates = issue.comments
     .filter(validIssueComment)
     .sort((left, right) => compareHistoryItems(left, right) || compareRationaleSequence(left, right))
@@ -1247,9 +1246,9 @@ type FoldActorIdentity = {
  * behind is free for anyone else to take, and taking it would otherwise buy
  * the authority to price this repository's work.
  *
- * The login is consulted only where GitHub reported no usable id at all — a
- * Bot, a Mannequin, an Organization, a deleted account — which is the
- * comparison that has always been made, unchanged.
+ * The login is consulted only where GitHub reported no usable id at all —
+ * a Bot, a Mannequin, an Organization, a deleted account — and there the login
+ * comparison alone decides.
  */
 export function isRepositorySponsor(actor: FoldActorIdentity, sponsor: FoldUser): boolean {
   if (actor.githubUserId !== null) {
@@ -1275,7 +1274,7 @@ export function isRepositorySponsor(actor: FoldActorIdentity, sponsor: FoldUser)
  * GitHub preserves and this is where the rename becomes visible. The sponsor's stored login is the
  * fallback, non-blank by `users.github_login`'s own check (migration 001). That check spells
  * `trim()` with one argument and so strips spaces only, while `.trim()` here strips all whitespace,
- * leaving a stored tab that the database accepts and this reads as blank (issue 141) — hence the
+ * leaving a stored tab that the database accepts and this reads as blank — hence the
  * placeholder last, the same one a refusal sentence already uses for an actor it cannot name.
  */
 function sponsorDisplayLogin(actorLogin: string | null, sponsor: FoldUser): string {
@@ -1347,10 +1346,9 @@ export function compareHistoryItems(
  * GitHub's per-comment creation sequence: the numeric `IssueComment.databaseId` is assigned in
  * creation order, so among comments sharing one instant the smallest id is the first-written. For
  * content imported through GitHub's migration APIs, databaseId order is import order — arbitrary
- * there, but stable, and accepted. This is the rule family issue 260 settles on — an explicit
- * deterministic rule whose basis is evidence, or an undecidable refusal rather than a silently
- * arbitrary pick (`resolveSettledDifficulty` checks the selected instant's group after selection
- * and rejects a tie its ids cannot order).
+ * there, but stable, and accepted. The rule is explicit and deterministic, its basis evidence, or
+ * an undecidable refusal rather than a silently arbitrary pick (`resolveSettledDifficulty` checks
+ * the selected instant's group after selection and rejects a tie its ids cannot order).
  * Node ids (`IssueComment.id`, `IC_…`) never key a selection: they are opaque strings encoding no
  * creation order, unlike the numeric databaseId, so reordering by them would only launder arrival
  * order again.
@@ -1359,9 +1357,9 @@ export function compareHistoryItems(
  * The order between two such ids is deliberately unspecified (the sort is stable, so it is arrival
  * order): callers must not rely on it, and a selected tie carrying two or more of them is rejected
  * as undecidable.
- * `compareHistoryItems` itself is unchanged and stays the primary key, so distinct-instant
- * selection and every other consumer of it are untouched.
- * Already-persisted rationale ids from a prior arrival-order run are safe to move:
+ * `compareHistoryItems` stays the primary key, so distinct-instant selection and every other
+ * consumer of it keep their behaviour.
+ * Rationale ids already persisted by an arrival-order run are safe to move:
  * `settled_rationale_comment_id` is deliberately overwritten by the fold's ordinary issue upsert on
  * every run (unlike the opening evidence, which is immutable), so a tie row swaps its citation once
  * on the next fold and then stays stable — label, points, actor, instant and credits do not change.

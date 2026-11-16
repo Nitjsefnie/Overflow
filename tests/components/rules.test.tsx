@@ -166,11 +166,11 @@ describe("rules page", () => {
     // The mirror of the terms-page assertion, and the same constant, because
     // /rules is where a dispute is actually decided: the terms page names this
     // section as the source of truth, so a rule that drifts HERE is a reader
-    // held to text the pointer's promise no longer matches. That direction was
-    // the one unasserted of the two, and the mutant that re-hardcoded these
-    // three <li> by hand with the third drifted to "One open dispute per issue
-    // at a time" left the whole suite green. Compared, never asserted as prose:
-    // this names no rule, so a faithful rewording of all three still passes.
+    // held to text the pointer's promise no longer matches. Without this
+    // assertion, a mutant that re-hardcodes these three <li> by hand with the
+    // third drifted to "One open dispute per issue at a time" leaves the whole
+    // suite green. Compared, never asserted as prose: this names no rule, so a
+    // faithful rewording of all three still passes.
     //
     // Both mount points, not one. RulesContent and PublicRulesContent are
     // separate shells a visitor reaches and both render RulesSections, so a pin
@@ -186,10 +186,10 @@ describe("rules page", () => {
     //
     // COST OF THAT LOOKUP — it is a kill, not a convenience. `aria-labelledby`
     // derives the region's accessible name from the heading's TEXT, so this
-    // lookup resolves only while the heading names what it says it names. The
-    // reviewer's mutant — rewording the Disputes heading so it re-promises a
-    // sanction the list below it does not carry — satisfies every id, every
-    // class and every element query in this file, and fails HERE alone.
+    // lookup resolves only while the heading names what it says it names. A
+    // mutant that rewords the Disputes heading so it re-promises a sanction the
+    // list below it does not carry satisfies every id, every class and every
+    // element query in this file, and fails HERE alone.
     // Rewriting it as a query on the element id (`#rules-disputes-heading`, or
     // `querySelector("section[aria-labelledby='rules-disputes-heading']")`)
     // would read as a harmless simplification, keep the whole suite green and
@@ -197,13 +197,12 @@ describe("rules page", () => {
     const main = document.querySelector<HTMLElement>("main.page-content");
     expect(main, "the rules view supplies its own main.page-content").not.toBeNull();
     const region = within(main!).getByRole("region", { name: "Disputes" });
-    // Two lists now: the settlement case's rules and the sanction case's, each
+    // The settlement case's rules and the sanction case's are two lists, each
     // compared against its own constant element for element. Scoping to the
     // lists rather than to the region's whole li set is what keeps the two
     // cases from standing in for each other — a sanction bullet pasted into the
-    // settlement list, or a settlement bullet dropped when the sanction part
-    // landed, misaligns one of the two comparisons rather than passing a
-    // document-wide count.
+    // settlement list, or a settlement bullet dropped, misaligns one of the two
+    // comparisons rather than passing a document-wide count.
     const lists = [...region.querySelectorAll("ul")];
     expect(lists, "the Disputes section renders one list per contestable case").toHaveLength(2);
     const settlementItems = [...lists[0]!.querySelectorAll("li")].map((item) => item.textContent);
@@ -264,23 +263,23 @@ describe("rules page", () => {
   it.each(MOUNT_POINTS)("names the contestable case the shared source names, in the %s revision paragraph", (_label, element) => {
     render(element);
 
-    // This page's revision paragraph sat ONE sentence above the list it points
-    // at and made the same claim by hand — "A correction to a settlement is
-    // decided under the Disputes section of this page" — which is how a reader
-    // could be told a case is contestable with nothing below it saying so. The
-    // page now interpolates DISPUTE_CONTESTABLE_CASE there, exactly as the
-    // terms page's own revision paragraph does, so the two pages cannot disagree
-    // about which case a correction reaches.
+    // This page's revision paragraph sits ONE sentence above the list it points
+    // at and makes the same claim — "A correction to a settlement is decided
+    // under the Disputes section of this page". Written by hand, it could tell a
+    // reader a case is contestable with nothing below it saying so, so the page
+    // interpolates DISPUTE_CONTESTABLE_CASE there, exactly as the terms page's
+    // own revision paragraph does, and the two pages cannot disagree about
+    // which case a correction reaches.
     //
-    // The mutant that survives every other assertion in the suite is this
-    // sentence with "a settlement" changed to "a sanction": terms-page,
-    // rules and legal-revisions-marker all stay 35/35 green on it, because
-    // nothing read it. The assertion that kills it is the marked-element shape,
-    // not a word ban — a hand-written sentence contains no [data-dispute-case]
-    // at all, so the length check fails whatever words it is phrased in, and
-    // the equality then reads the words when a mark IS present. A case
-    // legitimately added to the shared source is still the constant and still
-    // passes.
+    // The mutant that survives every other assertion in the suite is that
+    // sentence hand-written with "a settlement" changed to "a sanction":
+    // terms-page, rules and legal-revisions-marker all stay 35/35 green on it,
+    // because nothing else reads it. The assertion that kills it is the
+    // marked-element shape, not a word ban — a hand-written sentence contains
+    // no [data-dispute-case] at all, so the length check fails whatever words
+    // it is phrased in, and the equality then reads the words when a mark IS
+    // present. A case legitimately added to the shared source is still the
+    // constant and still passes.
     //
     // Scoped to the page's own main, and to the revision marker inside it, for
     // the same reason the terms-page mirror is: the shells' nav and footer sit

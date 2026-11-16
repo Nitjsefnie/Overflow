@@ -1,4 +1,4 @@
-// Issue 1054: the keyed bound for the expensive routes. The mechanism is the
+// The keyed bound for the expensive routes. The mechanism is the
 // webhook token bucket (src/lib/webhooks/rate-limit.ts) generalised per key;
 // this module is the route-side wiring: the per-class env-derived bounds, the
 // 429 + Retry-After answer, the credential-identity key derivation, and the
@@ -7,8 +7,8 @@
 // The check runs INSIDE each expensive route's handler, after authentication
 // (the acting credential identity is known); every auth refusal precedes the
 // gate, so refusals never consume a bound. It sits immediately before the
-// first unit of the work the bound protects. The per-request detail logging
-// is issue 1053's scope and stays out of this one.
+// first unit of the work the bound protects. Per-request detail logging
+// belongs to issue 1053 and stays out of this module.
 //
 // The limiter's registry never evicts, so the key space must be bounded: the
 // key is the acting credential identity, never a raw request IP or other
@@ -31,7 +31,7 @@ export interface RouteRateClassSpec {
 }
 
 /**
- * The five classes (issue 1054), with the basis for each default carried in
+ * The five classes, with the basis for each default carried in
  * the docs deliverable (.env.example and OPERATING.md's environment
  * reference); this table is the single source the route files derive from.
  */
@@ -96,7 +96,7 @@ export interface RouteRateGateOptions {
   nowMs?: () => number;
 }
 
-/** The fixed 429 envelope text. No request detail rides it (issue 1053 stays out). */
+/** The fixed 429 envelope text. No request detail rides it. */
 const RATE_LIMITED_MESSAGE =
   "Too many requests of this kind. Retry after the number of seconds the Retry-After header names.";
 

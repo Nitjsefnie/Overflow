@@ -91,7 +91,7 @@ describe("application shell sign-out", () => {
   });
 
   /**
-   * The header wrap breakpoint (issue 40) is measured against exactly this
+   * The header wrap breakpoint is measured against exactly this
    * navigation — both variants, in this order — so the list is pinned: a
    * wider link set would change where the nav stops fitting one row above the
    * stacked header, and the breakpoint must be re-measured, not reused.
