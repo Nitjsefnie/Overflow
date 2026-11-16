@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { runRelay } from "../../scripts/ledger-relay.ts";
 
 /**
- * The relay's installation-token mint, pinned at issue 1051: the POST body
+ * The relay's installation-token mint: the POST body
  * carries exactly the minimal permission set the two ledger scripts' GitHub
  * calls derive, and every call the relay makes under the minted token is
  * covered by that set — the enumeration in APP_TOKEN_CALL_PERMISSIONS is the
@@ -59,7 +59,7 @@ function mintCovers(minted: Record<string, string>, needed: string): boolean {
   return granted === "write" && level === "read";
 }
 
-/** The minimal permission set the two mints request (issue 1051). */
+/** The minimal permission set the two mints request. */
 const MINTED = {
   actions: "read",
   checks: "write",
@@ -147,7 +147,7 @@ function workflowRunHealEnv(): Record<string, string> {
   });
 }
 
-/** The scheduled sweep-only start (issue 1116): no triggering run at all. */
+/** The scheduled sweep-only start: no triggering run at all. */
 function sweepOnlyEnv(): Record<string, string> {
   return relayEnv({
     OVERFLOW_GITHUB_WORKFLOW_RUN_ID: "",
@@ -388,7 +388,7 @@ async function runWorkflowRunFlow(): Promise<Recorded[]> {
   return fetchStub.requests;
 }
 
-/** The scheduled sweep-only start (issue 1116): mint and sweep, nothing else. */
+/** The scheduled sweep-only start: mint and sweep, nothing else. */
 async function runSweepOnlyFlow(): Promise<Recorded[]> {
   const fetchStub = makeFetch([
     token(),

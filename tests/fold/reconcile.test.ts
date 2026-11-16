@@ -861,14 +861,14 @@ describe("reconcileRepository", () => {
     expect(fold.issues.map((issue) => issue.updatedAt)).toEqual([
       "2026-09-01T12:05:00.000Z", "2026-09-01T12:05:00.000Z", "2026-09-01T12:05:00.000Z",
     ]);
-    // Keep the historical digest comparable without the added provenance fields.
+    // Keep the baseline digest comparable without the provenance fields.
     const legacyFold = JSON.stringify(fold, (key, value) => (
       key === "authorGitHubUserId" || key === "creditorGitHubUserId"
         || key === "claimAssigneeGitHubUserId" || key === "updatedAt" || key === "asksOutsideRepository" || key === "doneWhen"
         || key === "donationCommentId" ? undefined : value
     ));
-    // The digest moved when the fold result stopped carrying issue and pull
-    // request body text (issue 681); the JSON shape is otherwise unchanged.
+    // The fold result carries no issue or pull request body text; the JSON
+    // shape is otherwise unchanged.
     expect(createHash("sha256").update(legacyFold).digest("hex")).toBe("9640faa8a1fd4b0db7d108e447da7c9d6b347d0cfaa9d47e1f38568523ad0224");
     const unstampedFold = JSON.stringify(fold, (key, value) => (
       key === "updatedAt" || key === "asksOutsideRepository" || key === "doneWhen" || key === "donationCommentId" ? undefined : value
@@ -1271,8 +1271,8 @@ describe("reconcileRepository", () => {
       expect((failure as Error).message).toBe("Unable to reconcile repository.");
       expect((failure as Error).cause).toBe(upstream);
       expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
-      // The log carries the encoded token, not the raw object (issue 1042):
-      // one line, so no text the error picked up can forge journal lines.
+      // The log carries the encoded token, not the raw object: one line, so no text
+      // the error picked up can forge journal lines.
       expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", errorLogToken(upstream));
       expect(errorLog).toHaveBeenCalledTimes(1);
     } finally {
@@ -1314,9 +1314,9 @@ describe("reconcileRepository", () => {
         expect(logged).not.toContain(RECORD_MARKER);
         expect(thrown).not.toContain(RECORD_MARKER);
         expect(logged).toContain("Reconciliation of repository repository failed.");
-        // The log line carries the encoded name and message (issue 1042); the
-        // code's visibility is superseded there — it still rides the rethrown
-        // cause object, which is what `thrown` asserts next.
+        // The log line carries the encoded name and message; the code's visibility is
+        // superseded there — it still rides the rethrown cause object, which is what
+        // `thrown` asserts next.
         expect(logged).toContain(`${logField("PostgresError")}:`);
         expect(logged).toContain("test write failed");
         expect(thrown).toContain(upstream.code);
@@ -1342,8 +1342,8 @@ describe("reconcileRepository", () => {
         cause: upstream,
       });
       expect(dependencies.store.failRun.mock.calls).toEqual([["run-1", "Reconciliation failed.", null]]);
-      // The log carries the encoded token (issue 1042); the body stays on the
-      // cause object the rethrow attaches, out of the product-readable row.
+      // The log carries the encoded token; the body stays on the cause object the
+      // rethrow attaches, out of the product-readable row.
       expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", errorLogToken(upstream));
       expect(upstream.body).toBe(body);
     } finally {
@@ -1360,7 +1360,7 @@ describe("reconcileRepository", () => {
       await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ cause: rejection });
       expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE, null);
       // The cause still reaches the service log as the encoded token, exactly
-      // as on the generic path (issue 1042).
+      // as on the generic path.
       expect(errorLog).toHaveBeenCalledWith("Reconciliation of repository repository failed.", errorLogToken(rejection));
     } finally {
       errorLog.mockRestore();
@@ -1443,8 +1443,8 @@ describe("reconcileRepository", () => {
   it("completes the run when a dirty GitLab issue is gone upstream, discarding only that subject", async () => {
     // A GitLab issue can vanish between the pass that journaled its dirty row
     // and the per-subject read of the next pass; the gateway's per-issue reads
-    // then answer GitLab's fixed 404, which the GitHub-shaped classifier never
-    // matched. The discard is keyed with the subject's generation, so a
+    // then answer GitLab's fixed 404, which the GitHub-shaped classifier does
+    // not match. The discard is keyed with the subject's generation, so a
     // genuine re-enqueue (bumped generation) still reconciles.
     const poison = { kind: "ISSUE" as const, id: 999, number: 42, generation: "7" };
     const good = { kind: "ISSUE" as const, id: 555, number: 43, generation: "8" };
@@ -1599,9 +1599,9 @@ describe("reconcileRepository", () => {
     async (failingFetch) => {
       // GitHub durably refuses a diff over its 20000-line cap with a fixed 406, so the dirty row
       // goes and the run completes. The first pass starts from a cache that never held the pull
-      // request (what a refused pass used to leave), and every later pass feeds the last one's
-      // synchronization back as the cache, as the store does. Dispute pull request 13 is refused
-      // the same way and keeps being re-read every pass, never cached.
+      // request, and every later pass feeds the last one's synchronization back as the cache, as
+      // the store does. Dispute pull request 13 is refused the same way and keeps being re-read
+      // every pass, never cached.
       const issue = { ...reconciliationIssue({ id: 101, number: 1 }),
         closingPullRequests: [reconciliationPullRequest({ id: 201, number: 11 }), reconciliationPullRequest({ id: 202, number: 12 })] };
       let scanned: Array<typeof issue> = [];

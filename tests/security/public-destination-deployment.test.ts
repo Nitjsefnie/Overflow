@@ -14,7 +14,7 @@ import {
 } from "../support/public-destination-harness";
 
 /**
- * The deployment seeding of the outbound fetch guard (issue 899): what
+ * The deployment seeding of the outbound fetch guard: what
  * `PUBLIC_DESTINATION_DENY_CIDRS` contributes and what the two wired
  * singletons do with it. The singletons read the environment when their module
  * evaluates, so every case resets the module registry and (re)imports after
@@ -71,7 +71,7 @@ async function loadDeploymentDenyCidrs(): Promise<
  * An interface enumerator as the hardened serving unit sees one: the unit's
  * `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX` denies AF_NETLINK, libuv's
  * enumeration socket, so `os.networkInterfaces()` throws this system error in
- * every serving process (issue 924) while succeeding for an unsandboxed root.
+ * every serving process while succeeding for an unsandboxed root.
  */
 function restrictedEnumerator(): ReturnType<typeof networkInterfaces> {
   throw Object.assign(new Error("A system error occurred: uv_interface_addresses returned Unknown system error 97"), {
@@ -118,7 +118,7 @@ describe("deploymentDenyCidrs", () => {
 
     // The environment is unset here, so the deny list is empty: a
     // defense-in-depth default that cannot be discovered degrades to the
-    // env-driven list instead of killing module evaluation (issue 924).
+    // env-driven list instead of killing module evaluation.
     expect(deploymentDenyCidrs(process.env, restrictedEnumerator)).toEqual([]);
   });
 

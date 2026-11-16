@@ -1,7 +1,7 @@
-// Issue 1069. Every instant the product displays renders through the shared
+// Every instant the product displays renders through the shared
 // UTC formatter (`formatInstant`), so no component may format a display
-// instant itself — the ad-hoc forms this test bans are exactly the shapes the
-// conversion removed: a UTC date cut off a timestamp by `.slice(0, 10)`, a raw
+// instant itself — the ad-hoc forms this test bans are exactly these shapes:
+// a UTC date cut off a timestamp by `.slice(0, 10)`, a raw
 // `toISOString()` string, a locale-shaped `toLocale*String()`,
 // `Intl.DateTimeFormat` (whose output follows the viewer's zone), a local
 // `formatUtc()` helper, and a bare `{x.createdAt}`-style interpolation of an

@@ -307,10 +307,10 @@ export async function makeFixture(options: {
   // Production's .next is a relative symlink to the serving release; keep the
   // fixture in the same shape so the anchor exercises real readlink resolution.
   await symlink(path.basename(prevDir), path.join(tree, ".next"));
-  // The post-fast-forward half executes $tree's own copy of the deploy script
-  // (issue 747), so the fixture tree holds the repository's current bytes at
-  // that path. The gate parses the pin map with the tree's own copy of the
-  // parser beside it (issue 1104), so that path is carried the same way.
+  // The post-fast-forward half executes $tree's own copy of the deploy script,
+  // so the fixture tree holds the repository's current bytes at that path. The
+  // gate parses the pin map with the tree's own copy of the parser beside it,
+  // so that path is carried the same way.
   await mkdir(path.join(tree, "scripts"));
   await writeFile(path.join(tree, "scripts", "deploy-revision.sh"), await readFile(script, "utf8"));
   await writeFile(path.join(tree, "scripts", "required-checks-parse.jq"), await readFile(parser, "utf8"));
@@ -609,9 +609,9 @@ export async function runDeploy(
   const names = ALL_SHIMS.filter((name) => !(options.omitShims ?? []).includes(name));
   await writeShims(fixture, names);
   // scriptPath: which copy of the deploy script starts the run (the tree's
-  // own copy for the issue-747 proof). openFd9On: a path fd 9 is opened on
-  // before the script starts, for a phase-2 entry that must get past the
-  // fd 9 check to reach the serving-anchor refusal.
+  // own copy for the proof that the post-fast-forward half runs it). openFd9On:
+  // a path fd 9 is opened on before the script starts, for a phase-2 entry that
+  // must get past the fd 9 check to reach the serving-anchor refusal.
   const argv = options.openFd9On
     ? ["bash", "-c", 'exec 9>"$1"; exec bash "$2"', "deploy-revision", options.openFd9On, options.scriptPath ?? script]
     : ["bash", options.scriptPath ?? script];

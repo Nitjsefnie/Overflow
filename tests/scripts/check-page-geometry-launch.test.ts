@@ -372,18 +372,18 @@ describe("the spawned-server environment preflight (issue 471)", () => {
     expect(message).toContain("Set it in the environment");
     // The remedy names the repo-root .env file EXACTLY — the only env file
     // the check's own process loads — not the wider Next.js family the
-    // spawned server reads (issue 453 round-4 polish).
+    // spawned server reads.
     expect(message).toContain("write it to the repo-root .env file");
     expect(message).toContain("(the only env file this check loads)");
   });
 });
 
 /**
- * The spawned server's port override (issue 514): concurrent gate runs on
- * one machine squat each other's fixed port, so the port becomes
- * overridable the way Chrome discovery already is. Unset or empty keeps
- * the default; anything that is not a plain decimal integer from 1 to
- * 65535 is refused, naming the variable and the offending value.
+ * The spawned server's port override: concurrent gate runs on one machine
+ * squat each other's fixed port, so the port is overridable the way Chrome
+ * discovery already is. Unset or empty keeps the default; anything that is
+ * not a plain decimal integer from 1 to 65535 is refused, naming the variable
+ * and the offending value.
  */
 describe("parseLayoutCheckPort — the spawned server's port override (issue 514)", () => {
   it("keeps the default 3219 when the variable is unset or empty", () => {

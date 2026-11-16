@@ -10,10 +10,10 @@ import type { ReconciliationGateway, ReconciliationRepository, ReconciliationSto
 
 describe("reconciling a repository as its sponsor", () => {
   it("folds a deactivated repository whose sponsor has no token left", async () => {
-    // The path the worker used to burn every attempt on. A repository deactivated
+    // The path the worker must not burn every attempt on. A repository deactivated
     // while it held a job needs no GitHub read at all — the fold short-circuits to
     // a clean no-delta run — so resolving the sponsor's token before that decision
-    // turned a job that completes instantly into five failures and a FAILED row
+    // would turn a job that completes instantly into five failures and a FAILED row
     // the sweep will not revive, because the sweep only enqueues active ones.
     const harness = createHarness({ active: false, accessToken: null });
 

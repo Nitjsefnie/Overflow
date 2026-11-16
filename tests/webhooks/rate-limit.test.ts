@@ -325,7 +325,7 @@ describe("createReceiverRateLimiter", () => {
     for (let i = 0; i < 6; i += 1) gate.admit();
 
     // Exactly one line for the whole burst: the first decline's, not one per
-    // declined request (issue 1053). The count is the running total at the
+    // declined request. The count is the running total at the
     // burst's start, so successive bursts' lines keep growing.
     expect(lines).toEqual([[
       "Webhook rate limit engaged for the gitlab receiver (declines so far: 1).",

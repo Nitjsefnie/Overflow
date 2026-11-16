@@ -13,9 +13,9 @@ import {
 /**
  * The GitLab registration path: verified identity required, project lookup
  * through the linked PAT, a project hook installed with the shared webhook
- * secret (issue 547), the hook id stored in the dual-use webhook-id column,
+ * secret, the hook id stored in the dual-use webhook-id column,
  * the initial import queued through the same reconciliation job the GitHub
- * path uses, the issue-451 compensating cleanup on a failed save, and a
+ * path uses, the compensating cleanup on a failed save, and a
  * permanently NOT_CHECKED claim path (contract item 30). The GitHub path is
  * untouched — its suite stays authoritative for it.
  */
@@ -217,7 +217,7 @@ describe("GitLab repository registration", () => {
     const creation = f.calls.find((call) => call.op === "createRepository");
     expect(creation).toBeDefined();
     const args = creation!.args as { githubWebhookId: number | null; provider?: string; instanceUrl?: string; forgeProjectId?: number };
-    // The dual use of the webhook-id column (issue 547): the GitLab hook id
+    // The dual use of the webhook-id column: the GitLab hook id
     // lives in the same column, with the forge columns carrying the rest.
     expect(args.githubWebhookId).toBe(4242);
     expect(args.provider).toBe("gitlab");
@@ -567,7 +567,7 @@ describe("GitLab repository registration", () => {
         provider: "gitlab",
         instanceUrl: "https://gitlab.com",
       }]);
-      // The issue-451 ordering: the record is durable BEFORE the compensating
+      // The ordering: the record is durable BEFORE the compensating
       // deletion is attempted, so the hook id survives every failure shape.
       expect(f.order.slice(0, 2)).toEqual(["save", "delete"]);
       expect(f.abandonedClears).toEqual([{ githubRepositoryId: 278964, provider: "gitlab", webhookId: 4242 }]);

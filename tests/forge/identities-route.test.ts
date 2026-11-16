@@ -23,7 +23,7 @@ const TEST_KEY = Buffer.from("0123456789abcdef0123456789abcdef").toString("base6
 const SESSION = { user: { id: "user-1", role: "MEMBER" as const } };
 
 /**
- * The unlink schema accepts uuid ids only (issue 1042), so the DELETE bodies
+ * The unlink schema accepts uuid ids only, so the DELETE bodies
  * these fixtures build carry uuids. The two differ only in the final nibble.
  */
 const LINKED_IDENTITY_UUID = "01890a5d-ac96-774b-bcce-b302099a8057";
@@ -46,7 +46,7 @@ function fixture(options: {
   sessionFails?: boolean;
   storeCreationFails?: boolean;
   listFails?: boolean;
-  /** What the live role read answers (issue 733); "fails" makes it throw. */
+  /** What the live role read answers; "fails" makes it throw. */
   liveRole?: "MEMBER" | "MODERATOR" | null | "fails";
   list?: ForgeIdentityView[];
   deleted?: boolean;
@@ -422,7 +422,7 @@ describe.each([
 });
 
 /**
- * Issue 733: the session JWT outlives the account it was issued for, so the
+ * The session JWT outlives the account it was issued for, so the
  * write verbs re-read the account's role live before acting on the session's
  * account id. The deleted row here is real: the suite runs the migrations and
  * the account deletion against a disposable database, and the refusal is

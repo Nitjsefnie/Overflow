@@ -12,7 +12,7 @@ import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 import { GET as productionIssuesGet } from "@/app/api/issues/route";
 import { GET as productionModeratorsGet } from "@/app/api/moderation/moderators/route";
 
-// The role lookup every authorization gate trusts (issue 693). Route tests
+// The role lookup every authorization gate trusts. Route tests
 // elsewhere inject a fake getCurrentRole, so this suite is the one place the
 // production lookup answers against a real users table: directly, and through
 // the production route exports, whose gates read it on each request.
@@ -75,7 +75,7 @@ describe("the production route gates read the role from the database", () => {
     expect(admitted.status).toBe(200);
     expect(Array.isArray(await admitted.json())).toBe(true);
 
-    // Issue 733 layer 3: the token store refuses a deleted account outright,
+    // The token store refuses a deleted account outright,
     // so the credential is not accepted — the same 401 as an unknown or
     // expired token — and the role gate downstream of it is never reached on
     // the bearer surface. The role gate's own refusal for a deleted account

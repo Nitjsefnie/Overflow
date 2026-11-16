@@ -428,7 +428,7 @@ describe("linking claims past GitLab work (decision 3 retroactivity)", () => {
       where issue_id in (select id from issues where repository_id = ${scenario.repositoryId})
       returning id
     `;
-    // A stored moderation line naming the row (migration 091 dropped its foreign key) never blocks the claim.
+    // A stored moderation line naming the row (no foreign key guards it) never blocks the claim.
     const user = scenario.linkedUserId;
     await sql`with event as (insert into moderation_events (target_user_id, actor_id, prior_state, new_state, reason)
         values (${user}, ${user}, 'ACTIVE', 'ACTIVE', 'Fixture.') returning id),

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { FailureLogger } from "@/lib/worker/failure-logger";
 
 /**
- * Issue 661: the reconciliation worker logs one full error per failure, which
+ * The reconciliation worker logs one full error per failure, which
  * during an outage means one full stack trace every five-second poll. The
  * logger bounds that: the first failure of an outage prints in full, later
  * failures inside the quiet window are counted silently, one summary line

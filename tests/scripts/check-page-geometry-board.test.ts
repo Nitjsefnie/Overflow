@@ -19,8 +19,8 @@ const REPOSITORY_FIXTURE_ID = "00000000-0000-4000-8000-000000001068";
 const ISSUE_FIXTURE_ID = "00000000-0000-4000-8000-000000001069";
 
 /**
- * The one long unbroken title the /issues overflow is measured against
- * (issue 1067): the audit's 256-character issue title, byte for byte.
+ * The one long unbroken title the /issues overflow is measured against:
+ * the audit's 256-character issue title, byte for byte.
  */
 const EXPECTED_TITLE = "a".repeat(256);
 const EXPECTED_DONE_WHEN = `Done when ${"b".repeat(256)}`;

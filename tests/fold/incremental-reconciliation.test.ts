@@ -53,8 +53,8 @@ describe("incremental reconciliation", () => {
 
     expect(f.issueReads).toEqual([issue.number]);
     const [issueRow] = await sql`select title, body from issues where repository_id = ${f.id} and github_issue_id = ${issue.id}`;
-    // The row stops holding body text (issue 681), and the cache write drops
-    // the issue body outright, so the sanitized title is the surviving check.
+    // The row stops holding body text, and the cache write drops the issue
+    // body outright, so the sanitized title is the surviving check.
     expect(issueRow).toMatchObject({ title: "Dirty\uFFFDtitle", body: null });
     const [cachedFact] = await sql<{ payload: { title: string; body?: string } }[]>`
       select payload from repository_reconciliation_evidence_facts where repository_id = ${f.id} and kind = 'issue' and subject_key = ${String(issue.id)}`;
@@ -78,7 +78,7 @@ describe("incremental reconciliation", () => {
     await f.run();
     const [issueRow] = await sql`select title, body from issues where repository_id = ${f.id} and github_issue_id = ${issue.id}`;
     const [prRow] = await sql`select title, body, proof_sha256 from pull_requests where repository_id = ${f.id} and github_pull_request_id = ${pr.id}`;
-    // The rows stop holding body text (issue 681); the evidence keeps it, so the
+    // The rows stop holding body text; the evidence keeps it, so the
     // sanitized values are still asserted below against the evidence.
     expect(issueRow).toMatchObject({ title: "Issue\uFFFDtitle", body: null });
     expect(prRow).toMatchObject({ title: "PR\uFFFDtitle", body: null,
@@ -89,9 +89,9 @@ describe("incremental reconciliation", () => {
       select payload from repository_reconciliation_evidence_facts where repository_id = ${f.id} and kind = 'pull_request' and subject_key = ${String(pr.id)}`;
     expect(cachedIssueFact).toBeDefined();
     expect(cachedPrFact).toBeDefined();
-    // New cache writes stop holding body text (issue 681): comment bodies
+    // New cache writes stop holding body text: comment bodies
     // become the fixed placeholder, issue and nested pull request bodies are
-    // dropped, and everything else \u2014 sanitized titles and the raw diff \u2014 still
+    // dropped, and everything else — sanitized titles and the raw diff — still
     // round-trips.
     const cachedIssue = cachedIssueFact!.payload;
     expect(cachedIssue).toMatchObject({
@@ -281,7 +281,7 @@ describe("incremental reconciliation", () => {
     issue.closingPullRequests = [];
     await f.run();
 
-    // Seed a row written by the old fold while retaining the current-format
+    // Seed a row in the legacy fold format while retaining the current-format
     // cached DUPLICATE reason. The insert is a no-op until the guard is fixed.
     await sql`
       insert into unwritable_closures (issue_id, pull_request_id, kind, reason)

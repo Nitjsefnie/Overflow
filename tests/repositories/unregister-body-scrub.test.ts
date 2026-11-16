@@ -409,10 +409,9 @@ async function insertSettlement(
     values (${externalId++}, ${`scrub-debtor-${externalId}`})
     returning id
   `;
-  // Migration 003 routes the settlement's issue link through pull_request_issues,
-  // and migration 005 gives that link the repository id, so the settlement's
-  // composite foreign key reads the link table, not the issue column on the
-  // pull request.
+  // The settlement's issue link goes through pull_request_issues, which carries
+  // the repository id, so the settlement's composite foreign key reads the link
+  // table, not the issue column on the pull request.
   await sql`
     insert into pull_request_issues (pull_request_id, issue_id, repository_id)
     values (${pullRequestId}, ${issueId}, ${repositoryId})

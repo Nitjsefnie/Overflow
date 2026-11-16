@@ -11,7 +11,7 @@ import { closeSql, getSql } from "@/lib/db/client";
 import { startPostgresContainer } from "../support/postgres-container";
 
 /**
- * The gate's fixture users (issue 453), pinned here by their literals: the
+ * The gate's fixture users, pinned here by their literals: the
  * seeder must create exactly these rows, so the test knows the ids apart from
  * the seeder's own return value.
  */
@@ -49,8 +49,8 @@ describe("mintSessionCookieValue — the @auth/core interop pin (issue 453)", ()
     expect(payload?.role).toBe("MEMBER");
     expect(payload?.iat).toBe(Math.floor(now.getTime() / 1000));
     expect(payload?.exp).toBe(Math.floor(now.getTime() / 1000) + 3600);
-    // The session-guard claims (issue 1043): the mint stamps the sign-in
-    // instant it bounds, and the epoch the seeded fixture rows carry.
+    // The session-guard claims: the mint stamps the sign-in instant it
+    // bounds, and the epoch the seeded fixture rows carry.
     expect(payload?.authenticatedAt).toBe(Math.floor(now.getTime() / 1000));
     expect(payload?.sessionEpoch).toBe(0);
   });
@@ -70,7 +70,7 @@ describe("mintSessionCookieValue — the @auth/core interop pin (issue 453)", ()
 });
 
 /**
- * The CDP delivery half of the fixture (issue 453): the helper that sets the
+ * The CDP delivery half of the fixture: the helper that sets the
  * session cookie must send exactly Network.setCookie with the session's
  * cookie name and the run's base URL, and must treat a DevTools-level
  * {success: false} as a hard error — a silently swallowed failure would leave
@@ -114,15 +114,15 @@ describe("setSessionCookie — the CDP delivery contract (issue 453)", () => {
 });
 
 /**
- * The server-side trust precondition the cookie delivery sits on top of
- * (issue 453): NextAuth v5 refuses to honor a session cookie for a host it
- * does not trust, and under `next start` (production) it grants that trust
- * only from the environment. The spawned measurement server must therefore
- * run with AUTH_TRUST_HOST=true, or every authed contract's request is
- * answered UntrustedHost and bounces to / — reading exactly like a rejected
- * session (measured live: the first gate run did exactly that). A caller
- * that already carries an explicit AUTH_TRUST_HOST keeps it: the helper must
- * never downgrade an explicit trust decision.
+ * The server-side trust precondition the cookie delivery sits on top of:
+ * NextAuth v5 refuses to honor a session cookie for a host it does not trust,
+ * and under `next start` (production) it grants that trust only from the
+ * environment. The spawned measurement server must therefore run with
+ * AUTH_TRUST_HOST=true, or every authed contract's request is answered
+ * UntrustedHost and bounces to / — reading exactly like a rejected session
+ * (measured live against this gate). A caller that already carries an
+ * explicit AUTH_TRUST_HOST keeps it: the helper must never downgrade an
+ * explicit trust decision.
  */
 describe("spawnedServerEnv — the spawned server's host trust (issue 453)", () => {
   it("grants the host trust a production server refuses to assume for itself", () => {
@@ -150,11 +150,11 @@ describe("spawnedServerEnv — the spawned server's host trust (issue 453)", () 
 });
 
 /**
- * The gate process's own .env loading (issue 453, round 4). The spawned
- * `next start` loads the repo-root .env family for itself, but the run's
- * seeding and secret reads happen in THIS process — after the branch added
- * authed contracts, a preflight-passing .env-only run threw "OVERFLOW_DATABASE_URL is
- * not set" from the very variable the preflight had just declared satisfied.
+ * The gate process's own .env loading. The spawned `next start` loads the
+ * repo-root .env family for itself, but the run's seeding and secret reads
+ * happen in THIS process — without this loading, a preflight-passing .env-only
+ * run with authed contracts throws "OVERFLOW_DATABASE_URL is not set" from the
+ * very variable the preflight has just declared satisfied.
  * The semantics are the db:migrate precedent (node's --env-file-if-exists):
  * .env at the repo root only, a missing file is a no-op, and an
  * already-exported variable wins.
@@ -258,7 +258,7 @@ describe("loadRepoEnvFile — the gate process's own .env (issue 453 round 4)", 
 });
 
 /**
- * The signed-in contract's secret read (issue 555). The refusal must name
+ * The signed-in contract's secret read. The refusal must name
  * both the variable and the document that lists the requirement: a message
  * that omits either leaves a repro on CONTRIBUTING's verification chain
  * guessing at the name or the remedy. Exported for these tests under the
@@ -301,14 +301,14 @@ describe("fixtureAuthSecret — the signed-in contract's secret read (issue 555)
 });
 
 /**
- * The authed navigation's terminal landing states (issue 453 fix round 2).
- * A rejected session bounces to / or /session?reason=..., and a session the
- * ledger admits at the WRONG ROLE bounces to /dashboard (the role is
- * re-read from the database; /moderation redirects non-moderators there).
- * Every bounce must settle the poll and fail the ROW as a render failure
- * naming the landed URL — the original predicate knew only / and /session*,
- * so a /dashboard bounce burned the full 30s timeout and aborted the run
- * with no row and no diagnosis (reviewer-proven against this exact gate).
+ * The authed navigation's terminal landing states. A rejected session
+ * bounces to / or /session?reason=..., and a session the ledger admits at the
+ * WRONG ROLE bounces to /dashboard (the role is re-read from the database;
+ * /moderation redirects non-moderators there). Every bounce must settle the
+ * poll and fail the ROW as a render failure naming the landed URL: a predicate
+ * that knew only / and /session* would let a /dashboard bounce burn the full
+ * 30s timeout and abort the run with no row and no diagnosis (proven against
+ * this exact gate).
  */
 describe("authedLandingState — the authed navigation's terminal landing states (issue 453)", () => {
   const target = "http://127.0.0.1:3219/moderation";

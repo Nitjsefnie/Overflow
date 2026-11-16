@@ -308,7 +308,7 @@ describe("GitHubGateway REST transport", () => {
   });
 });
 
-// Issue 878: a label walk ends only when the instance stops advertising a
+// A label walk ends only when the instance stops advertising a
 // continuation, and a rel="next" that is fresh on EVERY response is not a
 // repeated one, so nothing about the Link header itself can stop it. The bound
 // is what makes such a walk terminate, and it terminates it loudly.

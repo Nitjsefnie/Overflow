@@ -643,9 +643,9 @@ describe("rationale comment edits", () => {
     expect(result.policyViolations).toEqual([]);
   });
 
-  // Issue 297: the wording never decided anything, so a comment whose body
-  // omits the label is edited evidence all the same — the edit check follows
-  // candidacy, and candidacy no longer reads the body.
+  // The wording decides nothing, so a comment whose body omits the label is
+  // edited evidence all the same — the edit check follows candidacy, and
+  // candidacy does not read the body.
   it("reports the edit violation even when the comment never named the label", () => {
     const snapshot = evidenceFixture();
     snapshot.issues[0]!.comments[0]!.body = "Looks fine.";

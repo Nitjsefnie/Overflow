@@ -548,7 +548,7 @@ describe("PostgreSQL account moderation transitions", () => {
     expect(toIso(row.unregistered_at)).toBe(unregisteredAt);
   });
 
-  // Issue 1072: the reversal route must reactivate exactly the repositories a
+  // The reversal route must reactivate exactly the repositories a
   // sanction deactivated, so the deactivation records which rows it flipped.
   // The flag lands only on rows the statement actually flipped: already-inactive
   // rows keep whatever their history gives them — null when moderation never
@@ -563,7 +563,7 @@ describe("PostgreSQL account moderation transitions", () => {
     const unregisteredAfterStampRepositoryId = await insertRepository(targetId);
     const unregisteredBeforehandRepositoryId = await insertRepository(targetId);
     const preChangeInactiveRepositoryId = await insertRepository(targetId);
-    // A pre-change row deactivated for no recorded reason (migration 060 does not
+    // A row deactivated for no recorded reason before migration 060 (which does not
     // backfill: such a row cannot be attributed) starts inactive with a null flag.
     await sql`
       update registered_repositories
@@ -659,7 +659,7 @@ describe("PostgreSQL account moderation transitions", () => {
     expect(await sanctionDeactivatedAt(unregisteredAfterStampRepositoryId)).toBe(stampedFlagInstant);
   });
 
-  // Issue 1072: the moderator's ban reversal reactivates exactly the rows the
+  // The moderator's ban reversal reactivates exactly the rows the
   // sanction flagged — a row inactive for any other reason, and a row the
   // sponsor left after the sanction, stay inactive — clears the flag on what
   // it reactivates, records the BANNED → ACTIVE event with the moderator's
@@ -907,9 +907,9 @@ describe("PostgreSQL account moderation transitions", () => {
     const liveModeratorId = await insertUser("MODERATOR");
     const deletedModeratorId = await insertUser("MODERATOR");
 
-    // The pre-fix deleted shape: the row keeps role MODERATOR across deletion.
-    // Planted directly, so this case holds for rows deleted before the fix
-    // shipped, not only for rows the fixed scrub writes.
+    // A deleted row that keeps role MODERATOR across deletion, as an older scrub left it.
+    // Planted directly, so this case holds for rows an older scrub deleted,
+    // not only for rows the current scrub writes.
     await sql`update users set deleted_at = now() where id = ${deletedModeratorId}`;
 
     // Earlier cases in this file leave live MODERATOR rows behind; the roster
@@ -1063,9 +1063,9 @@ describe("PostgreSQL account moderation transitions", () => {
     const deletedModeratorId = await insertUser("MODERATOR");
     const store = new PostgresModerationStore(sql);
 
-    // The pre-fix deleted shape: the row keeps role MODERATOR across deletion.
-    // Planted directly, so this case holds for rows deleted before the fix
-    // shipped, not only for rows the fixed scrub writes.
+    // A deleted row that keeps role MODERATOR across deletion, as an older scrub left it.
+    // Planted directly, so this case holds for rows an older scrub deleted,
+    // not only for rows the current scrub writes.
     await sql`update users set deleted_at = now() where id = ${deletedModeratorId}`;
 
     // Earlier cases in this file leave live MODERATOR rows behind; the guard

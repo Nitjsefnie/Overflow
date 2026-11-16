@@ -653,9 +653,9 @@ describe("db-offhost-backup.sh discord posting", () => {
   });
 
   it("lets the connector's stderr reach the journal, so a bring-up death names its cause", () => {
-    // The incident shape (#1106): a connector that starts and never comes
-    // up. Its own stderr carries the reason; discarding it is what left the
-    // journal with only the final failure line and not the cause.
+    // A connector that starts and never comes up. Its own stderr carries
+    // the reason, which the script must keep: discarding it leaves the journal
+    // with only the final failure line and not the cause.
     const run = runBackup({ listRc: 1, connectorMute: true });
 
     expect(run.status).not.toBe(0);

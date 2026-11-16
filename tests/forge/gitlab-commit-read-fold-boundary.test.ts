@@ -29,11 +29,11 @@ afterEach(() => { vi.unstubAllGlobals(); });
  * `finalCommitAt` the settlement-evidence window reads, so a credential
  * failure on that read must reach the fold/reconcile caller as the credential
  * failure it is — never as a completed run whose fold was computed with
- * `finalCommitAt = null`, the shape the swallowed error used to produce (the
- * selector then silently refused the merge request). The inner gateway is the
- * real GitLabGateway over a stubbed transport, so the statuses are the ones
- * the wire produces, and the whole reconciliation runs end-to-end through
- * `reconcileRepositoryAsSponsor` over a planted store.
+ * `finalCommitAt = null` (the selector would then silently refuse the merge
+ * request). The inner gateway is the real GitLabGateway over a stubbed
+ * transport, so the statuses are the ones the wire produces, and the whole
+ * reconciliation runs end-to-end through `reconcileRepositoryAsSponsor` over
+ * a planted store.
  */
 describe("a credential failure on the GitLab MR commits read never folds a settlement", () => {
   const INSTANCE = "https://gitlab.example.com";
@@ -208,9 +208,9 @@ describe("a credential failure on the GitLab MR commits read never folds a settl
         expect(mark).toHaveBeenCalledExactlyOnceWith("identity-1");
         expect(failRun).toHaveBeenCalledExactlyOnceWith("run-1", FORGE_CREDENTIAL_REJECTED_RUN_MESSAGE, null);
         expect(inspect(failRun.mock.calls)).not.toContain("glpat-sponsor-secret");
-        // The old behavior's signature: a completed run whose fold was computed
-        // with finalCommitAt = null (the selector then silently refused the
-        // merge request). The credential failure must leave nothing behind.
+        // Forbidden shape: a completed run whose fold was computed with
+        // finalCommitAt = null (the selector would then silently refuse the merge
+        // request). The credential failure must leave nothing behind.
         expect(materialize).not.toHaveBeenCalled();
         expect(completeRun).not.toHaveBeenCalled();
       } finally {

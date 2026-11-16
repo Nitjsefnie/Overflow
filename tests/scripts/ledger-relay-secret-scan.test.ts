@@ -16,19 +16,19 @@ import {
 } from "../../scripts/ledger-relay.ts";
 
 /**
- * Issue 1034: the secret scan is a required context. The pin lives in
+ * The secret scan is a required context. The pin lives in
  * .github/required-checks.json as a LIST pin naming both producer files
- * (issue 1090's split shape: a `pull_request_target` leg and a push leg), and
+ * (one `pull_request_target` leg and one push leg), and
  * tests/scripts/ledger-relay.test.ts holds the relay's generic contract with
  * deliberately test-local maps — it is also near the size ceiling, so new
  * secret-scan relay coverage lands here instead.
  *
- * Unlike the older suite, the map-dependent assertions below read the COMMITTED
- * map, so unpinning secret-scan fails here for a readable reason instead of
+ * The map-dependent assertions below read the committed map, so unpinning
+ * secret-scan fails here for a readable reason instead of
  * silently demoting the scan back to a forward-wired producer.
  *
  * Fixtures are synthetic throughout: producer names and job records only, no
- * real secret ever appears (issue 1034 ground rule).
+ * real secret ever appears.
  */
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));

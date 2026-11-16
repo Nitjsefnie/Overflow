@@ -14,7 +14,7 @@ import {
 import { decideContexts } from "../../scripts/ledger-relay.ts";
 
 /**
- * The orphan sweep (issue 885), the ledger relay's third duty.
+ * The orphan sweep, the ledger relay's third duty.
  *
  * GitHub keeps at most one PENDING run per concurrency group and cancels the
  * previous pending run whenever a newer one arrives — whatever
@@ -46,10 +46,10 @@ const PIN_MAP = {
 };
 
 /**
- * One context pinned to TWO workflow paths — the shape issue 1090's split
- * produces. Every event row below drives the all-string PIN_MAP, so nothing in
- * this file reached the sweep's trusted-producer filter through a list pin until
- * the suite that follows; the mirror's equivalent filter is pinned at
+ * One context pinned to TWO workflow paths — the shape a split producer
+ * produces. Every event row below drives the all-string PIN_MAP, so the
+ * sweep's trusted-producer filter is reached through a list pin only in the
+ * suite that follows; the mirror's equivalent filter is pinned at
  * tests/scripts/ledger-relay.test.ts.
  */
 const TWO_PATH_PIN_MAP = {
@@ -190,13 +190,13 @@ describe("selectSweepCandidates", () => {
     expect(selected.map((entry) => entry.runId)).toEqual(["9013", "9012", "9011", "9010"]);
   });
 
-  // Issue 1090's shape, at the sweep's own door. Flattening list pins is what
-  // makes a SECOND producer path reach this filter for the first time, so the
-  // filter has to be pinned on the new shape and not only on the all-string
-  // map every row above drives: a sweep that treated a list-pinned path as
-  // already vetted would hand an untrusted run to an App-owned check-run POST,
-  // which is the one thing the sweep must never do — it would attest a required
-  // context from a run that executed a definition a pull request could shape.
+  // A list pin, at the sweep's own door. Flattening list pins makes a SECOND
+  // producer path reach this filter, so the filter has to be pinned on that
+  // shape and not only on the all-string map every row above drives: a sweep
+  // that treated a list-pinned path as already vetted would hand an untrusted
+  // run to an App-owned check-run POST, which is the one thing the sweep must
+  // never do — it would attest a required context from a run that executed a
+  // definition a pull request could shape.
   it("refuses an untrusted run at a SECOND pinned path", () => {
     const selected = selectSweepCandidates(
       [
@@ -390,11 +390,11 @@ const jobsUrl = (runId: string) =>
  * local stand-in.
  *
  * A hand-written decide that ignores `runConclusion` cannot catch the sweep
- * passing the wrong conclusion — and that is exactly the mutant that survived
- * this suite in review: hardcoding `"success"` into the decide call left every
- * test green, because every fixture's conclusion was `"success"` and the stand-in
- * never read the field at all. The real decider reads it on the no-jobs branch,
- * which is where a producer run cancelled before it created any job lands.
+ * passing the wrong conclusion: against such a stand-in, hardcoding
+ * `"success"` into the decide call survives every all-success fixture, because
+ * the stand-in never reads the field at all. The real decider reads it on the
+ * no-jobs branch, which is where a producer run cancelled before it created any
+ * job lands.
  */
 const deps = (api: SweepApi, over: Record<string, unknown> = {}) => ({
   api,

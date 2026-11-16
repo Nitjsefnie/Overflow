@@ -1218,14 +1218,14 @@ describe.each([
 
 describe("a diff-only repository's re-derivation re-derives under the sweep request budget", () => {
   /**
-   * Item 5a of the diff-only reconciliation plan: a REDERIVATION job of a
-   * repository whose sponsor's backlog is strictly over the threshold runs as
-   * one full re-deriving pass inside the sweep request budget — charged to its
-   * sponsor, held at the limit, deferred to that sponsor's reset — while an
-   * under-threshold repository's re-derivation stays exactly what it was:
-   * never full, never charged, never held. Every leg drives the real spend
-   * path: the gateway is the real client, whose request wrappers call the
-   * budget check that spends from the wrapped sponsor's round.
+   * A REDERIVATION job of a repository whose sponsor's backlog is strictly
+   * over the threshold runs as one full re-deriving pass inside the sweep
+   * request budget — charged to its sponsor, held at the limit, deferred to
+   * that sponsor's reset — while an under-threshold repository's
+   * re-derivation stays exactly what it was: never full, never charged, never
+   * held. Every leg drives the real spend path: the gateway is the real
+   * client, whose request wrappers call the budget check that spends from the
+   * wrapped sponsor's round.
    */
   // The legs below sit at the code default diff-only threshold,
   // DEFAULT_DIFF_ONLY_BACKLOG, and one over it: over runs full and charged, at

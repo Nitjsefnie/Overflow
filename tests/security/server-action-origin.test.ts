@@ -12,7 +12,7 @@ import { foreignOrigin, trustedOrigin, useTrustedOrigin } from "../support/trust
 afterAll(() => { vi.resetModules(); });
 
 /**
- * Issue 700: Next's own server-action origin check compares only the Origin
+ * Next's own server-action origin check compares only the Origin
  * HOST against the request's (forwarded) host, so a client that names a
  * foreign host in Host or X-Forwarded-Host runs the action under a foreign
  * Origin. The app guard below is the same trusted-origin comparison the

@@ -4,8 +4,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 afterAll(() => { vi.resetModules(); });
 
 /**
- * Issue 599, at the framework boundary: the authorization URL the pinned
- * Auth.js actually builds for each sign-in, from Overflow's real provider
+ * The authorization URL the pinned Auth.js actually builds for each sign-in,
+ * tested at the framework boundary from Overflow's real provider
  * configuration. Nothing of Auth.js is mocked — `signIn` with
  * `redirect: false` runs `@auth/core`'s sign-in action and returns the URL
  * it would redirect the browser to. Only Next's request context

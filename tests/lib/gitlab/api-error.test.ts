@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { GitLabApiError, isUnclassifiedGitLabFailure } from "@/lib/gitlab/api-error";
 
-// Issue 892: the labels route's GitLab arm logs exactly the failures no arm
+// The labels route's GitLab arm logs exactly the failures no arm
 // of its classification explains. This file pins the REAL predicate's set —
 // the route defines it (401/403 → 403 FORBIDDEN, 404 → 404 NOT_FOUND, 429 →
 // 429 RATE_LIMITED), so anything else is unclassified and worth recording:

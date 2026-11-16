@@ -11,13 +11,13 @@ import {
 } from "../support/public-destination-harness";
 
 /**
- * The identity link's default transport (issue 905), at the boundary
+ * The identity link's default transport, at the boundary
  * `src/lib/forge/identities.ts` reaches for: what it refuses before it opens a
  * socket, and the size of the answers it will hold.
  *
  * The harness — the deny-list environment's lifecycle, the public stand-in a
- * case addresses and its route to a loopback listener, the refusal assertion —
- * is `tests/support`, shared with `public-destination-deployment.test.ts`;
+ * case addresses and its route to a loopback listener, the refusal assertion
+ * — is `tests/support`, shared with `public-destination-deployment.test.ts`;
  * that suite owns the host's own address refusal, which is this same wiring
  * seen from the deployment side.
  */

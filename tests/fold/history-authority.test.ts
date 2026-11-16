@@ -79,7 +79,7 @@ describe("repository fold history authority", () => {
     expect(result.settlements[0]).toMatchObject({ status: "UNSETTLED", settledPoints: null, credits: 0 });
   });
 
-  // A sponsor comment inside the window is the rationale (issue 297); whether
+  // A sponsor comment inside the window is the rationale; whether
   // it restates the label text never decided anything about agreement.
   it("settles from a nonblank owner rationale that never names the label", () => {
     const snapshot = historySnapshot();

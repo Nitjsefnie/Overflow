@@ -281,7 +281,7 @@ describe("ratchet check against a real git repository", () => {
     expect(result.stdout).toContain("ok");
   });
 
-  // The push shape (issue 701): the previous tip of main is a direct
+  // The push shape: the previous tip of main is a direct
   // ancestor of the pushed head, so the merge base is the previous tip
   // itself and the comparison is the pushed commit against the main it
   // replaced. The base is passed as a resolved SHA, the way the workflow

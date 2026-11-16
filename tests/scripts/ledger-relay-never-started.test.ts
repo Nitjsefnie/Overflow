@@ -10,7 +10,7 @@ import {
 } from "../../scripts/ledger-relay.ts";
 
 /**
- * The rerun-heal's never-started recognition (issue 1037): a cancellation
+ * The rerun-heal's never-started recognition: a cancellation
  * caused by supersession is healed, a deliberate cancellation stays cancelled.
  * Only runs that never started are re-dispatched. The recognition rule: a run
  * whose `run_started_at` names a time — or whose job listing holds any started

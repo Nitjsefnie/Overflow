@@ -17,7 +17,7 @@ export function appSuiteListing(url: string): { total_count: number; check_suite
 
 /**
  * The relay's own run: every start reads its job's started_at through the
- * workflow token before any write (issue 1195), so every harness carries
+ * workflow token before any write, so every harness carries
  * these env values and answers that read with a job that has just started.
  */
 export const RELAY_OWN_RUN_ENV = {

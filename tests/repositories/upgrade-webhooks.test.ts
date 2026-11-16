@@ -279,7 +279,7 @@ describe("existing registration webhook upgrade", () => {
     expect(f.outcomes).toEqual([outcome("FAILED", "NOT_ATTEMPTED", "SUBSCRIPTION_FAILED")]);
   });
 
-  // The GitLab arm (issue 547): provider 'gitlab' + a webhook id verifies the
+  // The GitLab arm: provider 'gitlab' + a webhook id verifies the
   // hook through the sponsor's forge-identity token for the registration's
   // own instance, then queues the same rederivation the GitHub arm queues.
   it("verifies a GitLab registration's hook through the forge identity and queues repair", async () => {

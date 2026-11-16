@@ -9,7 +9,7 @@ import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
 /**
- * Issue 1362: GitHub reconciliation authenticates with the repository sponsor's
+ * GitHub reconciliation authenticates with the repository sponsor's
  * stored OAuth token only. Both production wirings run with every App variable
  * still set (production keeps them but reads none): a fold must reach no
  * installation or access-token endpoint and read with the sponsor's token.
@@ -124,7 +124,7 @@ for (const wiring of ["worker", "cli"] as const) {
       expect(requests.map(({ path }) => path)).toEqual(["/repositories/4242"]);
       expect(requests[0]).toMatchObject({ method: "GET", authorization: `Bearer ${sponsorToken}` });
       expect(oauth).toHaveBeenCalledExactlyOnceWith("sponsor-1");
-      // Nothing journals an authentication path any more.
+      // Nothing journals an authentication path.
       expect(authWrite).not.toHaveBeenCalled();
     });
   });

@@ -13,7 +13,7 @@ import { GitHubGraphqlRequestError } from "@/lib/github/errors";
 const pairs = (...ids: string[]) => ids.map((id) => ({ repositoryId: id, sponsorId: "sponsor" }));
 
 /**
- * The sweep's repository size measure (issue 1360): the count read is NOT the
+ * The sweep's repository size measure: the count read is NOT the
  * list query. At this layer the measure dependency stands in for the forge
  * count read; the request-shape pins (count-only, closed items included) live
  * on the forge client suites that drive the real gateways.
@@ -216,11 +216,10 @@ describe("the sweep's diff-only rotation filter", () => {
   });
 
   /**
-   * Item 4 of the diff-only reconciliation plan: a sponsor whose stored backlog
-   * is strictly over the diff-only threshold gets NO sweep slot — its
-   * repositories leave the rotation so a queued webhook job keeps its reason
-   * instead of being upgraded to a full sweep. An under-threshold sponsor
-   * rotates exactly as before.
+   * A sponsor whose stored backlog is strictly over the diff-only threshold
+   * gets NO sweep slot — its repositories leave the rotation so a queued webhook
+   * job keeps its reason instead of being upgraded to a full sweep. An
+   * under-threshold sponsor rotates normally.
    */
   it("offers a sponsor over the backlog threshold no slot and still rotates an under-threshold sponsor", async () => {
     const offered: string[] = [];
@@ -333,7 +332,7 @@ describe("the sweep's diff-only rotation filter", () => {
 
 describe("a repository the forge no longer returns", () => {
   /**
-   * Issue 1422: the measure's own failure does not say whether the repository
+   * The measure's own failure does not say whether the repository
    * is gone (a by-name NOT_FOUND is also what a rename answers), so only the
    * by-id lookup answering 404 with the sponsor's credential does. These cases
    * run the real measure and gone-check compositions over a recorded forge.
@@ -486,7 +485,7 @@ describe("a repository the forge no longer returns", () => {
       onFailure: (repositoryId, error) => { reported.push({ repositoryId, error }); },
     });
     // The count answered, so the repository is back; only its write failed,
-    // and that failure is reported as before.
+    // and that failure is still reported.
     expect(reported).toEqual([{ repositoryId: "gone-repo", error: writeFailure }]);
     expect(summary).toMatchObject({ measured: 0, measureFailed: 1, gone: 0 });
     expect(foundAt.has("gone-repo")).toBe(false);

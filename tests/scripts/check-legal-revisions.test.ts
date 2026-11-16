@@ -688,9 +688,9 @@ describe("the gate's command line", () => {
   });
 
   it("exits 1 over a violating range, naming the sha and the revision-record line", async () => {
-    // The false positive this issue was filed for: the page's rendered text is
-    // untouched, but nothing but a `Legal-Text: unchanged` claim can say so,
-    // and without that claim the commit is a violation.
+    // A commit that leaves the page's rendered text untouched is a violation
+    // unless it carries a `Legal-Text: unchanged` claim: nothing else can say
+    // so.
     const fixture = await createGateFixture();
     try {
       const baseSha = await fixture.commit("base\n\nFixture base.\n", {
@@ -862,11 +862,10 @@ describe("the gate's command line", () => {
   });
 
   it("exits 0 over a legal-page change carrying a well-formed exemption marker", async () => {
-    // LEG 1 — the false positive this gate shipped with. A behaviour-preserving
-    // edit to a legal page (the import relocated, the text identical) carrying
-    // a justified marker must pass, and the pass must SAY it was exempted, with
-    // the sha and the justification, on a stream a reader cannot mistake for
-    // the success line.
+    // LEG 1 — a behaviour-preserving edit to a legal page (the import
+    // relocated, the text identical) carrying a justified marker must pass,
+    // and the pass must SAY it was exempted, with the sha and the
+    // justification, on a stream a reader cannot mistake for the success line.
     const fixture = await createGateFixture();
     try {
       const baseSha = await fixture.commit("base\n\nFixture base.\n", {
@@ -1007,7 +1006,7 @@ describe("the gate's command line", () => {
   });
 
   it("exits 1 over a governing-law rewrite whose only marker is inside a fence", async () => {
-    // The end-to-end shape the fenced-block gap was demonstrated with: a commit
+    // The end-to-end case for a marker inside a fenced block: a commit
     // that DOCUMENTS the marker and rewrites the governing law at the same time.
     // The documentation example must not exempt the rewrite.
     const fixture = await createGateFixture();
@@ -1042,7 +1041,7 @@ describe("the gate's command line", () => {
   });
 
   it("exits 1 when the claim is wrapped into the subject instead of the body", async () => {
-    // The end-to-end shape the `indexOf("\n")` mutant was demonstrated with: a
+    // The end-to-end case that catches the `indexOf("\n")` mutant: a
     // real effective-date change whose claim sits on the third line of a wrapped
     // subject. The subject wraps onto three lines on purpose — see the grammar
     // tests above for why a two-line subject cannot tell the two apart. Splitting

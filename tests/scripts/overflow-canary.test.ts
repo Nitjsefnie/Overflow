@@ -255,9 +255,8 @@ async function startSmtp(options: {
                 `${messageId} ** bounce: <canary@example.test>: 550 5.1.1 mailbox unavailable`,
               );
             } else if (options.outcome === "terminal") {
-              // A bare terminal outcome with no defer in front of it. The
-              // suite previously wrote only `** defer` lines, so nothing
-              // pinned what a terminal verdict does on its own.
+              // A bare terminal outcome with no defer in front of it,
+              // pinning what a terminal verdict does on its own.
               messages.push(bufferedData.join("\r\n"));
               bufferedData = [];
               logLine(

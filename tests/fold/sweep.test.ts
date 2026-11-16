@@ -955,8 +955,8 @@ describe("scheduled reconciliation sweep", () => {
     // run output and gives the failure a second thing to say.
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     // Declared as a method that reaches its own object through `this`, which is
-    // the form the type's method syntax invites and the receiver the property
-    // access used to supply for free.
+    // the form the type's method syntax invites and the receiver a plain property
+    // access supplies for free.
     const dependencies = {
       failures: [] as Array<{ repositoryId: string; error: unknown }>,
       listActiveRepositorySponsors: async () => pairs("repo-a"),
@@ -1232,8 +1232,7 @@ describe("scheduled reconciliation sweep", () => {
     const unwired = new Error("The scheduler is not wired up yet");
     let sweeps = 0;
     // A lazily wired scheduler: the accessor throws until whatever owns the
-    // timer is configured. Reading the member used to be the first thing the
-    // scheduler did, which cost the startup sweep as well as the interval.
+    // timer is configured.
     const schedule = {
       runSweep: async () => {
         sweeps += 1;
@@ -1324,8 +1323,8 @@ describe("scheduled reconciliation sweep", () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     let sweeps = 0;
     // Declared as a method that reaches its own object through `this`, which is
-    // the form the type's method syntax invites and the receiver the property
-    // access used to supply for free.
+    // the form the type's method syntax invites and the receiver a plain property
+    // access supplies for free.
     const schedule = {
       armed: [] as Array<{ callback: () => void; everyMs: number }>,
       runSweep: async () => {
@@ -1390,10 +1389,9 @@ describe("scheduled reconciliation sweep", () => {
 
   it("runs the startup sweep before it tries to arm anything", async () => {
     // The startup sweep is the pass that repairs the deliveries missed while the
-    // server was down, and it used to sit behind a retrieval that could throw. A
-    // console that fails is what makes the order observable: reporting an
-    // unusable scheduler is fatal there, deliberately, so for the sweep to have
-    // run it has to have run first.
+    // server was down. A console that fails is what makes the order observable:
+    // reporting an unusable scheduler is fatal there, deliberately, so for the
+    // sweep to have run it has to have run first.
     const logged = vi.spyOn(console, "error").mockImplementation(() => {
       throw new TypeError("The console cannot report at all");
     });
@@ -1493,8 +1491,8 @@ describe("scheduled reconciliation sweep", () => {
   });
 
   it("runs the startup sweep before it reads intervalMs", async () => {
-    // The same proof the scheduler member gets, applied to the read that used to
-    // sit above the startup sweep. A console broken at every arity is fatal here,
+    // The same proof the scheduler member gets, applied to the intervalMs read,
+    // which comes after the startup sweep. A console broken at every arity is fatal here,
     // deliberately, so for the sweep to have run it has to have run first — and
     // nothing is armed, because the throw leaves before arming.
     const logged = vi.spyOn(console, "error").mockImplementation(() => {
@@ -1910,8 +1908,7 @@ function createTimer() {
 
 // The fallback that prints when the reporter cannot even be read renders the
 // enqueue failure raw — the error's message can carry the hostile payload —
-// so the fallback argument is the encoded token, one line, no raw escape
-// (issue 1042).
+// so the fallback argument is the encoded token, one line, no raw escape.
 describe("fallback log encoding (issue 1042)", () => {
   it("renders a hostile enqueue failure as one encoded token when the reporter cannot be read", async () => {
     const hostile = "enqueue\nPrivileged action {\n  action: 'moderator-role.grant'\n}\n\u001b[2J\u001b[31mspoofed";

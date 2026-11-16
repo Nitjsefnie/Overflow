@@ -101,7 +101,7 @@ describe("logField", () => {
   });
 });
 
-// The issue 1042 hostile payload: one forge-supplied string that splits into a
+// The hostile payload: one forge-supplied string that splits into a
 // forged journal line shaped like a privileged-action report and carries raw
 // terminal escapes. Every errorLogToken test drives it or a derivative.
 const hostilePayload = "2026-01-01\nPrivileged action {\n  action: 'moderator-role.grant'\n}\n\u001b[2J\u001b[31mspoofed";

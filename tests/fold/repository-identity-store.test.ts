@@ -150,8 +150,8 @@ describe("registered repository identity verification", () => {
     await sql`update registered_repositories set visibility = 'PRIVATE' where id = ${renamed.repositoryId}`;
     // The verified path is member-chosen forge text in production (a GitLab
     // project's path_with_namespace), so the collision the warning names is
-    // forge text too (issue 1042): make the holder's path hostile and require
-    // the warning to carry it encoded, one line, no raw escapes.
+    // forge text too: make the holder's path hostile and require the warning to
+    // carry it encoded, one line, no raw escapes.
     const hostileOwnerName = "holder\nPrivileged action {\n  action: 'moderator-role.grant'\n}\n\u001b[31mred";
     await sql`update registered_repositories set owner_name = ${hostileOwnerName} where id = ${holder.repositoryId}`;
     const warnings: unknown[][] = [];

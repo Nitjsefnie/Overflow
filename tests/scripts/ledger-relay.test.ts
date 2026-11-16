@@ -17,13 +17,12 @@ import {
 import { SWEEP_RUN_LIMIT } from "../../scripts/ledger-relay-sweep.ts";
 
 /**
- * The ledger relay (issue 708): decideContexts mirrors the triggering run's
- * producing jobs into per-context decisions; mintAppJwt shapes the GitHub App
- * JWT; runRelay mints an installation token, reads the jobs listing and posts
- * one check-run per pinned context — all through an injected fetch, never the
- * network. Issue 861 adds the rerun-heal: decideRerun is the pure decision,
- * and runRelay dispatches the rerun for a cancelled pending PR run at a live,
- * unmatched head.
+ * The ledger relay: decideContexts mirrors the triggering run's producing jobs
+ * into per-context decisions; mintAppJwt shapes the GitHub App JWT; runRelay
+ * mints an installation token, reads the jobs listing and posts one check-run
+ * per pinned context — all through an injected fetch, never the network. The
+ * rerun-heal: decideRerun is the pure decision, and runRelay dispatches the
+ * rerun for a cancelled pending PR run at a live, unmatched head.
  */
 
 const PATH_CI = ".github/workflows/ci.yml";
@@ -38,11 +37,10 @@ const PIN_MAP = {
 };
 
 /**
- * One context pinned to TWO workflow paths — the shape issue 1090's workflow
- * split produces, where a required context's pull-request leg and its push leg
- * live in separate files. Neither path here is a committed pin: the real
- * .github/required-checks.json stays all-strings until the split lands, so
- * every assertion below runs against a test-local map.
+ * One context pinned to TWO workflow paths — the shape a required context's
+ * pull-request leg and push leg take when they live in separate files. Neither
+ * path here is a committed pin: every assertion below runs against a test-local
+ * map.
  */
 const TWO_PATH_PIN_MAP = {
   verify: [PATH_CI, PATH_CI_PR],
@@ -63,7 +61,7 @@ function job(over: Partial<RelayJob>): RelayJob {
  * The pin map's shape, as the relay reads it. Two forms are legal per context:
  * the string every committed entry uses today, and a non-empty list of paths,
  * which is what a required context whose pull-request and push legs live in
- * separate workflow files has to name (issue 1090). An EMPTY list is refused:
+ * separate workflow files has to name. An EMPTY list is refused:
  * it is the shape that reads as "this context has no producer", which is the
  * condition the deploy gate refuses a map for and the relay must not mint a
  * token over.
@@ -339,11 +337,10 @@ describe("decideContexts", () => {
     expect(decisions.map((decision) => decision.context)).toEqual(["z-context", "a-context"]);
   });
 
-  // Issue 1090. Before the split every context had exactly one producing
-  // workflow, so pinning it to a single path was the whole contract. The split
-  // gives one context two producing workflows, and a pin that names only the
-  // first leaves the second path's runs relaying NOTHING — a silent no-op, not
-  // a red relay, because the second run's path simply matches no pin.
+  // A context with two producing workflows needs both paths pinned. A pin that
+  // names only the first leaves the second path's runs relaying NOTHING — a
+  // silent no-op, not a red relay, because the second run's path simply matches
+  // no pin.
   it("resolves the context from EITHER path a list pin names", () => {
     for (const runPath of [PATH_CI, PATH_CI_PR]) {
       const decisions = decideContexts(TWO_PATH_PIN_MAP, runPath, "success", [job({})]);
@@ -1255,7 +1252,7 @@ describe("runRelay", () => {
     });
   });
 
-  // --- A context pinned to two workflow paths (issue 1090) ---
+  // --- A context pinned to two workflow paths ---
 
   describe("a context pinned to two workflow paths", () => {
     it("relays the context for a run of EITHER path", async () => {
@@ -1291,12 +1288,10 @@ describe("runRelay", () => {
       // The narrowness pin, and the reason it is written against the SECOND
       // path rather than the first. Widening the pin map is a change to WHICH
       // runs relay a context; it must not become a change to WHICH runs may.
-      // Before this map existed, a pull_request run could never even reach the
-      // predicate — contextsFor matched nothing, so the relay returned quietly.
-      // Now that the second path matches, the predicate is the only thing
-      // between a run that executed a definition a pull request could shape
-      // and an App-owned check-run branch protection would merge on.
-      // LIVE listing: a live head keeps the throw (issue 1115).
+      // With the second path matched, the predicate is the only thing between a
+      // run that executed a definition a pull request could shape and an
+      // App-owned check-run branch protection would merge on.
+      // LIVE listing: a live head keeps the throw.
       const fetchStub = makeRefusalFetch([token(), fetchedRun(), pullsListing([pullEntry()])]);
       const error = await caughtError(
         runRelay({
@@ -1328,7 +1323,7 @@ describe("runRelay", () => {
       // context. A relay that grew to skip its trusted-producer check for a
       // run resolving "more than one" context would be skipped here, and this
       // repository has two contexts naming one path today.
-      // LIVE listing: a live head keeps the throw (issue 1115).
+      // LIVE listing: a live head keeps the throw.
       const fetchStub = makeRefusalFetch([token(), fetchedRun(), pullsListing([pullEntry()])]);
       const error = await caughtError(
         runRelay({
@@ -1386,7 +1381,7 @@ describe("runRelay", () => {
     });
   });
 
-  // --- The rerun-heal (issue 861) ---
+  // --- The rerun-heal ---
 
   const PULLS_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/commits/${HEAD_SHA}/pulls?per_page=100`;
   const RUNS_AT_HEAD_URL = `https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs?head_sha=${HEAD_SHA}&per_page=100`;
@@ -1541,11 +1536,10 @@ describe("runRelay", () => {
       expect(checkRun).toMatchObject({ name: "verify", conclusion: "failure" });
     });
 
-    // Issue 952: a cancelled attempt whose successor sat at `pending` got a
-    // rerun POST GitHub refused with 403 "This workflow is already running",
-    // and the relay run went red. Every status GitHub's workflow-run `status`
-    // enum can report while the run is live is pinned here, not just the two
-    // the queued/in_progress-only check knew about.
+    // Every status GitHub's workflow-run `status` enum can report while the run
+    // is live is pinned here. GitHub refuses a rerun POST of a cancelled attempt
+    // whose successor sits at `pending` with 403 "This workflow is already
+    // running", which turns the relay run red, so `pending` counts as live.
     for (const liveStatus of ["queued", "in_progress", "pending", "waiting", "requested"]) {
       it(`does not heal, and does not fail, when a newer attempt of the same workflow at the head is ${liveStatus}`, async () => {
         const fetchStub = makeFetch([
@@ -1861,14 +1855,14 @@ describe("runRelay", () => {
     });
   });
 
-  // --- Dead-head refusals (issue 1115) ---
+  // --- Dead-head refusals ---
 
   describe("dead-head refusals (issue 1115)", () => {
     const REFUSAL =
       `run ${RUN_ID} (event "pull_request", head branch "feature/some-branch") ` +
       "did not execute the base branch's workflow definition; no required context was relayed";
 
-    /** The incident's shape: a stale pull_request run of a closed same-repo PR. */
+    /** A stale pull_request run of a closed same-repo PR. */
     function untrustedWorkflowRunEnv(): Record<string, string> {
       return relayEnv({
         OVERFLOW_GITHUB_WORKFLOW_RUN_EVENT: "pull_request",
@@ -1891,9 +1885,9 @@ describe("runRelay", () => {
     }
 
     it("exits 0 through the workflow_run path when the refused run's head is dead, relaying nothing", async () => {
-      // The incident (issue 1115): a stale pull_request run of a closed
-      // same-repo PR, refused on the workflow_run path; a definitively empty
-      // liveness listing downgrades the refusal to the exit-0 no-op.
+      // A stale pull_request run of a closed same-repo PR, refused on the
+      // workflow_run path; a definitively empty liveness listing downgrades the
+      // refusal to the exit-0 no-op.
       const fetchStub = makeRefusalFetch([
         token(),
         fetchedRun({ event: "pull_request", head_branch: "feature/some-branch" }),
@@ -1959,9 +1953,9 @@ describe("runRelay", () => {
     });
 
     it("downgrades a dispatch-path fork head's refusal to the exit-0 no-op when the fork listing says dead (issue 1142)", async () => {
-      // Issue 1142 reverses the old fork throw: the owner comes from a
-      // second run-body fetch, the open pulls at `head=<owner>:<branch>`
-      // decide, and an empty listing is a dead head, so the refusal exits 0.
+      // The owner comes from a second run-body fetch, the open pulls at
+      // `head=<owner>:<branch>` decide, and an empty listing is a dead head, so
+      // the refusal exits 0.
       const forkPullsUrl =
         `https://api.github.com/repos/Nitjsefnie/Overflow/pulls?state=open` +
         `&head=${encodeURIComponent("someone-else:feature/some-branch")}&per_page=100`;
@@ -1986,9 +1980,9 @@ describe("runRelay", () => {
     });
 
     it("downgrades a workflow_run fork head's refusal to the exit-0 no-op when the fork listing says dead (issue 1142)", async () => {
-      // Issue 1142 reverses the old throw: the run body now also carries the
-      // fork's owner login, and the open pulls at `head=<owner>:<branch>`
-      // decide; an empty listing is a dead head, so the refusal exits 0.
+      // The run body also carries the fork's owner login, and the open pulls at
+      // `head=<owner>:<branch>` decide; an empty listing is a dead head, so the
+      // refusal exits 0.
       const forkPullsUrl =
         `https://api.github.com/repos/Nitjsefnie/Overflow/pulls?state=open` +
         `&head=${encodeURIComponent("someone-else:feature/some-branch")}&per_page=100`;
@@ -2048,7 +2042,7 @@ describe("runRelay", () => {
     });
   });
 
-  // --- The orphan sweep (issue 885) ---
+  // --- The orphan sweep ---
 
   const SWEEP_RUNS_URL = "https://api.github.com/repos/Nitjsefnie/Overflow/actions/runs?per_page=100";
   const CHECK_RUNS_AT_HEAD_URL = appChecksUrl("https://api.github.com/repos/Nitjsefnie/Overflow", HEAD_SHA);
@@ -2169,9 +2163,9 @@ describe("runRelay", () => {
       // The orphan is healed. This assertion is placed before the outcome
       // assertion on purpose: with no sweep in place, `result.sweep` does not
       // exist at all, and a TypeError reading it would reproduce "the sweep is
-      // missing" rather than the defect this issue filed — that no App
-      // check-run exists for the orphaned completion, which branch protection
-      // reads as "was not set by the expected GitHub app".
+      // missing" rather than the defect under test — that no App check-run
+      // exists for the orphaned completion, which branch protection reads as
+      // "was not set by the expected GitHub app".
       expect(
         bodiesOf(fetchStub.requests),
         "the orphaned completion 9002 must get its own actionlint check-run at its own head SHA",
@@ -2211,12 +2205,12 @@ describe("runRelay", () => {
     it("authenticates every sweep call as the App, the same as the mirror's", async () => {
       // The sweep's HTTP is assembled by sweepApi() in scripts/ledger-relay.ts,
       // and the sweep's own unit tests cannot see it: they inject their own
-      // SweepApi from a URL map, so the headers the production constructor
-      // puts on the wire were unasserted — dropping `...auth` from that
-      // constructor left every test green and would send each sweep read and
-      // write unauthenticated. This is the runRelay-level seam where the real
+      // SweepApi from a URL map. Dropping `...auth` from that constructor would
+      // leave every other test green and send each sweep read and write
+      // unauthenticated, so the headers the production constructor puts on the
+      // wire are asserted here. This is the runRelay-level seam where the real
       // constructor is in play, and it is where the neighbour the rerun-heal
-      // already pins (RUNS_AT_HEAD_URL) is pinned too.
+      // pins (RUNS_AT_HEAD_URL) is pinned too.
       const fetchStub = makeFetch([
         token(),
         jobsListing([job({})]),

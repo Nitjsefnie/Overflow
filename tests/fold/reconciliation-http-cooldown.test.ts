@@ -191,7 +191,7 @@ describe("real HTTP failures through reconciliation and PostgreSQL", () => {
 
       const callsAfterFailure = calls.length;
       const retry = () => reconcile(fixture.repositoryId);
-      // The queued job is the sweep's only vehicle now, so the cooldown decision
+      // The queued job is the sweep's only vehicle, so the cooldown decision
       // is the worker's; `folded` proves the worker claimed this repository's job
       // and not some other one left over in the queue.
       const workQueuedJob = async () => {

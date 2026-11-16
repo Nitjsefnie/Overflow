@@ -2,7 +2,7 @@
  * Every migration the schema suite expects to find applied, in name order.
  * `tests/db/schema.test.ts` asserts that `schema_migrations` holds exactly
  * these names, each once, so a new `db/migrations/NNN_*.sql` fails that suite
- * until it is named here too. Relocated from schema.test.ts so that file stays
+ * until it is named here too. Kept out of schema.test.ts so that file stays
  * under its recorded size (the size check offers exactly two
  * remedies: shrink, or relocate into a new module).
  */

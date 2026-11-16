@@ -16,14 +16,13 @@ vi.hoisted(() => { vi.resetModules(); });
 afterAll(() => { vi.resetModules(); });
 
 /**
- * The rename the fold has to survive, driven through the entry point that lost
- * the issue: `users.github_login` refreshes only when that user next signs in,
+ * The rename the fold has to survive, driven through the reconciliation entry
+ * point: `users.github_login` refreshes only when that user next signs in,
  * so it is stale for as long as the sponsor does not sign in again, while
  * GitHub reports the renamed account's CURRENT login as the author and as the
  * actor of every event it serves. Deciding who the sponsor is by login
  * therefore resolves no opening after the rename, the issue drops out of the
- * fold, and materialization deletes its row — the loss the run reported as
- * `COMPLETED` with nothing removed.
+ * fold, and materialization deletes its row.
  *
  * The suites either side of this one each hold one half: `sponsor-account-rename`
  * pins the predicate on a hand-built snapshot, `materialization-removals` pins

@@ -42,7 +42,7 @@ describe("opening label authority", () => {
     }]);
     expect(result.issues).toEqual([]);
     // The label was applied and is still on the issue — nothing is missing here,
-    // which is exactly what the old `OPENING_LABEL_MISSING` record contradicted.
+    // so an `OPENING_LABEL_MISSING` record would contradict it.
     expect(snapshot.issues[0]!.labels).toContain("M");
   });
 

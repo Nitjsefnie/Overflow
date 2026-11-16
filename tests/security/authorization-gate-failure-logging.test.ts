@@ -61,7 +61,7 @@ const routeGates = [
     gate: "moderator route gate",
     run: requiredModeratorSession,
     message: "Unable to authorize the moderator request.",
-    // The moderator gate also names the credential behind the action (issue 682).
+    // The moderator gate also names the credential behind the action.
     authorized: {
       user: { id: sessionUserId, role: "MODERATOR" },
       credential: { kind: "token", tokenId: sessionTokenId },

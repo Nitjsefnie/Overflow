@@ -154,7 +154,7 @@ describe("linkForgeIdentity", () => {
     const { store, upserts } = fakeStore();
     const { fetchImplementation } = fetchStub({
       [USER_URL]: FORGE_USER,
-      // read_user alone answers /user, which is the shape issue 529 is about.
+      // read_user alone answers /user, which is the shape this test covers.
       [SELF_URL]: { status: 200, body: { id: 7, name: "overflow", scopes: ["read_user"] } },
     });
     const rejection = await linkForgeIdentity(
