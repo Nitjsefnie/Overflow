@@ -2,12 +2,18 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { useTrustedOrigin } from "../support/trusted-origin";
 
 const signIn = vi.hoisted(() => vi.fn());
+const recordRegistrationAttempt = vi.hoisted(() => vi.fn().mockName("recordRegistrationAttempt"));
 
 vi.mock("@/auth", () => ({ signIn, auth: async () => null }));
+// The registration counter's real write would reach a database. The reset
+// drops a real copy an earlier file in this worker cached, so the double binds.
+vi.hoisted(() => { vi.resetModules(); });
+vi.mock("@/lib/stats/registration-attempts", () => ({ recordRegistrationAttempt }));
+afterAll(() => { vi.doUnmock("@/lib/stats/registration-attempts"); vi.resetModules(); });
 
 // The forms submit through the real server actions, which open with the origin
 // guard, so the request headers must name the trusted origin (useTrustedOrigin
@@ -24,6 +30,7 @@ import { OVERFLOW_OPENING_CATALOG } from "@/lib/opening-catalog-examples";
 describe("landing page", () => {
   afterEach(() => {
     signIn.mockReset();
+    recordRegistrationAttempt.mockClear();
     vi.unstubAllEnvs();
   });
 
@@ -108,6 +115,7 @@ describe("landing page", () => {
       { redirectTo: "/dashboard" },
       { scope: "" },
     ));
+    expect(recordRegistrationAttempt).not.toHaveBeenCalled();
   });
 
   // The maintainer action asks for webhook administration and returns to the
@@ -119,6 +127,7 @@ describe("landing page", () => {
     expect(registerButton.closest("form")).not.toBeNull();
     fireEvent.click(registerButton);
 
+    await waitFor(() => expect(recordRegistrationAttempt).toHaveBeenCalledExactlyOnceWith("REGISTRATION_START"));
     await waitFor(() => expect(signIn).toHaveBeenCalledExactlyOnceWith(
       "github",
       { redirectTo: "/repositories/new" },
