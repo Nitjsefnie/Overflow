@@ -1448,8 +1448,8 @@
     7089
   ],
   "tests/fold/opening-label-authority.test.ts": [
-    2885,
-    16589
+    2870,
+    16574
   ],
   "tests/fold/pre-registration-closures.test.ts": [
     2505,
@@ -1468,12 +1468,12 @@
     5242
   ],
   "tests/fold/sponsor-account-rename.test.ts": [
-    3703,
-    15199
+    3700,
+    15196
   ],
   "tests/fold/sponsor-rename-reconciliation.test.ts": [
-    3532,
-    15129
+    3474,
+    15107
   ],
   "tests/fold/sweep.test.ts": [
     12226,
@@ -1484,8 +1484,8 @@
     4943
   ],
   "tests/forge/gitlab-commit-read-fold-boundary.test.ts": [
-    1968,
-    9747
+    1926,
+    9705
   ],
   "tests/forge/gitlab-webhook-token.test.ts": [
     383,
@@ -1504,20 +1504,20 @@
     6461
   ],
   "tests/lib/display-instant-format.test.ts": [
-    2288,
-    6393
+    2260,
+    6365
   ],
   "tests/lib/eligible-issues-page.test.ts": [
-    558,
-    2640
+    522,
+    2604
   ],
   "tests/lib/failure-logger.test.ts": [
-    1267,
-    6782
+    1258,
+    6773
   ],
   "tests/lib/gitlab/api-error.test.ts": [
-    657,
-    1442
+    648,
+    1433
   ],
   "tests/lib/mcp-tools-parity.test.ts": [
     784,
@@ -1528,88 +1528,80 @@
     5711
   ],
   "tests/moderation/current-role.test.ts": [
-    781,
-    4481
+    756,
+    4492
   ],
   "tests/moderation/writer-credential.test.ts": [
     1575,
     3843
   ],
   "tests/repositories/error-catalog.test.ts": [
-    8753,
+    8744,
     45637
   ],
   "tests/scripts/check-page-geometry-board.test.ts": [
-    955,
-    5724
+    944,
+    6272
   ],
   "tests/scripts/check-page-geometry-launch.test.ts": [
-    3039,
-    12616
+    3010,
+    13067
   ],
   "tests/scripts/check-page-geometry-session.test.ts": [
-    4250,
-    14023
+    4154,
+    14098
   ],
   "tests/scripts/ledger-relay-app-key-rotation.test.ts": [
     1353,
     4862
   ],
   "tests/scripts/ledger-relay-check-fixtures.ts": [
-    408,
-    1718
+    397,
+    1716
   ],
   "tests/scripts/ledger-relay-fork.test.ts": [
-    2215,
-    12321
+    2060,
+    12166
   ],
   "tests/scripts/ledger-relay-mint-permissions.test.ts": [
-    2537,
-    15571
-  ],
-  "tests/scripts/ledger-relay-secret-scan.test.ts": [
-    1343,
-    8908
+    2495,
+    15826
   ],
   "tests/scripts/ledger-relay-sweep.test.ts": [
-    6525,
-    34727
+    6405,
+    34607
   ],
   "tests/scripts/ledger-relay-trusted-producer.test.ts": [
     567,
     1694
   ],
   "tests/security/github-authorization-url.test.ts": [
-    759,
-    4054
+    755,
+    4050
   ],
   "tests/security/identity-link-fetch.test.ts": [
-    1452,
-    3788
+    1442,
+    3778
   ],
   "tests/security/protected-resource-metadata.test.ts": [
     844,
     1371
   ],
   "tests/security/public-destination-deployment.test.ts": [
-    2311,
-    8923
+    2281,
+    8893
   ],
   "tests/security/server-action-origin.test.ts": [
-    1316,
-    7907
+    1307,
+    7952
   ],
   "tests/security/sign-in-actions.test.ts": [
-    679,
-    2457
-  ],
-  "tests/security/sign-out-action.test.ts": [
-    190,
-    1253
+    658,
+    2436
   ],
   "tests/support/advisory-lock-probe.ts": [
-    657,
-    1258
+    643,
+    1244
   ],
   "tests/support/console-guard.ts": [
     69,
@@ -1624,12 +1616,12 @@
     506
   ],
   "tests/support/global-setup.ts": [
-    2539,
-    4326
+    2447,
+    4234
   ],
   "tests/support/legacy-token-envelope.ts": [
-    195,
-    417
+    170,
+    392
   ],
   "tests/support/loopback-listener.ts": [
     792,
@@ -1640,8 +1632,8 @@
     6144
   ],
   "tests/support/postgres-container.ts": [
-    6332,
-    19323
+    6193,
+    19184
   ],
   "tests/support/public-destination-harness.ts": [
     2721,
@@ -1660,8 +1652,8 @@
     1879
   ],
   "tests/support/systemd-unit.ts": [
-    4685,
-    9087
+    4658,
+    9060
   ],
   "tests/support/trusted-origin.ts": [
     2074,
@@ -1676,15 +1668,15 @@
     1052
   ],
   "tests/webhooks/rate-limit.test.ts": [
-    2765,
-    11356
+    2754,
+    11345
   ],
   "vitest.config.ts": [
-    1242,
-    2052
+    1207,
+    2017
   ],
   "vitest.setup.ts": [
-    1737,
-    2324
+    1703,
+    2290
   ]
 }
