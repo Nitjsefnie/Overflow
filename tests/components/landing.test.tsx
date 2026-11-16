@@ -48,8 +48,7 @@ describe("landing page", () => {
     expect(hero.querySelectorAll(".landing-action-note")).toHaveLength(1);
     const notes = section.querySelectorAll(".landing-action-note");
     expect(notes).toHaveLength(2);
-    expect(Array.from(notes[0]!.querySelectorAll("code"), (element) => element.textContent))
-      .toEqual([GITHUB_REPOSITORY_REGISTRATION_SCOPE]);
+    expect(Array.from(notes[0]!.querySelectorAll("code"), (element) => element.textContent)).toEqual([GITHUB_REPOSITORY_REGISTRATION_SCOPE]);
     const link = notes[1]!.querySelector("a");
     if (install === null) expect(link).toBeNull();
     else expect(link).toHaveAttribute("href", install.url);
@@ -64,8 +63,7 @@ describe("landing page", () => {
     const section = registration.closest("section")!;
     expect(hero.nextElementSibling).toBe(section);
     const note = section.querySelector(".landing-action-note")!;
-    expect(Array.from(note.querySelectorAll("code"), (element) => element.textContent))
-      .toEqual([GITHUB_REPOSITORY_REGISTRATION_SCOPE]);
+    expect(Array.from(note.querySelectorAll("code"), (element) => element.textContent)).toEqual([GITHUB_REPOSITORY_REGISTRATION_SCOPE]);
   });
 
   it.each([registrationAppInstall("overflow-registration"), null])("lists exactly the App's repository permissions with install %o", (install) => {
@@ -75,8 +73,7 @@ describe("landing page", () => {
     const section = registration.closest("section")!;
     expect(hero.nextElementSibling).toBe(section);
     const note = section.querySelectorAll(".landing-action-note")[1]!;
-    expect(Array.from(note.querySelectorAll("code"), (element) => element.textContent))
-      .toEqual(["metadata: read", "issues: read", "pull_requests: read"]);
+    expect(Array.from(note.querySelectorAll("code"), (element) => element.textContent)).toEqual(["metadata: read", "issues: read", "pull_requests: read"]);
   });
 
   it.each(["metadata: read", "issues: read", "pull_requests: read"])("does not show %s without the registration App", (permission) => {
@@ -110,11 +107,7 @@ describe("landing page", () => {
     expect(screen.queryByRole("link", { name: "Sign in with GitHub to contribute" })).not.toBeInTheDocument();
     fireEvent.click(signInButton);
 
-    await waitFor(() => expect(signIn).toHaveBeenCalledExactlyOnceWith(
-      "github",
-      { redirectTo: "/dashboard" },
-      { scope: "" },
-    ));
+    await waitFor(() => expect(signIn).toHaveBeenCalledExactlyOnceWith("github", { redirectTo: "/dashboard" }, { scope: "" }));
     expect(recordRegistrationAttempt).not.toHaveBeenCalled();
   });
 
@@ -128,11 +121,7 @@ describe("landing page", () => {
     fireEvent.click(registerButton);
 
     await waitFor(() => expect(recordRegistrationAttempt).toHaveBeenCalledExactlyOnceWith("REGISTRATION_START"));
-    await waitFor(() => expect(signIn).toHaveBeenCalledExactlyOnceWith(
-      "github",
-      { redirectTo: "/repositories/new" },
-      { scope: "admin:repo_hook" },
-    ));
+    await waitFor(() => expect(signIn).toHaveBeenCalledExactlyOnceWith("github", { redirectTo: "/repositories/new" }, { scope: "admin:repo_hook" }));
   });
 
   it("offers the contributor sign-in before the repository-registration sign-in, in separate forms", () => {
