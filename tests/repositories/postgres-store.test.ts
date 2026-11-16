@@ -203,8 +203,8 @@ describe("registering a repository against the real registered_repositories cons
     expect(await store.findWebhookCredential(second.id, "github")).toMatchObject({ secret: second.secret });
   });
 
-  // A sanction-deactivated row the sponsor then unregistered carries the flag
-  // (issue 1072). The revival is a reactivation: the row comes back active,
+  // A sanction-deactivated row the sponsor then unregistered carries the flag.
+  // The revival is a reactivation: the row comes back active,
   // and no closure can clear a flag on an active row (both closures filter
   // active = false), so the revival itself must clear it — a stale flag on a
   // live row would make a later reversal reactivate a row the sanction never
@@ -750,7 +750,7 @@ describe("changing a registered repository's difficulty catalog", () => {
     expect(Number(versions[1]!.effective_from)).toBeGreaterThan(Date.now());
   });
 
-  // The cross-forge check holds at write time (issue 571): the guard in
+  // The cross-forge check holds at write time: the guard in
   // register.ts reads the stored provider outside this transaction, so a row
   // that changed forge between that read and the write must still be refused
   // here, with nothing appended and the current catalog unmoved.
@@ -1061,7 +1061,7 @@ describe("unregistering a repository against the real registered_repositories co
     expect(Number(versions[0]!.count)).toBe(1);
   });
 
-  // The cross-forge check holds at write time (issue 571): the guard in
+  // The cross-forge check holds at write time: the guard in
   // register.ts reads the stored provider outside this transaction, so a row
   // that changed forge between that read and the write must still be refused
   // here, leaving it active.
@@ -1295,10 +1295,9 @@ describe("unregistering a repository against the real registered_repositories co
     });
 
     it("holds a GitLab and a GitHub record under the same repository and webhook ids, and clearing one provider leaves the other", async () => {
-      // Migration 041 extended the primary key to (repository, provider,
-      // webhook): a GitLab orphan and a GitHub orphan can share both numeric
-      // ids, and the compensating cleanup of one forge must never retire the
-      // other forge's record.
+      // The primary key is (repository, provider, webhook): a GitLab orphan and
+      // a GitHub orphan can share both numeric ids, and the compensating cleanup
+      // of one forge must never retire the other forge's record.
       const githubRepositoryId = externalId++;
       const webhookId = externalId++;
       await store.saveAbandonedWebhookCleanup({

@@ -11,11 +11,10 @@ export interface PostgresContainerOptions {
   database: string;
   user: string;
   /**
-   * Optional since issue 1070: no test password is a secret worth committing,
+   * Optional: no test password is a secret worth committing,
    * so when omitted the helper generates a fresh random hex password for this
    * call — the per-suite role's password on the shared server, POSTGRES_PASSWORD
-   * of a private container. Call sites that pass an explicit literal keep
-   * working unchanged.
+   * of a private container. A call site may still pass an explicit literal.
    */
   password?: string;
   /** Optional shell scripts copied into /docker-entrypoint-initdb.d/ before start. Test fixtures only. */
@@ -30,7 +29,7 @@ export interface StartedPostgres {
 
 /**
  * The connection facts for the ONE postgres server every DB suite in a run
- * shares (issue 626). tests/support/global-setup.ts starts that container in
+ * shares. tests/support/global-setup.ts starts that container in
  * the main process; these facts are what crosses into each worker, so they
  * carry the container's id too — a worker never holds the container object
  * itself, and the id is how the facade forwards getId() (backup-restore execs
@@ -243,11 +242,10 @@ export async function assertNoSharedProvisionSurvivors(): Promise<void> {
 }
 
 /**
- * Pins the container's published postgres port to the IPv4 loopback interface
- * (issue 1070): a test postgres reachable on every host interface hands
+ * Pins the container's published postgres port to the IPv4 loopback interface:
+ * a test postgres reachable on every host interface hands
  * Postgres superuser to anyone who finds the port for the length of the run.
- * testcontainers 12.2.0 cannot express a HostIp through its public builder —
- * PortWithBinding.host is a plain number (build/utils/port.d.ts) and
+ * testcontainers 12.2.0 cannot express a HostIp through its public builder — PortWithBinding.host is a plain number (build/utils/port.d.ts) and
  * withExposedPorts writes PortBindings entries with HostIp unset
  * (build/generic-container/generic-container.js) — so the binding is
  * overwritten on the HostConfig the builder already passes to docker create.
@@ -267,8 +265,8 @@ export function publishPostgresOnLoopback(container: GenericContainer, hostPort:
 }
 
 /**
- * Pinned by digest (issue 461) so every DB suite runs the same postgres bytes;
- * read from docker-compose.yml (issue 1335) — from vitest's cwd, not
+ * Pinned by digest so every DB suite runs the same postgres bytes;
+ * read from docker-compose.yml — from vitest's cwd, not
  * import.meta.url: a page origin in DOM envs.
  */
 export const POSTGRES_IMAGE = (
@@ -303,8 +301,8 @@ export async function startPostgresContainer(options: PostgresContainerOptions):
 /**
  * Reserves a host port by binding it, so the container's later explicit
  * binding of the same port collides loudly with anything else that holds it.
- * The reservation binds 127.0.0.1, the interface the container publishes on
- * (issue 1070): a reservation on 0.0.0.0 would keep out other all-interface
+ * The reservation binds 127.0.0.1, the interface the container publishes on:
+ * a reservation on 0.0.0.0 would keep out other all-interface
  * binds while the container it reserves for publishes loopback-only.
  */
 async function pickPrivateHostPort(): Promise<number> {
@@ -347,8 +345,7 @@ async function removeFailedPrivateContainers(attemptId: string): Promise<void> {
 
 /**
  * The initScripts fixtures must run during the entrypoint's first boot, so
- * these suites get a container of their own, exactly as every suite did
- * before the shared server existed (issue 626 left them unchanged).
+ * these suites get a container of their own rather than the shared server.
  */
 async function startPrivatePostgres({ database, user, password, initScripts = [] }: {
   database: string;

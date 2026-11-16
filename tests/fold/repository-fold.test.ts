@@ -963,10 +963,10 @@ describe("rejected settlement closure records", () => {
     }]);
   });
 
-  // The label text in the body was never the requirement (issue 297): the
-  // sponsor's deliberate nonblank comment inside the window is. A body that
-  // states the points without restating the label qualifies, so the notice and
-  // the predicate enforce the same property.
+  // The label text in the body is not the requirement: the sponsor's
+  // deliberate nonblank comment inside the window is. A body that states the
+  // points without restating the label qualifies, so the notice and the
+  // predicate enforce the same property.
   it("accepts a nonblank sponsor rationale that never states the label text", () => {
     const snapshot = outsiderFixture();
     snapshot.issues[0]!.comments[0] = {

@@ -6,11 +6,11 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { renderRelayResult, runRelay } from "../../scripts/ledger-relay.ts";
 
 /**
- * The fork-head refusals (issue 1142): a pinned run whose head lives in a
+ * The fork-head refusals: a pinned run whose head lives in a
  * fork is decided live or dead by the base repository's open pulls at
  * `head=<owner>:<branch>` — live keeps the byte-identical throw, dead
  * downgrades to the visible exit-0 no-op, exactly as a same-repository head
- * was already decided (issue 1115). The owner must be provable from the run
+ * is decided. The owner must be provable from the run
  * body's `head_repository` before any request; every unprovable shape, a
  * deleted fork, and any read failure throws (fail closed).
  *
@@ -31,9 +31,8 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
     keyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
   });
 
-  // The incident's fields: a month-old pull_request run of actionlint.yml
-  // from the closed fork pull request v01dst/Overflow#146, whose head has
-  // since moved — the run that turned main's relay job red at e87a55f.
+  // The fields of a month-old pull_request run of actionlint.yml from a
+  // closed fork pull request whose head has since moved.
   const HEAD_SHA = `c7e06a4${"a".repeat(33)}`;
   const RUN_ID = "34069440939";
   const HEAD_BRANCH = "fix/117-env-file-migrate";
@@ -84,7 +83,7 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
     return { delays, fn: async (ms: number) => void delays.push(ms) };
   }
 
-  /** The workflow_run trigger's env, in the incident's shape. */
+  /** The workflow_run trigger's env. */
   function relayEnv(over: Record<string, string> = {}): Record<string, string> {
     return {
       ...RELAY_OWN_RUN_ENV, OVERFLOW_LEDGER_APP_ID: "5118623",
@@ -180,9 +179,9 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
   }
 
   it("relays nothing and exits 0 for the incident's dead closed-fork run", async () => {
-    // The incident: the refusal gate learns the fork head repository and its
-    // owner from the run body, the branch-scoped listing answers empty, and
-    // the refusal downgrades to the exit-0 no-op instead of turning main red.
+    // The refusal gate learns the fork head repository and its owner from the
+    // run body. When the branch-scoped listing answers empty, the refusal
+    // downgrades to the exit-0 no-op instead of turning main red.
     const fetchStub = makeFetch([token(), fetchedRunBody(), forkPullsListing([])]);
     const result = await relay(relayEnv(), fetchStub);
 
@@ -217,7 +216,7 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
   });
 
   it("keeps the byte-identical throw when a live open fork pull request carries the run's head SHA", async () => {
-    // A live fork head keeps issue 1083's visibility: the listing carries the
+    // A live fork head keeps the refusal visible: the listing carries the
     // refused run's own SHA, so the refusal stays a throw.
     const fetchStub = makeFetch([token(), fetchedRunBody(), forkPullsListing([forkPullEntry()])]);
     const error = await caughtError(relay(relayEnv(), fetchStub));
@@ -252,7 +251,7 @@ describe("runRelay fork-head refusals (issue 1142)", () => {
   });
 
   it("proceeds on a valid owner login alone when the gate's body names no full name", async () => {
-    // The lenient limb (issue 1142): a full_name is nothing to cross-check
+    // The lenient limb: a full_name is nothing to cross-check
     // when absent, so a valid owner.login on its own is enough to read the
     // fork's liveness. The dispatch path is the only shape that reaches it —
     // the trigger fetch names the fork, and the gate's owner fetch returns a

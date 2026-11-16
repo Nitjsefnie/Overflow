@@ -169,8 +169,8 @@ describe("processWebhook", () => {
     await expect(processWebhook(dependencies, delivery(), scope)).resolves.toEqual({ status: "DUPLICATE" });
   });
 
-  // A GitLab delivery (issue 547) resolves through the forge identity it
-  // carries — the numeric id alone could name a GitHub registration instead.
+  // A GitLab delivery resolves through the forge identity it carries — the
+  // numeric id alone could name a GitHub registration instead.
   it("resolves a forge delivery by its forge identity and never by the numeric id", async () => {
     const dependencies = processorDependencies({
       findRepositoryByGitHubId: vi.fn().mockResolvedValue(null),

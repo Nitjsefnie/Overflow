@@ -30,8 +30,7 @@ describe("resolveIssuesBoardPage", () => {
   });
 
   it("passes a page whose offset is already a safe integer through unchanged", () => {
-    // 1e9 was the issue report's already-working control: page 1000000000
-    // answered 200 [] before the bound and must keep doing so.
+    // Page 1000000000 is a control: it answers 200 [] and must keep doing so under the bound.
     expect(resolveIssuesBoardPage(1_000_000_000, 200)).toEqual({ page: 1_000_000_000, pageSize: 200 });
     expect(resolveIssuesBoardPage(45_035_996_273_705, 200)).toEqual({
       page: 45_035_996_273_705,

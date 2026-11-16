@@ -144,7 +144,7 @@ async function expireLease(jobId: string): Promise<void> {
   `;
 }
 
-/** Claim shape shipped by the build before lease-duration tracking. */
+/** Claim shape of a build without lease-duration tracking. */
 async function claimAsOldBuild(): Promise<{ id: string; lease_token: string; attempt_count: number } | undefined> {
   const [row] = await sql<{ id: string; lease_token: string; attempt_count: number }[]>`
     with due as (

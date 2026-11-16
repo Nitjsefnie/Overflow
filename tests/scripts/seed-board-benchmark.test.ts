@@ -103,7 +103,7 @@ describe("seed argument parsing", () => {
 
 describe("session cookie minting", () => {
   it("mints the cookie value the app's AUTH_SECRET decrypts, naming the bench member", async () => {
-    // The absolute lifetime (issue 1043) bounds a session to 30 days from its
+    // The absolute lifetime bounds a session to 30 days from its
     // sign-in instant, so the mint records the wall clock it ran at — a fixed
     // date would be born expired.
     const beforeSeconds = Math.floor(Date.now() / 1000);
@@ -256,7 +256,7 @@ describe("seeding against PostgreSQL", () => {
 describe("seeding above the pull_request_issues bind-parameter ceiling", () => {
   // 220 sponsors × 101 settlements = 22,220 pull requests, so the unchunked
   // pull_request_issues insert binds 66,660 parameters — over Postgres's
-  // 65,535 limit (issue 909) while staying far below the 36,000-settlement
+  // 65,535 limit while staying far below the 36,000-settlement
   // reproduction scale, keeping this container run cheap.
   const ABOVE_CEILING: SeedOptions = {
     repositories: 4,

@@ -60,7 +60,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-/** Adapted from the adversary probe; only HTTP is replaced, and all relays share a check store. */
+/** Only HTTP is replaced, and all relays share a check store. */
 function world(kind: "verify" | "pr-gates" = "verify") {
   const initial = kind === "verify" ? oldVerify : gate(9001, "success");
   const state = {
@@ -157,7 +157,7 @@ function world(kind: "verify" | "pr-gates" = "verify") {
   return { state, blocked, released, fetchFn, relay };
 }
 
-/** A mirror start throws on a 5xx read; a sweep-only start defers it to the next scheduled sweep (issue 1532). */
+/** A mirror start throws on a 5xx read; a sweep-only start defers it to the next scheduled sweep. */
 async function expectFailedRead(mode: "mirror" | "sweep", run: Promise<RelayResult>, message: RegExp) {
   if (mode === "mirror") await expect(run).rejects.toThrow(message);
   else expect((await run).sweepDeferred).toMatch(message);

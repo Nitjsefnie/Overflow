@@ -4,7 +4,7 @@ import { trustedOrigin, useTrustedOrigin } from "../support/trusted-origin";
 
 /**
  * The one boundary of the protected-resource metadata document that no other
- * suite sees (issue 905): the resource is built from the origin
+ * suite sees: the resource is built from the origin
  * `readTrustedOrigin` derives, not from `OVERFLOW_APP_URL` itself. A deployment that
  * configures a path or a query serves one origin, and a client told to fetch
  * the configured URL would fetch something that is not this MCP endpoint. Both

@@ -975,7 +975,7 @@ describe("reconciliation lease heartbeat", () => {
       await surfaceUnhandledRejections();
       expect(rejections.seen).toEqual([]);
       // The rejected renewal prints the site's full line; the renewal that
-      // answers ends the outage with its recovery line (issue 661).
+      // answers ends the outage with its recovery line.
       expect(logged).toHaveBeenCalledTimes(1);
       expect(recovered).toHaveBeenCalledTimes(1);
       expect(logged.mock.calls[0]?.slice(1)).toEqual(["job-1", failure]);
@@ -1204,7 +1204,7 @@ describe("reconciliation lease heartbeat", () => {
       expect(calls.filter(({ method }) => method === "renew")).toHaveLength(stopFirst ? 1 : 2);
       // A held renewal that then rejects prints the site's full line once; when
       // the fold goes on and a later renewal answers, it ends the outage with
-      // the recovery line (issue 661). stopFirst ends the job before any
+      // the recovery line. stopFirst ends the job before any
       // renewal can answer, so only the rejection's line exists.
       expect(logged).toHaveBeenCalledTimes(rejects ? 1 : 0);
       expect(recovered).toHaveBeenCalledTimes(rejects && !stopFirst ? 1 : 0);
@@ -2075,12 +2075,12 @@ describe("the scheduled reconciliation worker", () => {
 
 describe("the bounded lease-heartbeat failure site", () => {
   /**
-   * Issue 661: during an outage an in-flight fold's lease renewals fail every
-   * five seconds, and each one printed its own full stack trace. The site's
-   * failures now flow through an injectable FailureLogger, so the first prints
-   * in full, repeats inside the quiet window are counted silently, and a
-   * renewal that succeeds after failures prints one recovery line. The
-   * injected logger shares the test's clock, so no case waits on the window.
+   * During an outage an in-flight fold's lease renewals fail every five
+   * seconds. The site's failures flow through an injectable FailureLogger, so
+   * the first prints in full, repeats inside the quiet window are counted
+   * silently, and a renewal that succeeds after failures prints one recovery
+   * line. The injected logger shares the test's clock, so no case waits on the
+   * window.
    */
 
   const HEARTBEAT_MESSAGE = "Reconciliation lease heartbeat failed for job";
@@ -2172,8 +2172,8 @@ describe("the bounded lease-heartbeat failure site", () => {
   it("keeps a second job's first heartbeat failure suppressed across the job boundary", async () => {
     // The suppression that bounds an outage to one full trace is process-scoped
     // only because the wiring forwards ONE logger across every wake, and the
-    // worker uses the injected logger instead of building a fresh one per job
-    // (issue 661). The other cases never cross a job boundary; this one runs a
+    // worker uses the injected logger instead of building a fresh one per job.
+    // The other cases never cross a job boundary; this one runs a
     // second job on the same logger while the outage still stands, where a
     // fresh-per-job logger would print a full trace per wake again.
     const { store } = createFakeStore({
@@ -2402,7 +2402,7 @@ async function surfaceUnhandledRejections(): Promise<void> {
 // The fallback that prints when the reporter cannot even be read renders the
 // fold's error raw — and the error's message can carry the hostile payload a
 // member-chosen instance supplied — so the fallback argument is the encoded
-// token, one line, no raw escape (issue 1042).
+// token, one line, no raw escape.
 describe("fallback log encoding (issue 1042)", () => {
   it("renders a hostile fold error as one encoded token when the reporter cannot be read", async () => {
     const { store } = createFakeStore({ jobs: [job()] });

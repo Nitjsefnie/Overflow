@@ -20,13 +20,13 @@ export type UnitEntry = {
  * A unit written outside the canonical subset this guard enforces.
  *
  * The guard reads the unit without systemd, so every shape it accepts is a
- * claim about what systemd would do with that shape — and each such claim has
- * been wrong at least once. A space inside the brackets of `[Service ]` is an
- * unknown section systemd discards whole; a no-break space appended to `User`
- * is an unknown key systemd drops while JavaScript's `trim()` eats it; a
- * backslash before trailing whitespace continues the line for one parser and
- * not the other. Each of those made the suite report the hardening as pinned
- * while systemd ran the service as root.
+ * claim about what systemd would do with that shape. A space inside the
+ * brackets of `[Service ]` is an unknown section systemd discards whole; a
+ * no-break space appended to `User` is an unknown key systemd drops while
+ * JavaScript's `trim()` eats it; a backslash before trailing whitespace
+ * continues the line for one parser and not the other. Each of those would
+ * make the suite report the hardening as pinned while systemd runs the service
+ * as root.
  *
  * So the guard stops modelling systemd's grammar. `deploy/overflow.service` is
  * a file we control completely: it needs no continuations, no quoting, no
@@ -61,10 +61,10 @@ const ASSIGNMENT_SHAPED = /^[A-Za-z0-9].*=/;
  * This is the rule that needs no imagination. JavaScript's whitespace is not
  * systemd's: `String.prototype.trim()` and `\s` strip U+00A0, U+000B, U+000C,
  * U+2002 and a dozen more, while systemd strips only space, tab, CR and LF. One
- * such character appended to a key made systemd discard `User=` while the guard
- * read the directive as pinned. Enumerating those code points is how the next
- * one gets missed, so the file is required to carry none of them — nor a tab,
- * nor a CR, nor a BOM, nor an em dash in a comment.
+ * such character appended to a key makes systemd discard `User=` while a guard
+ * that trims reads the directive as pinned. Enumerating those code points is how
+ * the next one gets missed, so the file is required to carry none of them — nor a
+ * tab, nor a CR, nor a BOM, nor an em dash in a comment.
  *
  * A `Uint8Array` is read byte by byte, so a multi-byte UTF-8 sequence is
  * refused at its first byte rather than after a decoder has turned it into

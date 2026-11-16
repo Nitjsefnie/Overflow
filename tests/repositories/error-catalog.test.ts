@@ -339,7 +339,7 @@ const registrationRefusals: RegistrationFailure[] = [
     publishes: (surfaced: string) => (cell: string) => cell === surfaced,
   },
   {
-    // Issue 451: the save failure triggers a compensating webhook deletion, and the
+    // The save failure triggers a compensating webhook deletion, and the
     // surfaced answer names the incomplete rollback, not the save failure that started it.
     what: "a store that cannot save the registration and a GitHub that will not delete the abandoned webhook",
     status: rollbackIncompleteStatus,

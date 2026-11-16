@@ -16,7 +16,7 @@ let sql: Sql;
 const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 const tokenEncryptionKey = Buffer.alloc(32, 23).toString("base64url");
 
-// The acceptance timeline for issue 180. Closure A's evidence window closes
+// The acceptance timeline. Closure A's evidence window closes
 // before the repository registers, under catalog v1; the sponsor then appends
 // v2, repricing one actual label, beginning to govern a day after registration;
 // closure B merges later still. On every re-derivation closure A must keep

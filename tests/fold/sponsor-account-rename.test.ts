@@ -178,9 +178,9 @@ describe("foldRepository across a sponsor's GitHub account rename", () => {
     // `db/migrations/001_initial.sql` rejects a blank `github_login`, but its
     // one-argument `trim()` strips spaces only while the fold's `.trim()`
     // strips all whitespace, so a stored tab is a login the database accepts
-    // and the fold reads as blank (issue 141). The account id is untouched by
-    // that, and a blank stored login must not veto an identification the id
-    // already made — vetoing it produces the issue-129 loss itself.
+    // and the fold reads as blank. The account id is untouched by that, and a
+    // blank stored login must not veto an identification the id already made:
+    // vetoing it stops recognising the sponsor, the loss this suite guards.
     const result = foldRepository(fixture({ storedSponsorLogin: "\t" }));
 
     expect(result.policyViolations).toEqual([]);
@@ -299,7 +299,7 @@ describe("foldRepository across a sponsor's GitHub account rename", () => {
   it("still names someone when neither the payload nor the stored record has a login", () => {
     // Both sides blank at once: the account id identified the sponsor, the
     // payload named no login, and the stored login is the tab migration 001
-    // accepts and the fold reads as blank (issue 141). There is no true login
+    // accepts and the fold reads as blank. There is no true login
     // to write and the columns still refuse blank text, so the fold writes the
     // same placeholder its refusal sentences already use rather than a value
     // that fails the transaction.

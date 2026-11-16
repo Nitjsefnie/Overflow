@@ -166,7 +166,7 @@ describe("explicit repository registration", () => {
   });
 
   it("maps the store's write-time provider refusal on the catalog-change path to the guard's CONFLICT", async () => {
-    // The row flips forge between the guard's read and the write (issue 571):
+    // The row flips forge between the guard's read and the write:
     // the guard sees github and passes, the transaction sees gitlab and
     // refuses. The refusal reads exactly as the guard's would have.
     const harness = createHarness({ existing: registeredRepository() });
@@ -322,7 +322,7 @@ describe("explicit repository registration", () => {
   });
 
   it("refuses a GitHub registration whose forge id an active GitLab registration holds", async () => {
-    // Pin of the existing registration-arm guard (issue 567): an ACTIVE GitLab
+    // Pin of the registration-arm guard: an ACTIVE GitLab
     // row (no unregisteredAt) holding the id must refuse a GitHub registration,
     // naming the holding provider.
     const harness = createHarness();
@@ -494,7 +494,7 @@ describe("explicit repository registration", () => {
     expect(harness.createdRepositories).toEqual([]);
   });
 
-  // Issue 97: an ambiguous 403 — remaining budget, no Retry-After, marker-free body — cannot
+  // An ambiguous 403 — remaining budget, no Retry-After, marker-free body — cannot
   // separate a missing authorization from a secondary rate limit, so the message must say so
   // and put wait-and-retry before the settings remedies instead of ranking authorization first.
   const waitInstruction = "Wait a minute and retry registration before changing anything.";
@@ -563,7 +563,7 @@ describe("explicit repository registration", () => {
     expect(harness.createdRepositories).toEqual([]);
   });
 
-  // Issue 883: the sanitized message above is the submitter's answer, and it
+  // The sanitized message above is the submitter's answer, and it
   // names neither the collection nor the ceiling when a collection-walk bound
   // ended the read. The error the wrap was handed is the only carrier of both,
   // so the wrap keeps it as the cause instead of dropping it.
@@ -585,7 +585,7 @@ describe("explicit repository registration", () => {
     expect(String((error as Error).cause)).toContain("repository labels");
   });
 
-  // Issue 890: a GitHub status no arm classifies reaches the same generic 502,
+  // A GitHub status no arm classifies reaches the same generic 502,
   // and its sanitized message names only the step — the status, the one thing
   // an operator needs, is on the error. So the wrap keeps that one too.
   it.each([500, 502, 503, 422])("keeps an unclassified GitHub HTTP %s label-read failure as the cause", async (status) => {
@@ -680,7 +680,7 @@ describe("explicit repository registration", () => {
       expect(harness.createdRepositories).toEqual([]);
     });
 
-    // Issue 93: a 401 says GitHub rejected the stored authorization itself, so the message
+    // A 401 says GitHub rejected the stored authorization itself, so the message
     // must name the failed step and give the remedy that refreshes the credential.
     it("surfaces an HTTP 401 as GITHUB_CREDENTIALS naming the step and the recovery", async () => {
       const harness = createHarness();
@@ -706,7 +706,7 @@ describe("explicit repository registration", () => {
       // the arms above return before the gate is ever consulted on this path: this
       // is the shape where rate-limit evidence outranks a status, so a gate
       // restated as a plain status set would answer true here and log a failure
-      // the caller has already answered with its remedy (issue 890).
+      // the caller has already answered with its remedy.
       const throttled = new GitHubApiError(status, true, retryAfterSeconds);
       expect(isUnclassifiedGitHubFailure(throttled)).toBe(false);
       harness.dependencies.github[step] = async () => { throw throttled; };
@@ -718,7 +718,7 @@ describe("explicit repository registration", () => {
       expect(harness.createdRepositories).toEqual([]);
     });
 
-    // Issue 97's repro shape: a 403 secondary rate limit can carry nonzero remaining budget and
+    // A 403 secondary rate limit can carry nonzero remaining budget and
     // no Retry-After, so the body marker is what separates it from an authorization refusal.
     // The error is built the way the transport builds it — the real classifyGitHubRateLimit
     // answer feeds the GitHubApiError the fake gateway throws — rather than hand-crafted.
@@ -1000,7 +1000,7 @@ describe("unregistering a registered repository", () => {
   it("refuses a GitHub-shaped unregistration whose forge id a GitLab registration holds, before any webhook or store write", async () => {
     // The target lookup matches the stored owner name, which is not
     // forge-qualified, so a GitLab row resolves here; the guard must refuse
-    // before the webhook block and before the store write (issue 567).
+    // before the webhook block and before the store write.
     const harness = createHarness({ existing: registeredRepository() });
     harness.dependencies.store.findRepositoryProviderById = async () => "gitlab";
 
@@ -1034,7 +1034,7 @@ describe("unregistering a registered repository", () => {
   });
 
   it("maps the store's write-time provider refusal on the unregistration path to the guard's CONFLICT", async () => {
-    // The row flips forge between the guard's read and the write (issue 571):
+    // The row flips forge between the guard's read and the write:
     // the guard sees github and passes, the transaction sees gitlab and
     // refuses without deactivating. The refusal reads exactly as the guard's
     // would have, and the flow ends there — no drain runs after it.
@@ -1361,7 +1361,7 @@ describe("unregistering a GitLab registration by forge identity", () => {
     expect(harness.callOrder).toEqual([]);
   });
 
-  // The hook installed at registration is deleted forge-first (issue 547):
+  // The hook installed at registration is deleted forge-first:
   // before the store write, so a refusal leaves the row exactly as it stood,
   // and an idempotent repeat converges.
   it("deletes the installed hook forge-first and answers webhookDeleted true", async () => {
@@ -1462,7 +1462,7 @@ describe("unregistering a GitLab registration by forge identity", () => {
 });
 
 describe("abandoning the webhook a failed registration created", () => {
-  // The compensating delete is no longer best-effort: the cleanup record is
+  // The compensating delete is not best-effort: the cleanup record is
   // written durably BEFORE the deletion is attempted, so even a webhook whose
   // deletion never completes stays known to Overflow and reachable by the drain.
   it("records the cleanup before attempting the deletion when both the save and the delete fail", async () => {
@@ -1563,10 +1563,10 @@ describe("abandoning the webhook a failed registration created", () => {
     expect(diagnostic).toContain("retained");
   });
 
-  // Issue 515: the ROLLBACK_INCOMPLETE diagnostics named only the webhook/record
-  // state, so an operator could not tell a database outage from a constraint
-  // conflict. The original save failure now rides into the diagnostic, bounded
-  // and secret-safe; the public ROLLBACK_INCOMPLETE message is unchanged.
+  // The ROLLBACK_INCOMPLETE diagnostics name the webhook/record state and
+  // carry the original save failure, bounded and secret-safe, so an operator can
+  // tell a database outage from a constraint conflict. The public
+  // ROLLBACK_INCOMPLETE message stays as it is.
   it("carries the original save failure into the rollback-incomplete diagnostic", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const harness = createHarness({

@@ -43,9 +43,8 @@ function sealKnownAnswer(encodedKey: string, literalAssociatedData: string, plai
     ciphertext.toString("base64url")].join(".");
 }
 
-// Seals the way the persisted v1 format was specified, with raw node:crypto
-// and no associated data, so a v1 envelope of a known plaintext can be offered
-// to the module the way the issue constructs it.
+// Seals the persisted v1 format with raw node:crypto and no associated data,
+// so a v1 envelope of a known plaintext can be offered to the module.
 function sealLegacyV1(encodedKey: string, plaintext: string): string {
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", Buffer.from(encodedKey, "base64url"), iv);

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { mintAppJwt } from "../../scripts/ledger-relay.ts";
 
 /**
- * Issue 1032's code half: the rotation procedure in deploy/README.md section
+ * The rotation procedure in deploy/README.md section
  * 14 relies on two facts, and both are pinned here against the real modules
  * rather than taken from GitHub's documentation.
  *

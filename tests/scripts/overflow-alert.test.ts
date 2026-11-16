@@ -313,7 +313,7 @@ function runAlert(
     writeFileSync(logAppendPath, grows && grows.length > 0 ? `${grows.join("\n")}\n` : "");
 
     const childEnv = {
-      // `as const` because this object is no longer contextually typed by
+      // `as const` because this object is not contextually typed by
       // `spawnSync`'s parameter: standalone, `NODE_ENV` would widen to `string`
       // and stop satisfying the repo's `ProcessEnv`.
       NODE_ENV: "test" as const,

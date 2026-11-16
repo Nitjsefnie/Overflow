@@ -132,7 +132,7 @@ describe("reconciliation after the opening account is renamed", () => {
 
   // The fold run that first observes a repository rename reads the stored path
   // before it refreshes it, so a cross-repository closure recorded by that run
-  // must carry the observed path beside the stale one (issue 145).
+  // must carry the observed path beside the stale one.
   it("names the stored and the freshly observed path in a cross-repository reason on the rename's first run", async () => {
     const ownerLogin = `rename-owner-${externalId++}`;
     const { store, repositoryId, githubIssueId, ownerName: observedName } = await registeredRepository(ownerLogin);

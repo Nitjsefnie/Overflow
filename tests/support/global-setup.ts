@@ -6,21 +6,21 @@ import { runNeedsSharedPostgres } from "./shared-postgres-need";
 
 /**
  * Vitest globalSetup for the ONE postgres container every DB suite in a run
- * shares (issue 626): setup() starts it once and provides its connection
- * facts, teardown() stops it. Since issue 1070 the start is lazy: setup()
- * resolves the run's test files and starts the server only when one of them
- * reaches startPostgresContainer through its local imports — a run with no database suite starts no
- * container at all. Local facts use the IPv4 loopback literal and
- * its published port, so socket address-family fallback cannot reach another
- * port. IPv6-only publication is rejected because the pinned postgres client
- * cannot parse a bracketed IPv6 URL host.
+ * shares: setup() starts it once and provides its connection facts,
+ * teardown() stops it. The start is lazy: setup() resolves the run's test files
+ * and starts the server only when one of them reaches startPostgresContainer
+ * through its local imports — a run with no database suite starts no container
+ * at all. Local facts use the IPv4 loopback literal and its published port, so
+ * socket address-family fallback cannot reach another port. IPv6-only
+ * publication is rejected because the pinned postgres client cannot parse a
+ * bracketed IPv6 URL host.
  * A suite asks startPostgresContainer, which provisions a per-suite role and
  * database on this server.
  *
  * If the container cannot start (no Docker, and so on), the failure is parked
  * as a message string instead of thrown: non-DB suites must still pass on a
  * Dockerless box, and the failure surfaces only when a DB suite actually asks
- * for a database — the same failure scope the per-suite container had.
+ * for a database.
  */
 const SHARED = {
   database: "overflow_shared",
@@ -54,7 +54,7 @@ interface GlobalSetupVitest {
 let container: StartedTestContainer | undefined;
 
 export async function setup(vitest: GlobalSetupVitest): Promise<void> {
-  // Lazy start (issue 1070): the run's own file list decides whether the
+  // Lazy start: the run's own file list decides whether the
   // shared server is needed. A run whose files and local dependencies never
   // request startPostgresContainer starts nothing, provides nothing, and touches no
   // Docker client at all; its DB-less suites cannot ask for the facts, and if
@@ -65,7 +65,7 @@ export async function setup(vitest: GlobalSetupVitest): Promise<void> {
     return;
   }
 
-  // No committed password (issue 1070): a fresh one per run; the facts carry
+  // No committed password: a fresh one per run; the facts carry
   // it to every suite that provisions on the server.
   const adminPassword = randomBytes(24).toString("hex");
   try {

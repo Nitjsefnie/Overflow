@@ -4,13 +4,13 @@ import { cleanup } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll, vi } from "vitest";
 import { assertNoSharedProvisionSurvivors, resetSharedProvisions } from "./tests/support/postgres-container";
 
-// Issue 1160: Next captures this global when its storage factory first loads.
+// Next captures this global when its storage factory first loads.
 // next/server can load that factory before a build helper boots Next's node
 // environment; its later console patches then call exit() on the cached fake.
 // Initialize the native constructor before each file imports any Next modules.
 Reflect.set(globalThis, "AsyncLocalStorage", AsyncLocalStorage);
 
-// Issue 736: with `isolate: false` the evaluated module graph is shared by
+// With `isolate: false` the evaluated module graph is shared by
 // every test file a worker runs, and a module's import bindings freeze at its
 // FIRST evaluation. vitest consults one mock registry per test file, so the
 // origin guard (`src/lib/security/server-action-origin.ts`) keeps whichever
@@ -42,8 +42,8 @@ afterEach(() => {
 afterAll(async () => {
   // While this worker is still alive, fail the file loudly if any role this
   // file provisioned on the shared server still holds a connection: the
-  // shared server removed the loud tripwire a leaked pool used to produce,
-  // and globalSetup teardown cannot see worker-held sockets (vitest reaps
-  // the workers before it runs).
+  // shared server has no loud tripwire for a leaked pool, and globalSetup
+  // teardown cannot see worker-held sockets (vitest reaps the workers before
+  // it runs).
   await assertNoSharedProvisionSurvivors();
 });

@@ -6,8 +6,8 @@ import { defineConfig } from "vitest/config";
 const rootDirectory = path.dirname(fileURLToPath(import.meta.url));
 
 // ---------------------------------------------------------------------------
-// Issue 626 — bound this run's worker pool (own block so overlapping branches
-// rebase cleanly).
+// Bound this run's worker pool (own block so overlapping branches rebase
+// cleanly).
 //
 // VITEST_MAX_WORKERS (numeric) wins; else the key stays absent — vitest's own
 // unbounded default — when CI is set; otherwise a local default of 2 bounds
@@ -31,7 +31,7 @@ export default defineConfig({
     // per-file worker isolation.
     isolate: false,
     environment: "node",
-    // ONE postgres container per run (issue 626): global setup starts it and
+    // ONE postgres container per run: global setup starts it and
     // provides its facts; suites get per-suite databases on it through
     // startPostgresContainer, and tests/support/global-setup.ts stops it at
     // teardown.
@@ -45,10 +45,10 @@ export default defineConfig({
     server: { deps: { inline: ["next-auth"] } },
     hookTimeout: 120_000,
     testTimeout: 120_000,
-    // Issue 626 (see the block above the config): maxWorkers resolves from the
-    // environment there and is spread here only when set. teardownTimeout
-    // pins the globalSetup teardown that stops the shared postgres container —
-    // vitest's 10 s default is unpinned headroom for that stop.
+    // maxWorkers resolves from the environment (see the block above the
+    // config) and is spread here only when set. teardownTimeout pins the
+    // globalSetup teardown that stops the shared postgres container — vitest's
+    // 10 s default is unpinned headroom for that stop.
     ...(maxWorkers === undefined ? {} : { maxWorkers }),
     teardownTimeout: 120_000,
   },

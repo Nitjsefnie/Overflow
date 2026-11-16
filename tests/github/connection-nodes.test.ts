@@ -7,14 +7,14 @@ import { errorLogToken } from "@/lib/webhooks/log-field";
 
 /**
  * GitHub's connection `nodes` lists legally carry null entries (the schema is
- * `[Issue]`, not `[Issue!]`), and nested objects may arrive null. Every walk
- * here read node fields off such entries unchecked, so one null entry failed
- * the whole reconcile with `TypeError: Cannot read properties of null
- * (reading 'databaseId')` and the journal named no field (issue 1408). Each
- * guard throws naming the GraphQL field path it failed on, and the fold
- * journal renders that message through errorLogToken, so a failed run names
- * its cause. A null `databaseId` FIELD is a different shape and keeps its own
- * existing guard message ("GitHub GraphQL response was invalid.").
+ * `[Issue]`, not `[Issue!]`), and nested objects may arrive null. A walk that
+ * read node fields off such an entry unchecked would fail the whole reconcile
+ * with `TypeError: Cannot read properties of null (reading 'databaseId')` and
+ * a journal naming no field. Each guard throws naming the GraphQL field path
+ * it failed on, and the fold journal renders that message through
+ * errorLogToken, so a failed run names its cause. A null `databaseId` FIELD is
+ * a different shape and keeps its own existing guard message ("GitHub GraphQL
+ * response was invalid.").
  */
 
 const repository = { owner: "octo", name: "overflow" };

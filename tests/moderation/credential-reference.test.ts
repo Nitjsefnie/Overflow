@@ -17,7 +17,7 @@ import {
 import { hashApiToken, mintApiToken } from "@/lib/security/api-token";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
-// Issue 682, task 2: the credential the moderator gate resolved is what the
+// The credential the moderator gate resolved is what the
 // privileged-action rows record — ("session", NULL) behind a cookie session,
 // ("token", api_tokens.id) behind a bearer token, and (NULL, NULL) for a
 // writer with no HTTP request behind it. The rows are also proved to carry no

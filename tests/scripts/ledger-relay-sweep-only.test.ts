@@ -6,7 +6,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { renderRelayResult, runRelay } from "../../scripts/ledger-relay.ts";
 
 /**
- * Issue 1116's sweep-only relay starts: OVERFLOW_LEDGER_SWEEP_ONLY=true with no
+ * Sweep-only relay starts: OVERFLOW_LEDGER_SWEEP_ONLY=true with no
  * triggering run anywhere runs the orphan sweep ALONE — no mirror, no heal —
  * and fails closed on every ambiguity between the mode and a named run. The
  * suite is its own module because tests/scripts/ledger-relay.test.ts sits at
@@ -117,7 +117,7 @@ function checkRunsListing(names: Array<string>): Outcome {
   };
 }
 
-// --- Sweep-only relay runs (issue 1116) ---
+// --- Sweep-only relay runs ---
 
 describe("sweep-only relay runs (issue 1116)", () => {
   /**
@@ -248,7 +248,7 @@ describe("sweep-only relay runs (issue 1116)", () => {
 
   it("fails visibly when the sweep itself throws", async () => {
     // The listing's last attempt is a network error, not a 5xx answer, so the
-    // sweep does not defer (issue 1532 defers only a read GitHub answered 5xx).
+    // sweep does not defer; only a read GitHub answered with a 5xx defers it.
     const fetchStub = makeFetch([
       token(),
       { status: 500, body: { message: "boom" } },

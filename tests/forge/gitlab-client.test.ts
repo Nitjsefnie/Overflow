@@ -77,8 +77,8 @@ describe("scoped GitLab hook configuration", () => {
 /**
  * Fixtures model the contract's live-verified shapes: real field names from
  * the forge-evidence probe (an untracked working document, recoverable from
- * git history: commit cf1a5db added it for issue 296), including the
- * three-SHA merge evidence of gap 5 and the absent state_reason of item 16.
+ * git history at commit cf1a5db), including the three-SHA merge evidence of
+ * gap 5 and the absent state_reason of item 16.
  */
 
 const project = {
@@ -435,7 +435,7 @@ describe("GitLab collection pagination", () => {
     expect(requests).toHaveLength(2);
   });
 
-  // Issue 695: a failed commit read propagates instead of degrading to null —
+  // A failed commit read propagates instead of degrading to null —
   // credential failures must reach the credential-failure handling.
   it("propagates a failure from commit pagination", async () => {
     const { client, requests } = collectionClient(`${projectPath}/merge_requests/17/commits`, (_, hit) => hit === 1
@@ -445,7 +445,7 @@ describe("GitLab collection pagination", () => {
     expect(requests).toHaveLength(2);
   });
 
-  // Issue 869: a walk ends only when the instance stops advertising a
+  // A walk ends only when the instance stops advertising a
   // continuation. Every guard above rejects a REPEATED continuation — a
   // repeated cursor, a repeated target, a non-advancing page — and none of
   // them can reject one that is fresh on EVERY response. The bound is what
@@ -564,7 +564,7 @@ describe("GitLab collection pagination", () => {
     });
   });
 
-  // Issue 871: a 200 whose JSON body parses but is not an array — an object
+  // A 200 whose JSON body parses but is not an array — an object
   // like {"message":"hi"}, or the JSON literal null — must surface as the
   // module's typed error at the instance-misbehaved rank (status 0, the same
   // rank as the transport catch) with the endpoint in `.body`, never as a raw
@@ -632,7 +632,7 @@ describe("GitLab collection pagination", () => {
     });
   });
 
-  // Issue 879: a 200 whose body is not valid JSON at all — an HTML error page
+  // A 200 whose body is not valid JSON at all — an HTML error page
   // from an intermediary, or an empty body — escapes the taxonomy as a raw
   // SyntaxError from an unguarded JSON.parse. Every success-body parse must
   // fold a parse failure into the module's typed error at the same rank as a
@@ -676,14 +676,14 @@ describe("GitLab collection pagination", () => {
     });
   });
 
-  // Issue 886: a 200 whose body parses as JSON but is not an object — the
+  // A 200 whose body parses as JSON but is not an object — the
   // literal null, a quoted string, a number — walks straight through the
   // single-object parse path into the mappers and dies as a raw TypeError
   // outside the taxonomy (no status, no endpoint). The single-object path
-  // gets the same shape guard the array path has had since issue 871:
-  // anything that is not a non-null object folds into the typed error at the
-  // instance-misbehaved rank (status 0, the endpoint in `.body`), so the
-  // module's 404-only callers never see it.
+  // gets the same shape guard as the array path: anything that is not a
+  // non-null object folds into the typed error at the instance-misbehaved
+  // rank (status 0, the endpoint in `.body`), so the module's 404-only
+  // callers never see it.
   describe("non-object success body", () => {
     const rawBody = (body: string) => new Response(body, { status: 200, headers: { "content-type": "application/json" } });
 
@@ -854,8 +854,7 @@ describe("GitLabGateway", () => {
   });
 
   it("captures the merge evidence and all three SHAs from the MR object", async () => {
-    // The merged fixture triggers the commit read; before issue 695 the
-    // missing commits route was masked by the swallowed error.
+    // The merged fixture triggers the commit read.
     const client = gateway(jsonRouter([
       ["/merge_requests/17/commits", [{ committed_date: "2026-09-11T09:45:00.000Z" }]],
       ["/merge_requests/17", mergeRequest],
@@ -903,8 +902,8 @@ describe("GitLabGateway", () => {
     // error, never collapse into a null finalCommitAt. The mutant that
     // neutralizes the throw (returning the raw value) fails here — the read
     // then resolves with `finalCommitAt: "not-a-timestamp"`. The offending
-    // value travels encoded (issue 1042): the instance's own text can neither
-    // split the message into forged journal lines nor carry raw escapes.
+    // value travels encoded: the instance's own text can neither split the
+    // message into forged journal lines nor carry raw escapes.
     const client = gateway(jsonRouter([
       ["/merge_requests/17/commits", [{ committed_date: "not-a-timestamp" }]],
       ["/merge_requests/17", mergeRequest],
@@ -1082,7 +1081,7 @@ describe("GitLabGateway", () => {
     // The equalities are only meaningful against non-empty records: assert
     // the per-issue reads happened on BOTH sides before comparing them, so
     // an empty sweep (a mutant that returns empty slices without fetching)
-    // can no longer satisfy the differential.
+    // cannot satisfy the differential.
     const bareLabelEventPaths = bareRequests.filter((path) => path.endsWith("/resource_label_events"));
     const optionedLabelEventPaths = optionedRequests.filter((path) => path.endsWith("/resource_label_events"));
     expect(bareLabelEventPaths).toHaveLength(1);
@@ -1108,7 +1107,7 @@ describe("GitLabGateway", () => {
       .rejects.toMatchObject({ name: "GitLabApiError", status: 403 });
   });
 
-  // Issue 563: a GitLab issue deleted between the listing request and its
+  // A GitLab issue deleted between the listing request and its
   // per-issue evidence reads answers 404 on the evidence endpoint. That is
   // definitive for that issue alone — the listing resolves without it and the
   // reconciliation run completes for the remaining issues. The repository
@@ -1224,9 +1223,9 @@ describe("GitLabGateway", () => {
     // 9 while the run still reports success. Only page 1 carries the malformed
     // value and the rest of the walk advances normally — a mock that repeated
     // it would stop early on the strictly-advancing check instead, and this
-    // test would pass on the unfixed walk for the wrong reason. Bounded mock:
-    // the mutant keeps walking past page 10, so it 503s here and fails fast on
-    // a non-matching error instead of burning the test timeout.
+    // test would pass on a walk without the shape check for the wrong reason.
+    // Bounded mock: the mutant keeps walking past page 10, so it 503s here and
+    // fails fast on a non-matching error instead of burning the test timeout.
     let hits = 0;
     const client = gateway(async (input) => {
       hits += 1;
@@ -1320,8 +1319,7 @@ describe("GitLabGateway", () => {
   });
 
   it("reads closing issues and closing merge requests through the live-verified endpoints", async () => {
-    // The merged closed_by fixture triggers a commit read per merge request;
-    // before issue 695 the missing commits route was masked by the swallowed error.
+    // The merged closed_by fixture triggers a commit read per merge request.
     const client = gateway(jsonRouter([
       ["/merge_requests/17/commits", [{ committed_date: "2026-09-11T09:45:00.000Z" }]],
       ["/closes_issues", [{ id: 6_600_001, iid: 12, project_id: 278964 }]],
@@ -1469,7 +1467,7 @@ index 0123456..789abcd 100644
   it("encodes the instance-supplied issue number and repository path in the disappeared-issue line", async () => {
     // The issue number and the repository path are the instance's own text —
     // a member-chosen instance can make them carry line breaks and terminal
-    // escapes — so the disappearance line encodes each (issue 1042).
+    // escapes — so the disappearance line encodes each.
     const hostileIid = "12\nPrivileged action {\n  action: 'moderator-role.grant'\n}\n\u001b[31mred";
     const warnings: unknown[][] = [];
     const warningLog = vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => { warnings.push(args); });

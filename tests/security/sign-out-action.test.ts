@@ -21,7 +21,7 @@ const mocks = vi.hoisted(() => {
 vi.mock("next-auth", () => ({ default: mocks.nextAuth }));
 vi.mock("next-auth/providers/github", () => ({ default: mocks.github }));
 
-// Issue 700: every action now opens with the origin guard, so the request
+// Every action opens with the origin guard, so the request
 // headers must name the trusted origin (useTrustedOrigin sets the app URL).
 vi.mock("next/headers", async () => (await import("../support/trusted-origin")).trustedRequestHeaders());
 

@@ -53,11 +53,11 @@ describe("GitHub OAuth scope", () => {
       profile: { id, login, avatar_url: null } as unknown as Profile,
     })).resolves.toBe(true);
 
-    // Two storage-path round trips (issue 1154): the stored-token continuity
+    // Two storage-path round trips: the stored-token continuity
     // read runs first, then the upsert. The upsert's bindings are pinned on
     // the second call; the read resolves no row token here, so continuity
-    // keeps nothing and the first sign-in stores the new token. Four bindings
-    // since issue 1075: the avatar URL the old insert bound third is gone.
+    // keeps nothing and the first sign-in stores the new token. The upsert
+    // takes four bindings.
     expect(mocks.sql).toHaveBeenCalledTimes(2);
     const [, ...bindings] = mocks.sql.mock.calls[1]!;
     expect(bindings).toHaveLength(4);
@@ -88,7 +88,7 @@ describe("GitHub OAuth scope", () => {
     }
   });
 
-  // Issue 599: the provider default is the least-privilege sign-in. An
+  // The provider default is the least-privilege sign-in. An
   // explicit empty scope is required — an omitted scope makes @auth/core
   // 0.41.3 (lib/utils/providers.js, normalizeOAuth) inject its OIDC default
   // "openid profile email", which GitHub does not know.
@@ -170,8 +170,8 @@ describe("GitHub OAuth scope", () => {
     it("keeps the recorded hint on a later refresh that carries no account", async () => {
       const { jwt } = await callbacks();
 
-      // A sign-in instant inside the absolute lifetime (issue 1043): without
-      // one the refresh path refuses the token before the hint can ride.
+      // A sign-in instant inside the absolute lifetime; without one
+      // the refresh path refuses the token before the hint can ride.
       const token = await jwt!({
         token: { canAdministerWebhooks: true, authenticatedAt: Math.floor(Date.now() / 1000) },
         user: { id: "4242" },

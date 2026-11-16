@@ -6,11 +6,11 @@ import {
 } from "@/lib/repositories/gitlab-unregister";
 
 /**
- * The GitLab hook deletion an unregistration performs (issue 547, behavior
- * 3), against a store seam: forge-first (the deletion happens before any row
- * could be touched — the module holds no row-writing method at all), a GitLab
- * 404 reads as already absent, and every refusal leaves the row untouched by
- * throwing through the registration error catalog.
+ * The GitLab hook deletion an unregistration performs, against a store seam:
+ * forge-first (the deletion happens before any row could be touched — the
+ * module holds no row-writing method at all), a GitLab 404 reads as already
+ * absent, and every refusal leaves the row untouched by throwing through the
+ * registration error catalog.
  */
 
 type Target = {

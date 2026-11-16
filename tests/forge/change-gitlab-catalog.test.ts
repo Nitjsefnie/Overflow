@@ -13,7 +13,7 @@ import {
 } from "@/lib/repositories/register";
 
 /**
- * The GitLab catalog-change path (issue 548): a PATCH carrying the same body a
+ * The GitLab catalog-change path: a PATCH carrying the same body a
  * GitLab registration takes must resolve through the sponsor's linked identity,
  * verify the labels on the GitLab project, and append the next catalog version
  * exactly as the GitHub path does. Every case here is end-to-end through the
@@ -181,7 +181,7 @@ describe("changing a registered GitLab project's catalog (PATCH)", () => {
     expect(args.githubRepositoryId).toBe(278964);
     expect(args.sponsorId).toBe("sponsor-1");
     // The GitLab path resolves the row as gitlab, so the store's write-time
-    // provider check (issue 571) is told the forge this path resolved.
+    // provider check is told the forge this path resolved.
     expect(args.provider).toBe("gitlab");
     expect(args.scheme).toEqual(scheme);
     expect(args.effectiveFrom).toBeInstanceOf(Date);
