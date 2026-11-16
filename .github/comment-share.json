@@ -1,15 +1,15 @@
 {
   ".github/codeql-config.yml": [
-    446,
-    491
+    437,
+    482
   ],
   ".github/dependabot.yml": [
     6838,
     7792
   ],
   ".github/workflows/actionlint.yml": [
-    2335,
-    3703
+    2314,
+    3682
   ],
   ".github/workflows/ci-pr.yml": [
     15740,
@@ -20,16 +20,16 @@
     21589
   ],
   ".github/workflows/claim.yml": [
-    2187,
-    2743
+    2092,
+    2648
   ],
   ".github/workflows/code-scanning.yml": [
     620,
     1450
   ],
   ".github/workflows/coverage-comment.yml": [
-    5786,
-    12345
+    5757,
+    12739
   ],
   ".github/workflows/dependency-audit.yml": [
     8453,
@@ -52,8 +52,8 @@
     9490
   ],
   ".github/workflows/ratchet-guard.yml": [
-    3577,
-    5988
+    3556,
+    5967
   ],
   ".github/workflows/scorecard.yml": [
     716,
@@ -292,56 +292,56 @@
     305
   ],
   "docker-compose.yml": [
-    792,
-    1752
+    786,
+    1758
   ],
   "next.config.ts": [
     1464,
     3826
   ],
   "scripts/account.ts": [
-    873,
-    5694
+    862,
+    5683
   ],
   "scripts/await-pr-suite.ts": [
     4134,
     13438
   ],
   "scripts/calibrate-coverage.ts": [
-    981,
-    3379
+    971,
+    3369
   ],
   "scripts/check-coverage-floor.ts": [
-    1939,
-    5724
+    1929,
+    5714
   ],
   "scripts/check-legal-revisions.ts": [
-    6926,
-    12927
+    6785,
+    12965
   ],
   "scripts/check-page-geometry.mjs": [
-    23970,
-    46649
+    23345,
+    46099
   ],
   "scripts/check-prerendered-routes.ts": [
     543,
     2653
   ],
   "scripts/check-ratchets.ts": [
-    2861,
-    11163
+    2851,
+    11153
   ],
   "scripts/ci-base-freshness.sh": [
-    1074,
-    4640
+    1054,
+    5179
   ],
   "scripts/commit_scopes.py": [
-    5590,
-    11138
+    5577,
+    11125
   ],
   "scripts/container-build.sh": [
-    1530,
-    3106
+    1510,
+    3086
   ],
   "scripts/db-backup.sh": [
     4884,
@@ -360,40 +360,40 @@
     35141
   ],
   "scripts/docs-only.ts": [
-    982,
-    3205
+    962,
+    3185
   ],
   "scripts/event-policy-ledger-app.ts": [
-    1429,
-    4983
+    1386,
+    5012
   ],
   "scripts/http-surface-derive-failures.ts": [
-    3973,
-    20332
+    3962,
+    20321
   ],
   "scripts/http-surface-derive.ts": [
-    4103,
-    20621
+    4051,
+    20936
   ],
   "scripts/http-surface-fixtures.ts": [
-    4963,
-    24140
+    4915,
+    24314
   ],
   "scripts/http-surface-record.ts": [
-    658,
-    2641
+    647,
+    2630
   ],
   "scripts/ledger-app-mint-permissions.ts": [
-    1411,
-    1527
+    1390,
+    1506
   ],
   "scripts/ledger-relay-decisions.ts": [
-    9087,
-    15017
+    9010,
+    14940
   ],
   "scripts/ledger-relay-fork.ts": [
-    1361,
-    2760
+    1343,
+    2742
   ],
   "scripts/ledger-relay-job-budget.ts": [
     1062,
@@ -404,52 +404,52 @@
     9382
   ],
   "scripts/ledger-relay-sweep.ts": [
-    3889,
-    13136
+    3879,
+    13126
   ],
   "scripts/ledger-relay-trigger.ts": [
     2398,
     5140
   ],
   "scripts/ledger-relay-upstream.ts": [
-    1042,
-    5980
+    1034,
+    5972
   ],
   "scripts/ledger-relay.ts": [
-    6659,
-    18997
+    6613,
+    19632
   ],
   "scripts/measure-field-controls.ts": [
-    1363,
-    6848
+    1348,
+    6833
   ],
   "scripts/measure-header-geometry.mjs": [
-    3319,
-    15440
+    3311,
+    15432
   ],
   "scripts/migrate.ts": [
     6125,
     16893
   ],
   "scripts/overflow-alert.sh": [
-    14032,
-    20497
+    13893,
+    20358
   ],
   "scripts/overflow-bounce.sh": [
-    9947,
-    14371
+    9935,
+    14359
   ],
   "scripts/overflow-canary.sh": [
-    14979,
-    23265
+    14917,
+    23203
   ],
   "scripts/page-geometry-fixtures.mjs": [
     2946,
     6492
   ],
   "scripts/patch-coverage.ts": [
-    1449,
-    6364
+    1439,
+    6354
   ],
   "scripts/perf-node-setup.mjs": [
     326,
@@ -464,16 +464,16 @@
     5495
   ],
   "scripts/secret-scan.sh": [
-    6257,
-    7738
+    6235,
+    7749
   ],
   "scripts/seed-board-benchmark.ts": [
-    5692,
-    24098
+    5646,
+    24090
   ],
   "scripts/surface-change.ts": [
-    1497,
-    6096
+    1438,
+    6037
   ],
   "src/app/.well-known/oauth-protected-resource/api/mcp/route.ts": [
     450,
@@ -488,88 +488,84 @@
     2762
   ],
   "src/app/api/contests/route.ts": [
-    681,
-    4462
+    671,
+    4452
   ],
   "src/app/api/dashboard/route.ts": [
     537,
     2041
   ],
   "src/app/api/forge-identities/route.ts": [
-    1850,
-    9609
+    1736,
+    9525
   ],
   "src/app/api/github/webhooks/route.ts": [
-    3379,
-    7785
+    3280,
+    7686
   ],
   "src/app/api/gitlab/webhooks/route.ts": [
-    3478,
-    8190
+    3376,
+    8088
   ],
   "src/app/api/issues/route.ts": [
     644,
     2823
   ],
   "src/app/api/mcp/route.ts": [
-    2909,
-    10680
-  ],
-  "src/app/api/moderation/adjustments/reversal/route.ts": [
-    559,
-    3356
+    2886,
+    10657
   ],
   "src/app/api/moderation/audits/route.ts": [
     254,
     1636
   ],
   "src/app/api/moderation/contests/route.ts": [
-    1692,
-    6087
+    1680,
+    6075
   ],
   "src/app/api/moderation/recalibration/adjustment/route.ts": [
-    766,
-    3579
+    663,
+    3476
   ],
   "src/app/api/moderation/recalibration/route.ts": [
-    464,
-    2471
+    454,
+    2461
   ],
   "src/app/api/moderation/rederivation/route.ts": [
-    1091,
-    4973
+    992,
+    4874
   ],
   "src/app/api/moderation/reversal/route.ts": [
-    864,
-    3431
+    781,
+    3348
   ],
   "src/app/api/overrides/route.ts": [
-    1359,
-    6976
+    1266,
+    6883
   ],
   "src/app/api/readiness/route.ts": [
-    4886,
-    8676
+    4664,
+    8454
   ],
   "src/app/api/repositories/labels/route.ts": [
-    7307,
-    16279
+    7184,
+    16186
   ],
   "src/app/api/repositories/route.ts": [
-    6271,
-    25034
+    6108,
+    25442
   ],
   "src/app/api/settlements/[id]/route.ts": [
-    853,
-    3279
+    843,
+    3269
   ],
   "src/app/api/tokens/route.ts": [
-    2459,
-    6027
+    2427,
+    5995
   ],
   "src/app/api/version/route.ts": [
-    364,
-    536
+    353,
+    525
   ],
   "src/app/calibration/page.tsx": [
     434,
@@ -584,28 +580,28 @@
     11431
   ],
   "src/app/layout.tsx": [
-    557,
-    902
+    526,
+    871
   ],
   "src/app/not-found.tsx": [
-    561,
-    1104
+    502,
+    1045
   ],
   "src/app/third-party-notices.txt/route.ts": [
     282,
     1017
   ],
   "src/auth.ts": [
-    7458,
-    14019
+    7327,
+    13888
   ],
   "src/components/account-controls-panel.tsx": [
-    1405,
-    6562
+    1394,
+    6551
   ],
   "src/components/api-token-panel.tsx": [
-    2128,
-    7480
+    2104,
+    7456
   ],
   "src/components/app-shell.tsx": [
     986,
@@ -632,12 +628,12 @@
     4173
   ],
   "src/instrumentation-node.ts": [
-    2452,
-    7778
+    2394,
+    8347
   ],
   "src/instrumentation.ts": [
-    885,
-    1199
+    866,
+    1180
   ],
   "src/lib/accounts/deletion.ts": [
     3408,
@@ -648,64 +644,64 @@
     16126
   ],
   "src/lib/auth/account-store.ts": [
-    4497,
-    8595
+    4399,
+    8497
   ],
   "src/lib/auth/bounded-logger.ts": [
-    3077,
-    5118
+    3070,
+    5111
   ],
   "src/lib/auth/github-granted-scopes.ts": [
-    1698,
-    4087
+    1688,
+    4077
   ],
   "src/lib/auth/github-oauth-scopes.ts": [
-    1350,
-    1873
+    1340,
+    1863
   ],
   "src/lib/auth/github-userinfo.ts": [
-    3582,
-    6336
+    3557,
+    6311
   ],
   "src/lib/auth/recent-sign-in.ts": [
     246,
     577
   ],
   "src/lib/auth/session-guard.ts": [
-    1884,
-    3566
+    1832,
+    3514
   ],
   "src/lib/auth/session-recovery-reasons.ts": [
     519,
     870
   ],
   "src/lib/auth/sign-in-actions.ts": [
-    1044,
-    1923
+    1034,
+    2039
   ],
   "src/lib/auth/sign-in-decision.ts": [
-    1466,
-    3146
+    1421,
+    3101
   ],
   "src/lib/auth/trusted-host.ts": [
-    1170,
-    1501
+    1134,
+    1465
   ],
   "src/lib/calibration/statistics.ts": [
     507,
     3073
   ],
   "src/lib/controller-config.ts": [
-    2235,
-    3397
+    2182,
+    3344
   ],
   "src/lib/dashboard/labels.ts": [
     550,
     969
   ],
   "src/lib/dashboard/session.ts": [
-    709,
-    1958
+    699,
+    1948
   ],
   "src/lib/db/client.ts": [
     3663,
@@ -720,36 +716,36 @@
     1455
   ],
   "src/lib/disputes.ts": [
-    6189,
-    6939
+    6082,
+    6832
   ],
   "src/lib/domain/claim-path.ts": [
-    2301,
-    4186
+    2265,
+    4150
   ],
   "src/lib/domain/difficulty-scheme.ts": [
-    813,
-    3676
+    777,
+    3640
   ],
   "src/lib/fold/data-subject-suppression.ts": [
     3169,
     13927
   ],
   "src/lib/fold/evidence-facts.ts": [
-    5351,
-    14042
+    5110,
+    13801
   ],
   "src/lib/fold/fold-revision.ts": [
-    282,
-    309
+    273,
+    300
   ],
   "src/lib/fold/guarded-callback.ts": [
-    3016,
-    3574
+    2934,
+    3492
   ],
   "src/lib/fold/identity-claims.ts": [
-    3069,
-    11405
+    3034,
+    11370
   ],
   "src/lib/fold/policy-violation-record.ts": [
     710,
@@ -768,8 +764,8 @@
     3604
   ],
   "src/lib/fold/reconciliation-evidence.ts": [
-    2235,
-    4334
+    2225,
+    4353
   ],
   "src/lib/fold/reconciliation-job-store.ts": [
     2389,
@@ -780,8 +776,8 @@
     1449
   ],
   "src/lib/fold/reconciliation-worker.ts": [
-    17211,
-    27522
+    16950,
+    27261
   ],
   "src/lib/fold/repository-coordination.ts": [
     5284,
@@ -792,8 +788,8 @@
     52974
   ],
   "src/lib/fold/repository-lock-retry.ts": [
-    453,
-    992
+    359,
+    898
   ],
   "src/lib/fold/repository-ownership.ts": [
     874,
@@ -804,8 +800,8 @@
     17710
   ],
   "src/lib/forge/gateway.ts": [
-    1373,
-    4384
+    1351,
+    4365
   ],
   "src/lib/forge/identities.ts": [
     3950,
@@ -816,8 +812,8 @@
     5495
   ],
   "src/lib/format-instant.ts": [
-    1143,
-    2553
+    1132,
+    2542
   ],
   "src/lib/format-signed.ts": [
     579,
@@ -836,8 +832,8 @@
     1668
   ],
   "src/lib/github/collection-walk-bound.ts": [
-    4730,
-    5347
+    4321,
+    4938
   ],
   "src/lib/github/drain-issue-reads.ts": [
     80,
@@ -868,24 +864,24 @@
     4455
   ],
   "src/lib/github/webhook-schema.ts": [
-    1460,
-    5071
+    1449,
+    5306
   ],
   "src/lib/github/webhook-signature.ts": [
     169,
     721
   ],
   "src/lib/gitlab/api-error.ts": [
-    3412,
-    4636
+    3299,
+    4523
   ],
   "src/lib/gitlab/client.ts": [
-    6598,
-    25527
+    6534,
+    25577
   ],
   "src/lib/gitlab/collection-walk-bound.ts": [
-    2631,
-    3251
+    2622,
+    3242
   ],
   "src/lib/gitlab/webhook-schema.ts": [
     2873,
@@ -900,8 +896,8 @@
     1436
   ],
   "src/lib/legal-revisions.ts": [
-    2875,
-    3299
+    2790,
+    3214
   ],
   "src/lib/logging/journal-levels.ts": [
     464,
@@ -924,20 +920,20 @@
     9544
   ],
   "src/lib/moderation/banned-accounts.ts": [
-    528,
-    1424
+    504,
+    1400
   ],
   "src/lib/moderation/credit-adjustment-store.ts": [
-    4522,
-    25936
+    4512,
+    25926
   ],
   "src/lib/moderation/rederivation-service.ts": [
-    1519,
-    3863
+    1490,
+    3834
   ],
   "src/lib/moderation/roles.ts": [
-    1540,
-    2110
+    1458,
+    2028
   ],
   "src/lib/moderation/route-auth.ts": [
     1342,
@@ -948,20 +944,20 @@
     1080
   ],
   "src/lib/moderation/sanction-contest-service.ts": [
-    3828,
-    8634
+    3813,
+    8619
   ],
   "src/lib/moderation/sanction-contest-store.ts": [
     4582,
     13069
   ],
   "src/lib/moderation/sanction-lift.ts": [
-    2696,
-    4738
+    2654,
+    4696
   ],
   "src/lib/moderation/service.ts": [
-    5384,
-    19790
+    5362,
+    19768
   ],
   "src/lib/moderation/writer-credential.ts": [
     342,
@@ -972,8 +968,8 @@
     2260
   ],
   "src/lib/overrides/service.ts": [
-    2491,
-    8756
+    2421,
+    8696
   ],
   "src/lib/overrides/unlabelled-points.ts": [
     646,
@@ -984,32 +980,32 @@
     444
   ],
   "src/lib/repositories/gitlab-forge-errors.ts": [
-    698,
-    2108
+    695,
+    2105
   ],
   "src/lib/repositories/gitlab-unregister.ts": [
-    1729,
-    4542
+    1728,
+    4541
   ],
   "src/lib/repositories/postgres-store.ts": [
     4364,
     25623
   ],
   "src/lib/repositories/register.ts": [
-    26194,
-    69463
+    25784,
+    68885
   ],
   "src/lib/repositories/unregister-scrub.ts": [
-    2537,
-    4459
+    2535,
+    4472
   ],
   "src/lib/retention/prune.ts": [
     1894,
     4937
   ],
   "src/lib/sanctions.ts": [
-    2276,
-    2698
+    2103,
+    2525
   ],
   "src/lib/security/api-token.ts": [
     472,
@@ -1024,8 +1020,8 @@
     650
   ],
   "src/lib/security/member-route-auth.ts": [
-    1154,
-    2954
+    1143,
+    2943
   ],
   "src/lib/security/privileged-action-log.ts": [
     2411,
@@ -1036,8 +1032,8 @@
     667
   ],
   "src/lib/security/public-destination-deployment.ts": [
-    1940,
-    3129
+    1910,
+    3099
   ],
   "src/lib/security/public-destination.ts": [
     3265,
@@ -1048,20 +1044,20 @@
     2631
   ],
   "src/lib/security/route-credential.ts": [
-    2014,
-    3534
+    1971,
+    3491
   ],
   "src/lib/security/route-rate-limit.ts": [
-    2721,
-    5369
+    2681,
+    5329
   ],
   "src/lib/security/server-action-origin.ts": [
-    904,
-    1452
+    894,
+    1442
   ],
   "src/lib/security/token-cipher.ts": [
-    1318,
-    6425
+    1310,
+    6596
   ],
   "src/lib/strip-name-prefix.ts": [
     349,
@@ -1084,64 +1080,60 @@
     520
   ],
   "src/lib/webhooks/log-field.ts": [
-    2759,
-    6002
+    2748,
+    5991
   ],
   "src/lib/webhooks/postgres-receipts.ts": [
     1183,
     4565
   ],
   "src/lib/webhooks/processor.ts": [
-    2647,
-    5301
+    2607,
+    5663
   ],
   "src/lib/webhooks/rate-limit.ts": [
-    5916,
-    8966
+    5748,
+    8798
   ],
   "src/lib/worker/failure-logger.ts": [
     2109,
     3635
   ],
   "src/proxy.ts": [
-    1160,
-    1944
+    1140,
+    1924
   ],
   "tests/api/api-md-route-coverage.test.ts": [
-    1331,
-    3099
+    1321,
+    3089
   ],
   "tests/api/body-limits.test.ts": [
-    3413,
-    17926
+    3384,
+    17897
   ],
   "tests/api/ci-workflows.test.ts": [
     25684,
     63863
   ],
   "tests/api/instrumentation-fail-closed.test.ts": [
-    822,
-    5031
+    820,
+    5029
   ],
   "tests/api/tokens-session-cookie.test.ts": [
-    1459,
-    5443
-  ],
-  "tests/api/tokens.test.ts": [
-    2719,
-    18049
+    1426,
+    5455
   ],
   "tests/api/webhook-wiring.test.ts": [
-    1042,
-    2335
+    979,
+    2272
   ],
   "tests/api/webhook.test.ts": [
-    5645,
-    34162
+    5613,
+    34310
   ],
   "tests/auth/account-deletion-sign-in-action.test.ts": [
-    185,
-    917
+    176,
+    908
   ],
   "tests/auth/bounded-logger.test.ts": [
     1845,
@@ -1152,12 +1144,12 @@
     3832
   ],
   "tests/auth/session-cookie-content.test.ts": [
-    4409,
-    13652
+    4352,
+    13658
   ],
   "tests/auth/session-deletion.test.ts": [
-    2245,
-    9876
+    2207,
+    9838
   ],
   "tests/auth/session-lifetime.test.ts": [
     488,
@@ -1168,12 +1160,12 @@
     2302
   ],
   "tests/auth/session-revocation.test.ts": [
-    2845,
-    11102
+    2730,
+    11050
   ],
   "tests/auth/sign-in-token-continuity.test.ts": [
-    2421,
-    15404
+    2411,
+    15502
   ],
   "tests/auth/trusted-host.test.ts": [
     1364,
@@ -1184,8 +1176,8 @@
     8375
   ],
   "tests/ci/concurrency.test.ts": [
-    18464,
-    46180
+    18067,
+    46046
   ],
   "tests/ci/coverage-comment-workflow.test.ts": [
     1987,
@@ -1200,12 +1192,12 @@
     22125
   ],
   "tests/ci/pr-suite-workflow.test.ts": [
-    16577,
-    32992
+    15432,
+    31063
   ],
   "tests/ci/required-checks.test.ts": [
-    1382,
-    6528
+    1371,
+    6517
   ],
   "tests/ci/verify-fetch-provenance.test.ts": [
     1396,
@@ -1220,88 +1212,88 @@
     5051
   ],
   "tests/components/field-control-styles.test.tsx": [
-    1593,
-    5056
+    1584,
+    5047
   ],
   "tests/components/issues-board.test.tsx": [
     1053,
     6794
   ],
   "tests/components/landing-chrome.test.tsx": [
-    1892,
-    6694
+    1852,
+    6666
   ],
   "tests/components/landing.test.tsx": [
     8189,
     21445
   ],
   "tests/components/legal-revisions-marker.test.tsx": [
-    6803,
-    13124
+    6369,
+    12730
   ],
   "tests/components/not-found.test.tsx": [
-    3722,
-    8726
+    3663,
+    8667
   ],
   "tests/components/rules.test.tsx": [
-    5346,
-    14404
+    5294,
+    14352
   ],
   "tests/components/session-chrome.test.tsx": [
-    913,
-    3191
+    828,
+    3106
   ],
   "tests/components/site-header-wrap.test.tsx": [
-    3220,
-    9580
+    3211,
+    9571
   ],
   "tests/components/terms-page.test.tsx": [
-    8209,
-    14335
+    7990,
+    14143
   ],
   "tests/config/issue-admission.test.ts": [
     799,
     3356
   ],
   "tests/dashboard/page-module-moderator-standing.test.ts": [
-    1700,
-    5434
+    1678,
+    6025
   ],
   "tests/dashboard/redirect-loop.test.ts": [
     815,
     4120
   ],
   "tests/db/account-reregistration.test.ts": [
-    1076,
-    6774
+    1060,
+    6794
   ],
   "tests/db/api-token-delivery-window.test.ts": [
-    2841,
-    14268
+    2824,
+    14305
   ],
   "tests/db/api-token-last-used.test.ts": [
-    1471,
-    8105
+    1468,
+    8138
   ],
   "tests/db/avatar-url-nulling-migration.test.ts": [
-    725,
-    3325
+    707,
+    3343
   ],
   "tests/db/board-generic-plan.test.ts": [
     3813,
     14609
   ],
   "tests/db/board-read-indexes.test.ts": [
-    3790,
-    14094
+    3782,
+    14122
   ],
   "tests/db/calibration-cohorts-snapshot.test.ts": [
     3113,
     11352
   ],
   "tests/db/client-deadlines.test.ts": [
-    6132,
-    14372
+    5960,
+    14299
   ],
   "tests/db/closesql-connection-death.test.ts": [
     843,
@@ -1312,12 +1304,12 @@
     5995
   ],
   "tests/db/closesql-socket-error.test.ts": [
-    756,
-    4345
+    713,
+    4338
   ],
   "tests/db/connect-phase-death.test.ts": [
-    10226,
-    18489
+    10099,
+    18362
   ],
   "tests/db/eligible-issues-query-scoping.test.ts": [
     2966,
@@ -1328,92 +1320,92 @@
     21428
   ],
   "tests/db/identity-claim-publication.test.ts": [
-    5409,
-    21619
+    5388,
+    21662
   ],
   "tests/db/pipelined-query-after-build-failure.test.ts": [
     1700,
     2928
   ],
   "tests/db/policy-violation-recording.test.ts": [
-    1394,
-    8285
+    1388,
+    8315
   ],
   "tests/db/postgres-queue.test.ts": [
     1105,
     2513
   ],
   "tests/db/reconciliation-lock-release.test.ts": [
-    4202,
-    15748
+    4102,
+    15648
   ],
   "tests/db/reserve-contract.test.ts": [
-    9844,
-    20735
+    9489,
+    20380
   ],
   "tests/db/reserve-end.test.ts": [
     1903,
     5210
   ],
   "tests/db/reserve-shutdown-race.test.ts": [
-    998,
-    3084
+    991,
+    3077
   ],
   "tests/db/reserve-stranded-after-reconnect.test.ts": [
     3919,
     7573
   ],
   "tests/db/scheduled-reconnect.test.ts": [
-    1521,
-    9593
+    1508,
+    9580
   ],
   "tests/db/shutdown-backlog-drain.test.ts": [
-    6252,
-    10180
+    6190,
+    10118
   ],
   "tests/db/sql-array-cold-client.test.ts": [
-    1157,
-    4513
+    1150,
+    4506
   ],
   "tests/db/statement-deadline-waiters.test.ts": [
-    2789,
-    15985
+    2763,
+    16104
   ],
   "tests/db/types-fetch-failure-child.ts": [
     1419,
     3512
   ],
   "tests/db/types-fetch-failure.test.ts": [
-    1260,
-    5002
+    1239,
+    4981
   ],
   "tests/db/worker-failure-logging.test.ts": [
-    2656,
-    7429
+    2491,
+    7300
   ],
   "tests/deploy/alert-units.test.ts": [
-    3814,
-    10796
+    3594,
+    10576
   ],
   "tests/deploy/bounce-units.test.ts": [
     3510,
     12955
   ],
   "tests/deploy/build-telemetry.test.ts": [
-    637,
-    2689
+    613,
+    2674
   ],
   "tests/deploy/canary-units.test.ts": [
     3141,
     12432
   ],
   "tests/deploy/container-image.test.ts": [
-    2553,
-    14785
+    2507,
+    14757
   ],
   "tests/deploy/csp-dynamic-pages.test.ts": [
-    973,
-    1233
+    971,
+    1231
   ],
   "tests/deploy/edge-instrumentation-bundle.test.ts": [
     1382,
@@ -1424,28 +1416,28 @@
     9769
   ],
   "tests/deploy/proxy-csp.test.ts": [
-    2167,
-    6150
+    2145,
+    6128
   ],
   "tests/deploy/tsconfig.test.ts": [
     307,
     932
   ],
   "tests/deploy/unit-file.test.ts": [
-    6706,
-    20520
+    6673,
+    20487
   ],
   "tests/docs/incident-response-recovery.test.ts": [
-    2233,
-    7365
+    2222,
+    7354
   ],
   "tests/domain/claim-path-warnings.test.ts": [
-    898,
-    3657
+    889,
+    3648
   ],
   "tests/fold/cache-body-narrowing.test.ts": [
-    1115,
-    7130
+    1105,
+    7120
   ],
   "tests/fold/fold-revision.test.ts": [
     406,
