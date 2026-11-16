@@ -32,11 +32,10 @@
 # empty capability bounding set, so the read succeeds only as a member of the
 # group that owns the log. That is checked before anything is submitted, and a
 # log that cannot be read is never turned into a statement about the relay. The
-# deployed canary had neither the membership nor the capability: it read a 0640
-# Debian-exim:adm mainlog it could not open, spent the whole budget proving it,
-# and reported a relay that had Completed the message one second after
-# submission - a false page, sent to the one channel the maintainer trusts, on
-# a host that was healthy.
+# mainlog is 0640 Debian-exim:adm: a run with neither the membership nor the
+# capability cannot open it, spends the whole budget proving it, and reports a
+# relay that Completed the message - a false page, sent to the one channel the
+# maintainer trusts, on a host that is healthy.
 #
 # Host configuration, read at run time and never committed: the address the
 # canary mails is in /etc/overflow/canary-recipient and the out-of-band
@@ -233,10 +232,10 @@ fi
 # out that the operator would receive with no explanation attached to it; and
 # a canary that cannot read its own evidence must not go on to pretend it has.
 #
-# This is the deployed defect's own shape, measured on the unit's exact
-# hardening: `grep` of the mainlog under this sandbox answers "Permission
-# denied", the run timed out, and the report named a relay that had completed
-# the message a second earlier. So the check below REFUSES, and refuses as a
+# Measured on the unit's exact hardening, without this check: `grep` of the
+# mainlog under this sandbox answers "Permission denied", the run times out,
+# and the report names a relay that had completed the message a second
+# earlier. So the check below REFUSES, and refuses as a
 # fault in the canary: exit 2, a report on its own header, and no
 # dead-streak marker. It sits after the two checks above only because the
 # refusal names the host and is stamped like every other report, and both of

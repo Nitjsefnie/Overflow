@@ -19,8 +19,8 @@ export class PostgresReconciliationPacingStore {
 
   public async getReconciliationEvidence(repositoryId: string): Promise<ReconciliationEvidence | null> {
     // The document is reassembled from the facts storage by the same module
-    // that splits it — same shape, deterministic order, so the fold's merge
-    // logic is unchanged.
+    // that splits it — same shape, deterministic order — so the fold's merge
+    // logic needs no awareness of the split storage.
     return readReconciliationEvidence(this.sql, repositoryId);
   }
 

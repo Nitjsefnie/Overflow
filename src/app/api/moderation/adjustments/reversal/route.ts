@@ -18,7 +18,7 @@ import { reasonText } from "@/lib/validation/reason";
 
 /**
  * The reversal body is one adjustment id plus a reason reasonText() caps at
- * 2000 characters, so 32 KiB bounds the read with wide margin (issue 661).
+ * 2000 characters, so 32 KiB bounds the read with wide margin.
  */
 const MODERATION_REVERSAL_BODY_LIMIT_BYTES = 32 * 1024; // 32 KiB
 
@@ -31,7 +31,7 @@ const reversalSchema = z
 
 /**
  * Reverses an applied credit adjustment by mirroring it — negative lines, its
- * own moderation event, the original row untouched (issue 330).
+ * own moderation event, the original row untouched.
  */
 export function createModerationReversalPostHandler(dependencies: ModerationCreditRouteDependencies) {
   return async function postModerationReversal(request: Request): Promise<Response> {
@@ -90,9 +90,8 @@ export const POST = createModerationReversalPostHandler({
 /**
  * Reads the body through readBodyWithinLimit and parses it with the schema.
  * Returns "tooLarge" when the body crosses the route's limit — the caller
- * answers 413 — and null for an unparsable or schema-invalid body, exactly as
- * request.json()'s rejection did before the bounded reader. A body read that
- * itself fails also keeps the null answer.
+ * answers 413 — and null for an unparsable or schema-invalid body. A body read
+ * that itself fails also keeps the null answer.
  */
 async function parseReversalInput(
   request: Request,

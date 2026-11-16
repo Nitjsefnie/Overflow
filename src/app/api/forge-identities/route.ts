@@ -25,7 +25,7 @@ import { createRateLimiter } from "@/lib/webhooks/rate-limit";
 
 /**
  * The link and unlink bodies carry one instance URL and token, or one identity
- * id, so 4 KiB bounds the read with room to spare (issue 661).
+ * id, so 4 KiB bounds the read with room to spare.
  */
 const FORGE_IDENTITIES_BODY_LIMIT_BYTES = 4 * 1024; // 4 KiB
 
@@ -37,7 +37,7 @@ export type ForgeIdentitiesRouteDependencies = {
   getSession: () => Promise<ForgeIdentitiesRouteSession | null>;
   /**
    * The account's role read live at request time. A session JWT outlives the
-   * account it was issued for (issue 733), so the write verbs re-read the row
+   * account it was issued for, so the write verbs re-read the row
    * rather than trusting the session: a null here is a deleted (or missing)
    * account.
    */
@@ -49,7 +49,7 @@ export type ForgeIdentitiesRouteDependencies = {
   /** Claims past GitLab work for the freshly verified triple (fold store). */
   claimPastWork?: (input: { userId: string; instanceUrl: string; forgeUserId: number }) => Promise<void>;
   /**
-   * The keyed expensive-route bound (issue 1054), checked by the write verbs
+   * The keyed expensive-route bound, checked by the write verbs
    * after every authorization refusal and before the body is read. GET — a
    * read of the caller's own rows — is not one of the expensive classes and
    * stays unbounded. The production wiring passes this file's module-scope
@@ -59,7 +59,7 @@ export type ForgeIdentitiesRouteDependencies = {
 };
 
 // One keyed limiter per route file, born at the wall clock: its buckets are
-// keyed by the acting credential identity and never evict (issue 1054).
+// keyed by the acting credential identity and never evict.
 const forgeIdentitiesRateLimiter = createRateLimiter({ nowMs: () => Date.now() });
 const forgeIdentitiesRateGate = createRouteRateGate({
   className: "forge-identities",
@@ -227,9 +227,8 @@ export function createForgeIdentitiesDeleteHandler(dependencies: ForgeIdentities
 /**
  * Reads the body through readBodyWithinLimit and parses it with the schema.
  * Returns "tooLarge" when the body crosses the route's limit — the caller
- * answers 413 — and null for an unparsable or schema-invalid body, exactly as
- * request.json()'s rejection did before the bounded reader. A body read that
- * itself fails also keeps the null answer.
+ * answers 413 — and null for an unparsable or schema-invalid body. A body read
+ * that itself fails also keeps the null answer.
  */
 async function parseBody<T extends z.ZodTypeAny>(
   request: Request,
@@ -248,14 +247,13 @@ async function parseBody<T extends z.ZodTypeAny>(
 }
 
 /**
- * The live-account gate the write verbs run after the session check (issue
- * 733): the session JWT outlives the account it was issued for, so the route
- * re-reads the account's role the member gate reads before acting on the
- * session's account id. A null role is a deleted (or missing) account and
- * answers the member gate's 403 envelope; a lookup failure answers the same
- * 502 this route's own failures answer, with a fixed message naming no
- * request data. GET stays ungated — it reads the caller's own, already
- * scrubbed rows.
+ * The live-account gate the write verbs run after the session check: the
+ * session JWT outlives the account it was issued for, so the route re-reads
+ * the account's role the member gate reads before acting on the session's
+ * account id. A null role is a deleted (or missing) account and answers the
+ * member gate's 403 envelope; a lookup failure answers the same 502 this
+ * route's own failures answer, with a fixed message naming no request data.
+ * GET stays ungated — it reads the caller's own, already scrubbed rows.
  */
 async function refuseDeletedAccount(
   dependencies: ForgeIdentitiesRouteDependencies,

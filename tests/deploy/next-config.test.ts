@@ -380,7 +380,8 @@ describe("framing-protection headers", () => {
   }
 
   // Fails unless the route's unconditioned map carries exactly the XFO
-  // fallback plus the issue 1046 hardening pair, with NO Content-Security-Policy:
+  // fallback plus the x-content-type-options and referrer-policy hardening
+  // pair, with NO Content-Security-Policy:
   // the CSP is single-sourced in src/proxy.ts (Next merges headers() and
   // proxy response headers by overwriting same-named keys, so a CSP
   // emitted here never reaches the wire and would only mask the proxy's),
@@ -411,8 +412,8 @@ describe("framing-protection headers", () => {
 });
 
 describe("poweredByHeader", () => {
-  // Issue 1046: Next's default X-Powered-By response header advertises the
-  // framework; the config must opt out so responses carry no such marker.
+  // Next's default X-Powered-By response header advertises the framework;
+  // the config must opt out so responses carry no such marker.
   it("is disabled so no X-Powered-By header is served", async () => {
     delete process.env.OVERFLOW_NEXT_DIST_DIR;
     vi.resetModules();

@@ -64,7 +64,7 @@ export type RecalibrationClosure = {
 };
 
 /**
- * The result of a moderator reversing a ban (issue 1072). The closure payload
+ * The result of a moderator reversing a ban. The closure payload
  * mirrors `RecalibrationClosure` with two deliberate differences: the prior
  * state is BANNED, and the reactivated repositories are returned as the ids
  * themselves rather than a count — the reversal's scope is narrower (only rows
@@ -370,7 +370,7 @@ export class AccountModerationService {
   }
 
   /**
-   * Reverses a ban (issue 1072). The reason is the moderator's stated
+   * Reverses a ban. The reason is the moderator's stated
    * justification and is normalized like every moderation reason; the store
    * scopes the reactivation to rows the sanction flagged and anchors the
    * BANNED → ACTIVE event on the latest SUBSTANTIATED audit. The confirmed

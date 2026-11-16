@@ -76,7 +76,7 @@ describe("the rederivation journal line survives a post-commit failure", () => {
         })(postRederivation(moderator.token, repositoryId));
 
         // The route's answers are unchanged: the interleaved failure still maps
-        // onto the status it produced before the journal line moved.
+        // onto the status the route gives it.
         expect(response.status).toBe(interleaving === "deactivation" ? 404 : 500);
 
         // The queue write stayed committed...

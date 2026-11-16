@@ -1,18 +1,17 @@
 /**
  * The controller identity and request channels the legal pages render are
- * operator configuration (issue 1077): an instance must show whoever operates
- * it — or state plainly that it is not the hosted instance. The values default
- * to the hosted instance's, so an env-less deploy shows the maintainer's text,
- * and they render ONLY on the hosted instance: on any other origin the
- * defaults would publish someone else's controller and channels, which is the
- * defect this module exists to fix, so a non-hosted deployment renders the
+ * operator configuration: an instance must show whoever operates it — or state
+ * plainly that it is not the hosted instance. The values default to the hosted
+ * instance's, so an env-less deploy shows the maintainer's text, and they render
+ * ONLY on the hosted instance: on any other origin the defaults would publish
+ * someone else's controller and channels, so a non-hosted deployment renders the
  * plain self-hosted statement and no channel its operator never configured.
  *
  * The determination is the deployment's own `APP_URL` origin against
  * `HOSTED_INSTANCE_ORIGIN`. `APP_URL` is already the deployment's
  * self-declared origin — the same value drives the browser-mutation origin
  * guard (`readTrustedOrigin`), Auth.js's trusted-host derivation
- * (`authTrustHost`), and now the legal pages' self-identification — so one
+ * (`authTrustHost`), and the legal pages' self-identification — so one
  * value decides, and a copy that claims the hosted origin while serving users
  * at another breaks every browser mutation and sign-in on itself: the claim is
  * self-punishing. The root layout is `force-dynamic`, so the pages' reads are

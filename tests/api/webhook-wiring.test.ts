@@ -4,7 +4,7 @@ import { POST as gitlabPost } from "@/app/api/gitlab/webhooks/route";
 import { WEBHOOK_RATE_LIMIT_CAPACITY } from "@/lib/webhooks/rate-limit";
 
 /**
- * Pins the production wiring itself (issue 1053's review minor): the module
+ * Pins the production wiring itself: the module
  * the server actually mounts must wire the LOGGING rate limiter into its POST
  * handler, not merely any boolean gate. A revert of the wiring to a
  * non-logging engine would otherwise answer the same 429s with no test red —
@@ -32,8 +32,8 @@ describe.each([
         if (response.status === 429) declined = response;
       }
 
-      // The gate declined, with the response the factory has always mapped:
-      // 429 and the fixed retry-after (issue 852's answer, unchanged).
+      // The gate declined, with the response the factory maps:
+      // 429 and the fixed retry-after.
       expect(declined, `no 429 within ${WEBHOOK_RATE_LIMIT_CAPACITY + 120} drives`).toBeDefined();
       expect(declined!.headers.get("retry-after")).toBe("1");
       // The wiring is the point: the mounted gate journaled the burst's

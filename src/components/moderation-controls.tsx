@@ -177,7 +177,7 @@ export function RecalibrationPlanControl({
 }
 
 /**
- * The moderator's ban-reversal control (issue 1072): the reason is the
+ * The moderator's ban-reversal control: the reason is the
  * moderator's stated justification, required nonblank before anything is
  * sent, and the reversal reactivates exactly the repositories the sanction
  * deactivated. It states nothing about contesting a ban — the page records
@@ -269,7 +269,7 @@ type CreditAdjustmentLine = {
 
 /**
  * The moderator-facing recalibration figure and its controls, exactly as the
- * recalibration GET serves them (issue 330): the two cohorts' counts, the gap
+ * recalibration GET serves them: the two cohorts' counts, the gap
  * and proposed integer total when the stored comparison is actionable, the
  * per-creditor line preview, and every credit adjustment already applied to
  * the account.
@@ -331,7 +331,7 @@ function groupLinesByCreditor(lines: readonly CreditAdjustmentLine[]): { credito
 }
 
 /**
- * The credit half of the recalibration control (issue 330): it shows the
+ * The credit half of the recalibration control: it shows the
  * figure the latest SUBSTANTIATED audit's stored snapshot supports, and it is
  * the only place a moderator turns that figure into credit. The apply is its
  * own button — never the close control, and never a pre-checked box — so the

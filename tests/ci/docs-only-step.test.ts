@@ -84,7 +84,7 @@ describe("the verify workflow's docs-only detection step", () => {
         'changed=$(node "${GITHUB_WORKSPACE}/scripts/docs-only.ts" HEAD^1)\n' +
         'echo "docs_only=${changed}" >> "$GITHUB_OUTPUT"\n',
     );
-    // The push and dispatch logic moved to the other file; this leg must not
+    // The push and dispatch logic lives in the other file; this leg must not
     // carry a copy of it, because a second copy is a second thing to keep in
     // step and neither file's runner can reach it.
     expect(run).not.toContain("OVERFLOW_EVENT_NAME");
@@ -168,9 +168,9 @@ describe("the verify workflow's docs-only detection step", () => {
       await mkdir(checkout);
       git(checkout, "init", "--quiet");
       git(checkout, "remote", "add", "origin", `file://${origin}`);
-      // The event picks the file, and therefore the run block: after issue
-      // 1090's split the pull-request leg lives in ci-pr.yml and the push and
-      // dispatch legs in ci.yml, and no single step answers both any more.
+      // The event picks the file, and therefore the run block: the pull-request
+      // leg lives in ci-pr.yml and the push and dispatch legs in ci.yml, so no
+      // single step answers both.
       const leg = env.OVERFLOW_EVENT_NAME === "workflow_run" ? prStep : pushStep;
       let prTree: Record<string, string> = {};
       if (env.OVERFLOW_EVENT_NAME === "workflow_run") {
@@ -286,7 +286,7 @@ describe("the verify workflow's docs-only detection step", () => {
         merge,
         { OVERFLOW_EVENT_NAME: "workflow_run", OVERFLOW_PUSH_BEFORE: "", OVERFLOW_PR_NUMBER: "1" },
         // The real event's runner state: the checkout is the merge ref while
-        // GITHUB_SHA points at the base tip (fix round 1, finding B).
+        // GITHUB_SHA points at the base tip.
         { githubSha: git(origin, "rev-parse", `${merge}^1`) },
       );
       expect(result.status, result.stderr).toBe(0);
@@ -308,9 +308,9 @@ describe("the verify workflow's docs-only detection step", () => {
         { githubSha: git(origin, "rev-parse", `${merge}^1`) },
       );
       expect(result.status, result.stderr).toBe(0);
-      // The failing witness for finding B: docs_only=true must survive the
-      // workflow_run branch when the runner state models the real
-      // event (base-tip GITHUB_SHA, merge-ref checkout).
+      // Witness: docs_only=true must survive the workflow_run branch when the
+      // runner state models the real event (base-tip GITHUB_SHA, merge-ref
+      // checkout).
       expect(result.output).toBe("docs_only=true\n");
     });
 

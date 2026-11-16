@@ -2,12 +2,12 @@ import { NextRequest } from "next/server";
 import { describe, expect, it } from "vitest";
 import { config, proxy } from "../../src/proxy";
 
-// Issue 1046: the proxy serves a per-request, nonce-based script CSP so
+// The proxy serves a per-request, nonce-based script CSP so
 // Next's bootstrap scripts stay allowlisted without unsafe-inline. Next merges
 // headers() and proxy response headers by overwriting same-named keys, so
 // exactly ONE Content-Security-Policy header reaches the wire — this
 // proxy's. It therefore also carries the frame pair's CSP leg
-// (frame-ancestors 'none', issue 677), single-sourced here; next.config keeps
+// (frame-ancestors 'none'), single-sourced here; next.config keeps
 // only the X-Frame-Options fallback. These tests drive the real proxy
 // with a NextRequest and read back the headers Next's own adapter reads
 // (x-middleware-override-headers plus one x-middleware-request-<name> per
@@ -57,7 +57,7 @@ describe("proxy script CSP", () => {
 
     // The one CSP that reaches the wire (Next overwrites same-named headers
     // between headers() and the proxy) must keep refusing framing; the
-    // static next.config header no longer carries this directive.
+    // static next.config header does not carry this directive.
     expect(cspOf(response)).toContain("frame-ancestors 'none'");
   });
 

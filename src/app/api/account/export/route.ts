@@ -22,7 +22,7 @@ export type AccountExportRouteDependencies = {
   findIdentity?: (sql: SqlClient, userId: string) => Promise<Identity | null>;
   exportAccount?: (sql: SqlClient, githubUserId: number) => Promise<AccountExport | null>;
   /**
-   * The keyed expensive-route bound (issue 1054), checked after authentication
+   * The keyed expensive-route bound, checked after authentication
    * and before the document is built. The production wiring passes this file's
    * module-scope gate; a handler built without one — a test factory call —
    * stays unbounded.
@@ -31,7 +31,7 @@ export type AccountExportRouteDependencies = {
 };
 
 // One keyed limiter per route file, born at the wall clock: its buckets are
-// keyed by the acting credential identity and never evict (issue 1054).
+// keyed by the acting credential identity and never evict.
 const accountExportRateLimiter = createRateLimiter({ nowMs: () => Date.now() });
 const accountExportRateGate = createRouteRateGate({
   className: "export",

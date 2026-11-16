@@ -54,9 +54,9 @@ describe("terms page", () => {
     // comes from. A reader depends on that citation, not on the sentence's
     // wording, so this pins the link and survives a faithful paraphrase.
     //
-    // The statement is found by its marker class, not by its position. Every
-    // positional reconstruction tried — last paragraph, distinct from the
-    // account-creation paragraph, that paragraph carrying /account-data — was
+    // The statement is found by its marker class, not by its position. Each
+    // positional reconstruction — last paragraph, distinct from the
+    // account-creation paragraph, that paragraph carrying /account-data — is
     // defeated by a mutant that deletes the statement and appends a bare
     // citation-only paragraph, which becomes the last paragraph and satisfies
     // all of them. The class is the same handle shape this file already uses
@@ -167,10 +167,9 @@ describe("terms page", () => {
     // (one list, one pointer) and names no sentence. The paragraph is then
     // required to carry the pointer, so a section that deleted the pointer
     // and kept a paragraph of new promises fails the second half rather than
-    // satisfying the first. The mutant it defeats is the one this section was
-    // written around: the terms page's own "…or a sanction is [wrong], you can
-    // ask for it to be corrected", a promise the rules page's Disputes section
-    // does not carry and never did.
+    // satisfying the first. The mutant it defeats: the terms page's own
+    // "…or a sanction is [wrong], you can ask for it to be corrected", a promise
+    // the rules page's Disputes section does not carry.
     const paragraphs = [...region.querySelectorAll("p")];
     expect(paragraphs).toHaveLength(1);
     expect(paragraphs[0]!.querySelector('a[href="/rules"]')).not.toBeNull();
@@ -222,11 +221,9 @@ describe("terms page", () => {
     await renderTermsPage();
 
     // The revision paragraph says what a reader cites a date over, so it makes
-    // the same claim the Disputes list does — the case you can contest. It sat
-    // outside the list as a hand-written phrase, which is how it came to
-    // promise a sanction could be contested while the rules it points at
-    // carried no such case. The page now interpolates DISPUTE_CONTESTABLE_CASE
-    // there, so the phrase cannot drift without an edit to the shared source.
+    // the same claim the Disputes list does — the case you can contest. The
+    // page interpolates DISPUTE_CONTESTABLE_CASE there, so the phrase cannot
+    // drift without an edit to the shared source.
     //
     // The paragraph must carry that interpolation as a MARKED element, and the
     // marked element must BE the constant. Asserting on the mark rather than on
@@ -236,8 +233,8 @@ describe("terms page", () => {
     //     or the same drift phrased as "a penalty or a settlement" — contains
     //     no marked element at all, so the length check kills every hand-written
     //     superset whatever words it is phrased in. A test that forbade the
-    //     word "sanction" instead died on a synonym and had to be special-cased
-    //     against the legitimate change it was written to allow.
+    //     word "sanction" instead would miss a synonym and reject the
+    //     legitimate change it has to allow.
     //   - A case genuinely added to the shared source — "a settlement or a
     //     sanction" with a matching rule, both pages updated together — is
     //     still the constant, so it passes. The test forbids a hand-written

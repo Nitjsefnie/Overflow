@@ -236,11 +236,9 @@ describe("the client's reserve contract", () => {
       const queued = sql.reserve().then(() => "queued: served", () => "queued: refused");
 
       // The terminate provokes a reconnect, and the reconnect reaches a socket that accepts and
-      // never answers, so its connect times out and the queued reservation is refused. This used
-      // to be a race: the later `forward()` could land just before the second attempt's dial,
-      // so passing runs were the ones where that dial's socket-close callback lost by ~0.4ms.
-      // `forward()` now answers sockets accepted while the outage lasted, so the outcome no
-      // longer depends on which of the close callback and this microtask drain runs first.
+      // never answers, so its connect times out and the queued reservation is refused. `forward()`
+      // answers sockets accepted while the outage lasted, so the outcome does not depend on which
+      // of the close callback and this microtask drain runs first.
       proxy.blackHole();
       await observer!`select pg_terminate_backend(${backend!.pid})`;
       record.push(await queued);
@@ -284,10 +282,10 @@ describe("the client's reserve contract", () => {
       const served = sql.reserve();
       await proxy.accepted(3);
 
-      // Against the previous proxy semantics this fails deterministically: the reconnect's
-      // socket was accepted during the outage and never answered, so its own connect timer
-      // refuses `served` with the reported CONNECT_TIMEOUT. What the case pins is that a
-      // connection accepted while forwarding was down is served once forwarding resumes.
+      // A proxy that never answers a socket accepted during the outage fails this
+      // deterministically: the reconnect's own connect timer refuses `served` with the reported
+      // CONNECT_TIMEOUT. What the case pins is that a connection accepted while forwarding was
+      // down is served once forwarding resumes.
       proxy.forward();
       const reserved = await served;
       const [row] = await reserved<{ one: number }[]>`select 1 as one`;
@@ -353,11 +351,9 @@ describe("the client's reserve contract", () => {
     // remaining difference between the two builds is whether this promise settles at all.
     await sql.end();
 
-    // Refused rather than reserved, and no longer left queued: `end()` disposes of the work the
+    // Refused rather than reserved, and not left queued: `end()` disposes of the work the
     // pool accepted and can no longer serve, with the same `CONNECTION_DESTROYED` `destroy()`
-    // uses. This case used to assert that the reservation was *still pending* after the shutdown
-    // had resolved — true of the build it was written against, and the shape Overflow issue 223
-    // exists to remove, since a caller cannot act on a promise that never settles.
+    // uses. A reservation left pending would leave its caller nothing to act on.
     expect(await Promise.race([reserved, Promise.resolve("still queued")]))
       .toBe("refused:CONNECTION_DESTROYED");
   });

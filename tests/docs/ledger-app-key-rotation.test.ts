@@ -5,9 +5,7 @@ import { relativeLinks, unresolvedLinks } from "../support/markdown-links";
 
 /**
  * Section 14 of the deploy guide carries the Overflow Ledger App's
- * CI-secret-only key rotation; the reconciliation App that once shared the
- * section is retired, so the host-only procedure and incident-response's
- * rotation pointer are gone. These assertions pin reader-dependent
+ * CI-secret-only key rotation. These assertions pin reader-dependent
  * structure: the section has a body, its links resolve, and the CI
  * procedure's command blocks stay exact.
  */

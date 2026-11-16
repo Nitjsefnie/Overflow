@@ -16,7 +16,7 @@ export const ORIGIN_MISCONFIGURED_MESSAGE = "The server is not configured to acc
  * cover: they are dispatched by Next's action handler, which compares only the
  * Origin HOST against the request's (forwarded) host, so a client that names a
  * foreign host in `Host` or `X-Forwarded-Host` reaches the action under a
- * foreign Origin (issue 700). Reading the trusted origin from `APP_URL` here,
+ * foreign Origin. Reading the trusted origin from `APP_URL` here,
  * inside the action, closes that gap with the same rule the route handlers
  * apply — and fails closed like them: a missing or malformed `APP_URL` refuses
  * the action rather than trusting whatever the request carries.

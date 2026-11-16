@@ -58,9 +58,9 @@ describe("the push trigger always fires", () => {
     // The deploy gate derives its required set from branch protection, so a
     // push that changed no manifest must still produce a dependency-audit
     // check-run: a paths filter would leave that push with a MISSING context,
-    // which protection refuses, and the deploy would be stranded. The
-    // pull_request trigger is gone with the completed issue-1090 split: the
-    // pull-request leg is pr-gates.yml, the base-defined one.
+    // which protection refuses, and the deploy would be stranded. This file
+    // has no pull_request trigger: the pull-request leg is pr-gates.yml, the
+    // base-defined one.
     expect(workflow.on).toEqual({
       push: { branches: ["main"] },
       schedule: [{ cron: "37 6 * * *" }],

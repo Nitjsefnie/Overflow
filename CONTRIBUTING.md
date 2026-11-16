@@ -491,9 +491,7 @@ documentation — the `.md`, `.txt`, `.rst` and `.adoc` extensions, plus
 `LICENSE` — skips the measurement entirely, because it cannot move the
 number.
 
-The floor was seeded from the tree that introduced it: the first real
-measurement, 92.89% lines, with the floor one point below it. From there the
-number moves in one direction only. After a `main` push whose measurement
+The floor moves in one direction only. After a `main` push whose measurement
 beat the record by more than 0.5 points, CI attempts to record the raise:
 the calibrate job rewrites `scripts/coverage.json` and pushes it to `main`.
 That push is always refused — a bot commit can never carry the checks main's

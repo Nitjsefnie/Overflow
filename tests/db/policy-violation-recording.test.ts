@@ -10,10 +10,10 @@ import { materializeRepositoryFixture } from "../support/materialized-repository
 import { startPostgresContainer } from "../support/postgres-container";
 
 /**
- * Issue 713: a fold reports every policy violation that currently holds, so
- * recording the fold's list on every run appended the same rows again on each
- * pass. A violation is recorded when it newly appears for its repository, and
- * again only after it has vanished and come back.
+ * A fold reports every policy violation that currently holds, so
+ * recording the fold's list on every run would append the same rows again on
+ * each pass. A violation is recorded when it newly appears for its repository,
+ * and again only after it has vanished and come back.
  */
 let container: StartedTestContainer | undefined;
 let sql: Sql;

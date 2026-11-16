@@ -9,7 +9,7 @@ import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-director
 
 const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "verify-suppression-step-")]);
 /**
- * Issue 1035: the audit suppression list is load-bearing data and it moves
+ * The audit suppression list is load-bearing data and it moves
  * only through a maintainer-reviewed merge. The dependency audit honours
  * `pnpm.auditConfig` from the pull request's own package.json, so a pull
  * request that adds a vulnerable dependency together with an `ignoreGhsas`
@@ -298,9 +298,9 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     expect(step.run, "the step must not run a package manager").not.toMatch(
       /\b(pnpm|npm|npx|yarn|corepack)\s+(audit|install|ci|i|add|update|remove|run|exec|dlx|config)\b/,
     );
-    // The workspace and .npmrc files are the two channels the adversary proved
-    // (issue 1035 fix round 3): pnpm 10.33.0 reads auditConfig, auditLevel and
-    // the registries mapping from pnpm-workspace.yaml, and audit-level,
+    // The workspace and .npmrc files are the two channels beyond package.json
+    // proven to carry audit settings: pnpm 10.33.0 reads auditConfig, auditLevel
+    // and the registries mapping from pnpm-workspace.yaml, and audit-level,
     // registry, strict-ssl, cafile, proxy and https-proxy from .npmrc. The step
     // must name both files and project both projections' settings.
     expect(step.run, "the step must read the workspace file's audit-affecting settings").toContain(
@@ -358,7 +358,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
   });
 
   it("refuses a pull request that removes the suppression list entirely", async () => {
-    // Issue 1035's reproduction: `del(.pnpm.auditConfig)` must go red.
+    // `del(.pnpm.auditConfig)` must go red.
     const config = { auditConfig: { ignoreGhsas: ["GHSA-vfj7-8cjw-p6xm"] } };
     const fx = await fixture(BASE_PACKAGE_JSON(config), BASE_PACKAGE_JSON(undefined));
     await expectRefuses(fx, REFUSALS.divergence);
@@ -383,7 +383,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     await expectRefuses(fx, REFUSALS.divergence);
   });
 
-  // Issue 1592: removing ids makes the audit stricter, so a merge list that is
+  // Removing ids makes the audit stricter, so a merge list that is
   // a strict subset of the base's passes; every other change still refuses.
   const [ID_A, ID_B, ID_C] = ["GHSA-vfj7-8cjw-p6xm", "GHSA-pxg6-pf52-xh8x", "GHSA-c2qf-rxjj-qqgw"];
   const CVES = { ignoreCves: ["CVE-2099-0001"] };
@@ -516,8 +516,8 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
   });
 
   // ---------------------------------------------------------------------------
-  // The workspace and .npmrc comparisons (issue 1035, fix round 3). pnpm
-  // 10.33.0 reads audit-affecting settings from pnpm-workspace.yaml
+  // The workspace and .npmrc comparisons. pnpm 10.33.0 reads audit-affecting
+  // settings from pnpm-workspace.yaml
   // (auditConfig, auditLevel and the registries mapping — all measured with a
   // real advisory carrying github_advisory_id) and from .npmrc (audit-level,
   // registry, strict-ssl, cafile, proxy, https-proxy). Absence of a file is

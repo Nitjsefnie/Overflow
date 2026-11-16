@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
-// Script CSP (issue 1046): give every document a per-request nonce so Next's
+// Script CSP: give every document a per-request nonce so Next's
 // bootstrap scripts stay allowlisted without unsafe-inline. Next merges
 // headers() and proxy response headers by overwriting same-named keys, so
 // exactly ONE Content-Security-Policy header reaches the wire — this one. It
-// therefore also carries the frame pair's CSP leg (frame-ancestors 'none',
-// issue 677), single-sourced here; next.config keeps only the X-Frame-Options
+// therefore also carries the frame pair's CSP leg (frame-ancestors 'none'),
+// single-sourced here; next.config keeps only the X-Frame-Options
 // fallback. No default-src (which would silently constrain styles, images and
 // connects this app has not audited), no unsafe-inline and no unsafe-eval (the
 // nonce plus strict-dynamic replaces them). Next parses the nonce out of the

@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 /**
- * Issue 592 mechanism 3: a workflow_run job that comments the patch coverage
+ * A workflow_run job that comments the patch coverage
  * report onto the pull request. The job holds a PR-writing token and is
  * triggered by an event whose branch name, head SHA, and artifact contents are
  * attacker-influenceable, so its security shape is what must never drift —
@@ -19,8 +19,8 @@ import { parse } from "yaml";
  * - every untrusted triggering-event value reaches the shell through env,
  *   never through ${{ }} interpolation into a run block;
  * - the destination PR is resolved from the event's head repository, head
- *   branch and head SHA only (issue 656; the run blocks' behavior is
- *   exercised in tests/ci/coverage-comment-behavior.test.ts);
+ *   branch and head SHA only; the run blocks' behavior is exercised in
+ *   tests/ci/coverage-comment-behavior.test.ts;
  * - the comment is identified by one HTML-comment marker, updated in place;
  * - a body over the API's 65536-character limit is refused, never truncated;
  * - the check run reporting the outcome is named exactly "coverage comment".

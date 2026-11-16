@@ -117,8 +117,8 @@ type EligibleIssueRow = {
  * purpose. The driver issues tagged-template statements as named prepared
  * statements, and PostgreSQL's plan_cache_mode = auto switches a named
  * statement to its generic plan on the sixth execution: with parameter values
- * unknown, the outer select's issues leg was priced at a handful of rows
- * against tens of thousands, and every execution after the fifth paid
+ * unknown, the outer select's issues leg is priced at a handful of rows
+ * against tens of thousands, and every execution after the fifth pays
  * nested-loop joins for the mis-estimate. An unnamed statement is re-planned
  * with the actual parameter values on every execution, so the collapse never
  * happens. Request values still bind as parameters; only the shared starting

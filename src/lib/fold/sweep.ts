@@ -23,9 +23,8 @@ export type ReconciliationSweepDependencies = {
   /**
    * The stored repository size measures, the sweep-side half of the size
    * gateway, with the per-sponsor backlog the diff-only decision reads. The
-   * size members are supplied together or not at all; absent, the sweep is
-   * exactly what it was before the measure existed — nothing is measured, no
-   * sponsor is excluded, and the summary carries no measure fields.
+   * size members are supplied together or not at all; absent, nothing is
+   * measured, no sponsor is excluded, and the summary carries no measure fields.
    */
   sizeStore?: Pick<PostgresRepositorySizeStore, "get" | "store" | "getSponsorBacklog">;
   /**
@@ -153,8 +152,8 @@ export function wasStartupRecoverySkipped(): boolean {
  * all.
  *
  * The environment variable keeps the name deployments already set, so turning
- * the sweep off has never needed a configuration change — it now turns off the
- * worker with it, which is the whole of reconciliation.
+ * the sweep off needs no configuration change — it turns off the worker with it,
+ * which is the whole of reconciliation.
  */
 export function shouldStartReconciliationBackground(
   environment: Partial<Record<string, string>>,
@@ -319,9 +318,9 @@ async function measureOrFindGone(
  * neither the report nor the sweep.
  *
  * Costing the sweep is what is specific here. The counters are already settled
- * when this is reached, so they are untouched either way; what a throw used to
- * cost was every repository still queued behind the failing one, since it
- * propagated out of the loop and left them unqueued. A diagnostic must not
+ * when this is reached, so they are untouched either way; a throw here would
+ * cost every repository still queued behind the failing one, since it would
+ * propagate out of the loop and leave them unqueued. A diagnostic must not
  * be able to do that.
  *
  * Settling the hook rather than awaiting it counts for more here than it does at
@@ -500,13 +499,12 @@ function logSweepFailure(error: unknown): void {
  * Guarded the three ways callGuarded describes, and for the same reason as the
  * two hooks: the scheduler is an injection seam, so anything it does wrong is a
  * caller defect and none of it may reach the process. It is called after the
- * immediate sweep, so retrieving a scheduler that throws no longer costs the
- * startup pass that repairs the deliveries missed while the server was down.
+ * immediate sweep, so retrieving a scheduler that throws cannot cost the startup
+ * pass that repairs the deliveries missed while the server was down.
  *
- * Only a nullish member falls through to defaultSchedule, which is what the
- * `?? defaultSchedule` this replaces did. Anything else unusable — a member
- * whose accessor throws, a member holding a value that is not callable — means
- * the caller did supply a scheduler and it is broken, so nothing is armed:
+ * Only a nullish member falls through to defaultSchedule. Anything else unusable —
+ * a member whose accessor throws, a member holding a value that is not callable —
+ * means the caller did supply a scheduler and it is broken, so nothing is armed:
  * substituting the default there would arm a real six-hour interval nobody asked
  * for and hide the defect.
  *

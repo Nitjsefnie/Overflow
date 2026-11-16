@@ -160,12 +160,12 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     expect(run, "no pip download — the hash-gated install is the only channel").not.toContain(
       "pip download",
     );
-    // Fix round 3: the same workspace and .npmrc comparisons the load-bearing
-    // guard in ci-pr.yml implements. pnpm 10.33.0 reads auditConfig,
-    // auditLevel and the registries mapping from pnpm-workspace.yaml (all
-    // measured with a real advisory carrying github_advisory_id), and
-    // audit-level, registry, strict-ssl, cafile, proxy and https-proxy from
-    // .npmrc — so the audit must refuse to run on a divergent one.
+    // The same workspace and .npmrc comparisons the load-bearing guard in
+    // ci-pr.yml implements. pnpm 10.33.0 reads auditConfig, auditLevel and
+    // the registries mapping from pnpm-workspace.yaml (all measured with a
+    // real advisory carrying github_advisory_id), and audit-level, registry,
+    // strict-ssl, cafile, proxy and https-proxy from .npmrc — so the audit
+    // must refuse to run on a divergent one.
     expect(run, "the leg must read the workspace file's audit-affecting settings").toContain(
       "pnpm-workspace.yaml",
     );
@@ -385,8 +385,8 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     expect(`${result.stdout}${result.stderr}`).toContain(REFUSALS.fetch);
   });
 
-  // Issue 1592, mirrored from the load-bearing guard: a strict-subset
-  // ignoreGhsas passes; every other change still refuses.
+  // Mirrors the load-bearing guard: a strict-subset ignoreGhsas passes;
+  // every other change still refuses.
   const [ID_A, ID_B, ID_C] = ["GHSA-vfj7-8cjw-p6xm", "GHSA-pxg6-pf52-xh8x", "GHSA-c2qf-rxjj-qqgw"];
   const CVES = { ignoreCves: ["CVE-2099-0001"] };
   const listed = (config: unknown): string => PACKAGE_JSON({ auditConfig: config });
@@ -434,7 +434,7 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
   });
 
   // ---------------------------------------------------------------------------
-  // The workspace and .npmrc comparisons (issue 1035, fix round 3), mirrored
+  // The workspace and .npmrc comparisons, mirrored
   // from the load-bearing guard so both layers implement the same comparison.
   // The keys named here are the MEASURED audit-affecting sets on pnpm 10.33.0,
   // every leg carrying a real advisory with its github_advisory_id:

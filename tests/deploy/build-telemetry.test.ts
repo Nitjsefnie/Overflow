@@ -14,13 +14,13 @@ const dockerfile = readFileSync(
   "utf8",
 );
 
-// Issue 688: Next.js phones home and prints its telemetry notice on every
-// production build unless NEXT_TELEMETRY_DISABLED is set; this branch makes
-// both the Dockerfile's build stage and its runtime stage set it, and these
-// pins hold every build path to the same opt-out. This file pins both
-// Dockerfile env lines (build stage and runtime stage) plus the CI and host
-// deploy paths; the build-stage line's placement before `RUN pnpm build` is
-// additionally pinned in tests/deploy/container-image.test.ts.
+// Next.js phones home and prints its telemetry notice on every
+// production build unless NEXT_TELEMETRY_DISABLED is set; the Dockerfile's
+// build stage and its runtime stage both set it, and these pins hold every
+// build path to the same opt-out. This file pins both Dockerfile env lines
+// (build stage and runtime stage) plus the CI and host deploy paths; the
+// build-stage line's placement before `RUN pnpm build` is additionally pinned
+// in tests/deploy/container-image.test.ts.
 
 /** The full text of the workflow step whose `- name:` line names `name`. */
 function workflowStep(workflowText: string, name: string): string {

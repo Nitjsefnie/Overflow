@@ -41,7 +41,7 @@ The backend-loss and reconnect repairs occupy seven diff hunks in the
 `postgres` package's own `src/connection.js` — not this repository's `src/`.
 They settle the three orders in which a connection losing its backend
 leaves `sql.end()` waiting on a message that will never arrive, they space the
-reconnect attempts the third of those orders used to issue back to back, and
+reconnect attempts the third of those orders otherwise issues back to back, and
 they let a shutdown cancel a scheduled failed retry or immediately start a
 freshly dispatched query's first attempt. `sql.end()` awaits every connection
 in the pool, so a single stranded connection stalls the whole shutdown, and with it
@@ -146,8 +146,7 @@ unbounded:
   pooler, a TCP load balancer, a Kubernetes service or any non-postgres service
   on the port produces while the backend is gone. Against such a peer the
   pending `end()` was never settled at all: measured still pending at 90
-  seconds, having made 32,605 reconnect attempts in that time. Overflow issue
-  164.
+  seconds, having made 32,605 reconnect attempts in that time.
 
 The third hunk fails the startup query where a shutdown is already pending,
 above the early return, with the same `CONNECTION_CLOSED` the established path
@@ -209,12 +208,12 @@ re-arms the whole pool.
 
 #### The shutdown that arrives between two attempts
 
-Spacing those attempts lengthened a wait the settle above then had to sit
+Spacing those attempts on its own lengthens a wait the settle above then has to sit
 through. With the next attempt scheduled rather than immediate, an `end()`
-arriving *between* attempts settled only once that attempt had been made and
+arriving *between* attempts would settle only once that attempt had been made and
 closed — up to the backoff cap, measured at 12.6 to 15.9 seconds at this
-repository's pool size where the same shape took roughly 19 milliseconds
-before. The two halves are one edit site, so the fix for one has to carry the
+repository's pool size where the same shape takes roughly 19 milliseconds
+without the spacing. The two halves are one edit site, so the change for one has to carry the
 other.
 
 `reconnect()` returns its timer, and both the connect-phase close arm and the
@@ -259,8 +258,8 @@ The retained pool-dispatch handle lets shutdown skip that schedule too.
 a scheduled initial attempt, it clears the timer, starts the attempt immediately,
 and waits for the dispatched query instead of rejecting it. A retry after a
 failed attempt has already cleared the marker and remains cancellable; a live
-handshake has no pending timer and remains in flight. This is the distinction
-that fixes Overflow issue 224 without cancelling freshly dispatched work.
+handshake has no pending timer and remains in flight. This distinction is what
+lets shutdown skip the schedule without cancelling freshly dispatched work.
 Alongside `tests/db/connect-phase-death.test.ts`,
 `tests/db/scheduled-reconnect.test.ts` records fresh work being served without
 the backoff callback firing, failed-retry cancellation, and completion through
@@ -268,8 +267,7 @@ a live handshake barrier.
 
 #### Reservations taken or released around shutdown
 
-Two reservation orderings are covered while the database stays reachable
-(Overflow issue 226):
+Two reservation orderings are covered while the database stays reachable:
 
 - `end()` sets `endRequested` synchronously before its `await 1`.
   `reserve()` checks `ending || endRequested` and rejects with
@@ -300,7 +298,7 @@ only inside the types fetch — and a slot of either kind is enough to send
 repository's `DATABASE_URL` names a single host. The route stays **unfiled**,
 and no test in this repository exercises it.
 
-One thing about it has since been run rather than read. With a comma-separated
+One case of it has been run rather than only read. With a comma-separated
 host list and a shutdown already pending, the route settles in 2 to 3
 milliseconds, in both orderings, two runs each — which is what the connect-phase
 hunk above predicts, because `ending` is assigned only by `end()`, and `end()`
@@ -309,7 +307,7 @@ early return cannot be taken with a shutdown pending. That measurement
 establishes only that the *covered* case is covered. The uncovered one — a
 multi-host connect-phase death with **no** shutdown pending, where `initial`
 survives a socket error and `closed(true)` reaches the retry arm with `hadError`
-set — is still read off the package's source rather than run, so treat it
+set — is read off the package's source rather than run, so treat it
 differently from the claims in this file that a probe and a test stand behind.
 
 ### A queued `reserve()` is dropped when the connection it waits on dies
@@ -361,7 +359,7 @@ query.**
   types happens to end in an `onopen`.
 
 `tests/fold/reconciliation-stranded-reservation.test.ts` holds the behaviour at
-the level it was reported — the coordination pool at its production bound, one
+production scale — the coordination pool at its production bound, one
 held backend terminated, every queued reconciliation still served.
 `tests/db/reserve-contract.test.ts` holds the client contract directly: a reserve
 that opens the pool's first connection and one queued behind a terminated
@@ -423,7 +421,7 @@ tracker.
 
 A reserve that is a connection's startup query when that *connect* fails is
 rejected by `errored()`, which cannot reach the pool's `queries` and so leaves it
-there. Stock got away with that on the close path, because `onclose` had shifted
+there. Stock gets away with that on the close path, because its `onclose` shifts
 the reserve out before the failing connect; the `onclose` hunk above deliberately
 keeps it in, so on its own it would widen the path rather than leave it alone. A
 later `onopen` would then shift a rejected reserve, call `resolve` on it — a
@@ -442,11 +440,11 @@ item or an empty queue, and is placed either way. A connect that reaches
 does not answer until `connect_timeout` fires, or one that refuses the connection
 outright.
 
-That also settles the refused-connect shape of the same defect, which is
-pre-existing rather than introduced here and is filed as Overflow issue 160: a
-database restart outlasting one reconnect attempt with a reservation queued left
-the coordination pool serving no further reservations for the life of the
-process, on `main` as well as on this patch before this hunk.
+That also settles the refused-connect shape of the same defect, which stock has
+too rather than this patch introducing it: without this hunk, a database restart
+outlasting one reconnect attempt with a reservation queued leaves the
+coordination pool serving no further reservations for the life of the process,
+on stock as well as on this patch.
 
 ### A dead backend's error is answered to the query that replaces it
 
@@ -501,8 +499,7 @@ with the error stored and `initial` still set, and takes the early return. The
 caller's query must still be served by the socket that replaces it. Relocating
 the reset to immediately below the early return fails that case alone, with the
 caller refused `57P01`, and leaves the other nine in the file green: deleting
-the line is not the mutation that asks this question, and before that case
-existed nothing here would have noticed a later regeneration moving it.
+the line is not the mutation that asks this question.
 
 #### What it does not cover
 
@@ -526,8 +523,7 @@ Both of what happens next are wrong, and which one a run gets is a race:
 - `execute()` buffers the bytes and arms `setImmediate(nextWrite)`, whose first
   line is `socket.write(chunk, fn)`. With `socket` null that throws
   `TypeError: Cannot read properties of null (reading 'write')` out of a timer
-  callback, where no caller can catch it, and node exits 1. This is the shape
-  Overflow issue 161 was filed for.
+  callback, where no caller can catch it, and node exits 1.
 - Where the flush is *not* armed, the query simply sits in the connection's
   query slot unsent, and the first `ReadyForQuery` on the replacement socket —
   the handshake's — resolves it with the empty result set collected so far. The
@@ -558,8 +554,7 @@ handle is null, so nothing is ever scheduled again: the reconnect's
 `StartupMessage` is appended behind the dead query's bytes and never sent, the
 server answers a connection that never introduced itself, and `connect_timeout`
 refuses everything queued on the pool while the database is reachable
-throughout. That refusal is the issue's second reported symptom and it is this
-same defect, not a separate one.
+throughout. That refusal is a second symptom of this same defect, not a separate one.
 
 Guarding `release()` keeps the dispatch from happening at all, which is what
 leaves the reconnect free to introduce itself normally.
@@ -652,24 +647,20 @@ It is left as it is here because it matches `destroy()` line for line, and
 agreeing with the path this hunk exists to agree with is worth more than the
 signal.
 
-The second hunk gives `reserve()` the `ending` check `handler()` already has. A
-reservation requested after the shutdown was pushed into the same queue without
-consulting that flag, and `end()` drains once and before the flag is set, so
-nothing would drain it either: against an unreachable server that left a promise
-nothing settles, and against a reachable one the pool opened a fresh socket for
-it after the shutdown had resolved. It now answers with the same
-`CONNECTION_ENDED` an ordinary query in that position already gets.
+The second hunk gives `reserve()` the `ending` check `handler()` already has.
+Without it, a reservation requested after the shutdown is pushed into the same
+queue without consulting that flag, and `end()` drains once and before the flag
+is set, so nothing would drain it either: against an unreachable server that
+leaves a promise nothing settles, and against a reachable one the pool opens a
+fresh socket for it after the shutdown has resolved. With the check it answers
+with the same `CONNECTION_ENDED` an ordinary query in that position gets.
 
 `tests/db/shutdown-backlog-drain.test.ts` holds all of it: queued queries and a
 queued `reserve()` settled by an ordinary shutdown, the drain running before a
 connection that cannot finish ending, and a reservation requested afterwards
 refused beside a query that already was.
 
-This is Overflow issue 223. The visible change is that a shutdown of a perfectly
-healthy client now rejects queued work it used to run behind the caller's back —
-which is the point: a caller can tell "your query ran" from "your query never
-will", and got neither answer from a promise settled by whether a resurrected
-connection happened to reach the server.
+The visible change is that a shutdown of a perfectly healthy client rejects queued work instead of running it behind the caller's back, which is the point: a caller can tell "your query ran" from "your query never will", and is not left with a promise settled by whether a resurrected connection happens to reach the server.
 
 #### What it does not cover
 
@@ -744,7 +735,7 @@ every case except the reserved one, which pins the reserve startup path.
 Like every repair above, it is deliberately absent from `cjs/`. That build
 throws at load (the next section), so the repair has no CJS copy to drift.
 
-This is Overflow issue 711. It reproduces identically on stock
+The defect reproduces identically on stock
 `postgres@3.4.9`, and is reported upstream as
 https://github.com/porsager/postgres/issues/789 (comment 5845365113).
 
@@ -755,10 +746,10 @@ One edit across `ReadyForQuery()` and `fetchArrayTypes()` in the package's own
 handler's hunk with the queued-reserve repair, and the two `fetchArrayTypes()`
 hunks with the array-type repair above.
 
-When the `pg_type` query a new connection sends before its first query failed,
-the query waiting on that connection was rejected with the server's error, and
-then the Node process exited with an unhandled promise rejection carrying the
-same error. Measured on the build before this repair:
+Without this repair, when the `pg_type` query a new connection sends before its first query fails,
+the query waiting on that connection is rejected with the server's error, and
+then the Node process exits with an unhandled promise rejection carrying the
+same error. Measured on a build without this repair:
 
 - A server error in answer to the query crashes the process: a role that cannot
   read `pg_catalog.pg_type` (`42501`), or a startup `statement_timeout` shorter
@@ -773,10 +764,10 @@ same error. Measured on the build before this repair:
   unhandled `CONNECTION_CLOSED`, and a reset (RST) leaves an unhandled
   `ECONNRESET` under either.
 
-For the server-error causes, the connection it failed on was not closed either: it was handed to the pool
-with no array types, so the next `sql.array(...)::bigint[]` query on it failed
+For the server-error causes, a build without this repair does not close the connection it fails on either: it hands it to the pool
+with no array types, so the next `sql.array(...)::bigint[]` query on it fails
 with `malformed array literal` (`22P02`), the defect of the section above by
-another route. A waiting `reserve()` was granted that connection.
+another route. A waiting `reserve()` is granted that connection.
 
 The cause, by line in stock 3.4.9 `src/`:
 
@@ -825,11 +816,11 @@ fetch it gets the connection's error instead: `CONNECTION_CLOSED` after a
 backend termination or a clean FIN, and `ECONNRESET` after a reset. The FATAL's
 `57P01` is not what it receives, because `closed()` discards the held
 `errorResponse`. That is a behaviour change for a live caller,
-`coordinationSql.reserve()` in `src/lib/fold/postgres-store.ts`. Before this
-repair such a reserve was retried on a new socket and granted, while the process
-took the unhandled rejection. Now the process survives and the reserve is
-rejected. A plain waiting query under a termination or a clean FIN is still
-retried and succeeds, as before.
+`coordinationSql.reserve()` in `src/lib/fold/postgres-store.ts`: without this
+repair such a reserve is retried on a new socket and granted, while the process
+takes the unhandled rejection; with it the process survives and the reserve is
+rejected. A plain waiting query under a termination or a clean FIN is
+retried and succeeds either way.
 
 The closing check reads `needsTypes`, so it would also close a connection that
 reached the end of its startup with no types fetched by another route. The one
@@ -872,7 +863,7 @@ rather than on the suite's timeout.
 
 Like every repair above, it is deliberately absent from `cjs/`.
 
-This is Overflow issue 719. It reproduces on stock `postgres@3.4.9`, and is
+The defect reproduces on stock `postgres@3.4.9`, and is
 reported upstream as https://github.com/porsager/postgres/issues/1192.
 
 ### An IPv6 URL host is split instead of connected
@@ -887,7 +878,7 @@ whole with the fallback port. Ordinary hostname, IPv4, and `host:port` entries
 keep their previous parsing. `tests/db/postgres-url-host.test.ts` checks the
 resolved options and a real TCP dial to `::1`.
 
-This is Overflow issue 801, reported upstream as
+This defect is reported upstream as
 https://github.com/porsager/postgres/issues/1232, with the proposed repair at
 https://github.com/porsager/postgres/pull/1233.
 
@@ -898,14 +889,14 @@ first hunk in the patch that repairs nothing. The package's `exports` map
 routes its two consumer languages to different builds: `import` takes the
 `import` condition to `src/index.js`, the build every repair above rewrites,
 while `require('postgres')` takes the `default` condition to the stock
-transpiled copy in `cjs/src/index.js`. Until this hunk such a require
-**succeeded**: it loaded the stock client with every repair above absent, and
-told nobody. Nothing in this repository loads postgres through `require` —
+transpiled copy in `cjs/src/index.js`. Without this hunk such a require
+**succeeds**: it loads the stock client with every repair above absent, and
+tells nobody. Nothing in this repository loads postgres through `require` —
 the tree is `"type": "module"` and the only occurrence on it is the guard
-suite's probe — but the hazard was never a crash. It was a silent wrong
-client: a dependency, a tool, or a one-off script reaching postgres through
-`require` would have run unpatched, with nothing to notice but behaviour that
-contradicts the db suites.
+suite's probe — but the hazard is a silent wrong client, not a crash: a
+dependency, a tool, or a one-off script reaching postgres through `require`
+would run unpatched, with nothing to notice but behaviour that contradicts the
+db suites.
 
 The throw beats the two alternatives. Deleting the prebuilt entry — removing
 the file or aiming the `default` condition at nothing — fails a consumer with
@@ -954,14 +945,14 @@ A `_patch_hash=` suffix alone still proves *a* patch, not this one.
   connection's first query before its fetched array types are applied, still
   discard the array-type fetch's promise and open the connection that fetch
   failed on, split IPv6 hosts at the first colon, and carry no `peek` in their
-  `queue.js` — the same as on `main`, so this is a standing property of the
-  patch rather than something a release regressed. It does not bite today: the package's
-  `exports` map sends `import` to `src/`, and `next build` bundles that build
-  into every server chunk that reaches the `postgres` client, the edge chunk
-  included. A `require('postgres')` now throws by the guard above instead of
-  silently running the stock client. The `workerd` route (`cf/src/index.js`)
-  would still silently get the unpatched client — unreachable in Node, so
-  re-check this before moving anything that talks to the database onto it.
+  `queue.js` — the same as on `main`, a standing property of the patch. It
+  does not bite today: the package's `exports` map sends `import` to `src/`,
+  and `next build` bundles that build into every server chunk that reaches the
+  `postgres` client, the edge chunk included. A `require('postgres')` throws
+  at the guard above instead of silently running the stock client. The
+  `workerd` route (`cf/src/index.js`) would still silently get the unpatched
+  client — unreachable in Node, so re-check this before moving anything that
+  talks to the database onto it.
 - **The patch file and `pnpm-lock.yaml` move together.** The lockfile pins the
   patch by content hash, so hand-editing the patch without re-running
   `pnpm patch-commit` makes `pnpm install --frozen-lockfile` fail.
@@ -1001,17 +992,13 @@ email on file, `find` returns `undefined`, and the sign-in throws
 `TypeError: Cannot read properties of undefined (reading 'email')` instead of
 refusing with a named reason. Runtime-reproduced against both the installed
 build and the published `@auth/core@0.41.3` from npm; the repro script and its
-output are posted on Overflow issue 308, and the defect is reported upstream,
-still carried on upstream `main` as of 2026-09-09. The first filing,
-https://github.com/nextauthjs/next-auth/issues/13494, was closed the same day
-by the project's triage bot for want of a public reproduction link, so the
-defect was refiled with a public repro repository
-(Nitjsefnie/next-auth-github-emails-repro) at
-https://github.com/nextauthjs/next-auth/issues/13495 — the live upstream
-record.
+output are posted on Overflow issue 308. The defect is reported upstream, with
+a public repro repository (Nitjsefnie/next-auth-github-emails-repro), at
+https://github.com/nextauthjs/next-auth/issues/13495, and was still carried on
+upstream `main` as of 2026-09-09.
 
-The stock branch is dead in production. Overflow PR 307 overrides the
-provider's `userinfo` request with `requestGitHubPublicIdentity` in
+The stock branch is dead in production. The provider's `userinfo` request is
+overridden with `requestGitHubPublicIdentity` in
 `src/lib/auth/github-userinfo.ts`, which fetches only `/user` and never the
 email endpoint, and the override is pinned by tests in `tests/auth/` and
 `tests/security/github-oauth-scope.test.ts` — removing the override fails

@@ -1,5 +1,5 @@
 /**
- * The recalibration credit adjustment store (issue 330).
+ * The recalibration credit adjustment store.
  *
  * Applies and reverses a sponsor's credit adjustment from the pairs frozen in
  * the latest SUBSTANTIATED audit's stored snapshot — the evidence the moderator

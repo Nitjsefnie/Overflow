@@ -1,10 +1,10 @@
 /**
  * Auth.js trusts the request's host only when its configuration says so, and
  * answers every auth route `500 [auth][error] UntrustedHost` when it does not.
- * Issue 649: a deployment configured from only the documented settings
- * (`.env.example`) answered every sign-in route 500 while readiness answered
- * 200, because `@auth/core`'s own derivation trusts no host in production
- * without `AUTH_URL`, `AUTH_TRUST_HOST`, `VERCEL` or `CF_PAGES`.
+ * `@auth/core`'s own derivation trusts no host in production without
+ * `AUTH_URL`, `AUTH_TRUST_HOST`, `VERCEL` or `CF_PAGES`, so a deployment
+ * configured from only the documented settings (`.env.example`) would answer
+ * every sign-in route 500.
  *
  * The trusted host therefore derives from `APP_URL` — the same origin the
  * origin guard (`readTrustedOrigin`) enforces for browser mutations — so one

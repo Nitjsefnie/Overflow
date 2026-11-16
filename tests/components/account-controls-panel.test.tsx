@@ -344,7 +344,7 @@ describe("account controls panel", () => {
     expect(screen.getByRole("button", { name: "Download export" })).toBeEnabled();
   });
 
-  // The last-moderator warning (issue 1122): a plain warning above the confirm
+  // The last-moderator warning: a plain warning above the confirm
   // field, rendered only for the instance's last live moderator. It never
   // blocks — the deletion proceeds exactly as without it.
 

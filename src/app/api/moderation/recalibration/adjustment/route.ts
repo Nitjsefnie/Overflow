@@ -18,7 +18,7 @@ import { reasonText } from "@/lib/validation/reason";
 
 /**
  * The adjustment body is one account id plus a reason reasonText() caps at
- * 2000 characters, so 32 KiB bounds the read with wide margin (issue 661).
+ * 2000 characters, so 32 KiB bounds the read with wide margin.
  */
 const MODERATION_ADJUSTMENT_BODY_LIMIT_BYTES = 32 * 1024; // 32 KiB
 
@@ -26,16 +26,16 @@ const adjustmentSchema = z
   .object({
     targetAccountId: z.string().uuid(),
     // The service's normalizer stays the blank-reason authority for this
-    // field, exactly as before the cap: a blank reason still reaches it for
-    // its structured INVALID_INPUT answer, while the length cap is enforced
-    // here, on the trimmed value, before any service work.
+    // field: a blank reason still reaches it for its structured INVALID_INPUT
+    // answer, while the length cap is enforced here, on the trimmed value,
+    // before any service work.
     reason: reasonText({ allowBlank: true }),
   })
   .strict();
 
 /**
  * Applies the compensating credit adjustment the latest SUBSTANTIATED audit's
- * stored snapshot supports (issue 330).
+ * stored snapshot supports.
  */
 export function createModerationAdjustmentPostHandler(dependencies: ModerationCreditRouteDependencies) {
   return async function postModerationAdjustment(request: Request): Promise<Response> {
@@ -90,9 +90,8 @@ export const POST = createModerationAdjustmentPostHandler({
 /**
  * Reads the body through readBodyWithinLimit and parses it with the schema.
  * Returns "tooLarge" when the body crosses the route's limit — the caller
- * answers 413 — and null for an unparsable or schema-invalid body, exactly as
- * request.json()'s rejection did before the bounded reader. A body read that
- * itself fails also keeps the null answer.
+ * answers 413 — and null for an unparsable or schema-invalid body. A body read
+ * that itself fails also keeps the null answer.
  */
 async function parseAdjustmentInput(
   request: Request,

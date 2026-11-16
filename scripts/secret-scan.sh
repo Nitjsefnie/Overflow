@@ -18,7 +18,7 @@
 # mean "a secret is in this history" rather than "the scanner moved". Bumping
 # it is a deliberate three-part change: update PINNED_GITLEAKS_VERSION here AND
 # the version and checksum in BOTH halves of the split workflow —
-# .github/workflows/secret-scan.yml and pr-gates.yml (secret-scan job) (issue 1090) — and
+# .github/workflows/secret-scan.yml and pr-gates.yml (secret-scan job) — and
 # regenerate the baseline they pin against.
 #
 # WHY THE BASELINE MUST BE THE FULL REDACTED REPORT AND NOT A LIST OF
@@ -93,7 +93,7 @@
 set -euo pipefail
 
 # Bump together with both halves of the split workflow:
-# .github/workflows/secret-scan.yml and pr-gates.yml (secret-scan job) (issue 1090).
+# .github/workflows/secret-scan.yml and pr-gates.yml (secret-scan job).
 readonly PINNED_GITLEAKS_VERSION="8.30.1"
 
 # Resolved from this script's own location so the script can be invoked from

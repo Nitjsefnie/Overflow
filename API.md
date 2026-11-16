@@ -28,7 +28,7 @@ the security reason and the change.
 **Version history:**
 
 - 2.0.0: `POST /api/account/export` no longer carries `account.avatarUrl`
-  (removed after its 1.1.0 deprecation; issue 1177), and its `formatVersion`
+  (removed after its 1.1.0 deprecation), and its `formatVersion`
   moves from `1` to `2`.
 - 1.11.0: A settlement's `status` gains the value `DONATED` on
   `GET /api/settlements`, `GET /api/settlements/<id>` and the dashboard's
@@ -767,10 +767,9 @@ malformed, or non-positive value reads as the first page. `pageSize` is rows
 per request: the default is 200, anything above 500 clamps back to 500, and
 anything below 1 reads as 1.
 A request that sends no paging parameters reads the first page at the default
-size — where a client of the unpaginated board previously received every
-eligible row, it now receives at most 200, with `page` to fetch the further
-pages. A page holding exactly `pageSize` rows is a full page, and a full page
-means a next page may exist; a shorter page is the last one.
+size, at most 200 rows, with `page` to fetch the further pages. A page holding
+exactly `pageSize` rows is a full page, and a full page means a next page may
+exist; a shorter page is the last one.
 
 Two responses degrade rather than fail. In the settlement proof, `corrections`
 is `null` when the correction history could not be read, and the settlement
@@ -1082,7 +1081,7 @@ debtor), whether it paid at the grant or starts paying later, as when an
 is deleted. A commit landing, a landing without a settlement, or one that pays
 nobody gets no reversal. The reversal is derived, never stored: the account
 export's dispute lines carry the award, and a reversal line only from a grant an
-earlier release decided, which the ledger no longer counts. Existing settlement and calibration creditors are preserved.
+earlier release decided, which the ledger does not count. Existing settlement and calibration creditors are preserved.
 
 All errors use `{ "error": { "code": <code>, "message": <message> } }`.
 Service refusals preserve the service's explanation. Status/code pairs are

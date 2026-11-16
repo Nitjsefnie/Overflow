@@ -114,7 +114,7 @@ function parseAccountCommand(argumentsList: readonly string[]): ParsedCommand | 
 
 /**
  * The operator's account-deletion, account-export, and forge-keyed
- * data-subject entry point (issue 1071). Grammar violations are answered with
+ * data-subject entry point. Grammar violations are answered with
  * the usage line and exit 2 before any dependency, pooled client or database
  * access; every command failure is reported sanitized as
  * ACCOUNT_COMMAND_FAILED, never with a connection string.

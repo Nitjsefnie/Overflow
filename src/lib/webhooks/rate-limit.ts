@@ -1,4 +1,4 @@
-// Inbound rate limiting for the webhook receivers (issue 852). Each receiver
+// Inbound rate limiting for the webhook receivers. Each receiver
 // keeps a single token bucket SHARED by all of its senders: a delivery is
 // admitted only when a token is available, and everything else is declined
 // with 429 so the sender retries with backoff.
@@ -6,28 +6,26 @@
 // The sharing is deliberate. Senders are unauthenticated at this boundary, so
 // a per-sender key would have to be derived from the request IP — trivially
 // spoofable, and every spoofed identity gets its own fresh budget. A shared
-// total bound is the stricter guarantee against the defect the issue actually
-// reports: unbounded aggregate spend against the database. The accepted
-// tradeoff is that a sustained flood competes for every refilled token, so
-// legitimate deliveries can be delayed; the senders' retry behavior and the
-// reconciliation sweeps bound that delay.
+// total bound is the stricter guarantee against unbounded aggregate spend
+// against the database. The accepted tradeoff is that a sustained flood
+// competes for every refilled token, so legitimate deliveries can be delayed;
+// the senders' retry behavior and the reconciliation sweeps bound that delay.
 //
 // This module is the pure mechanism: a standard token bucket with a lazy
 // refill and an injectable clock — no I/O, no database, no throw paths. The
 // route wiring (one shared bucket per receiver, the 429 mapping) is the
 // caller's.
 //
-// Issue 1054 generalises the same mechanism into a keyed limiter for the
-// expensive routes: one bucket PER KEY, with the burst size and refill rate
-// of each key's class supplied by the caller on every admit (the route layer
-// derives them from configuration). The registry has no eviction: a key's
-// bucket lives as long as the process, so the key space must be bounded.
-// The keys are caller-assigned identities, so the per-key isolation is only
-// as strong as the key derivation — an unauthenticated, spoofable key buys
-// nothing, which is why the webhook receivers above keep their deliberately
-// shared single bucket. The route wiring must therefore derive keys from
-// bounded identities (authenticated user or account ids), never raw request
-// IPs.
+// The same mechanism also backs a keyed limiter for the expensive routes: one
+// bucket PER KEY, with the burst size and refill rate of each key's class
+// supplied by the caller on every admit (the route layer derives them from
+// configuration). The registry has no eviction: a key's bucket lives as long
+// as the process, so the key space must be bounded. The keys are caller-assigned
+// identities, so the per-key isolation is only as strong as the key derivation —
+// an unauthenticated, spoofable key buys nothing, which is why the webhook
+// receivers above keep their deliberately shared single bucket. The route wiring
+// must therefore derive keys from bounded identities (authenticated user or
+// account ids), never raw request IPs.
 //
 // Standard token bucket: refilling is a function of elapsed time alone and
 // happens on every admit, whether or not it succeeds — a declined caller's
@@ -244,30 +242,29 @@ export interface ReceiverRateLimiterOptions {
 export interface ReceiverRateLimiter {
   /**
    * Attempts to consume the shared bucket's one token. True when admitted;
-   * false when the bucket is empty — the caller maps that to 429 exactly as
-   * it mapped the boolean token bucket before (issue 852's shape, unchanged).
+   * false when the bucket is empty — the caller maps that to 429.
    */
   admit(): boolean;
 }
 
 /**
  * The webhook receivers' shared gate, with the once-per-burst decline signal
- * the incident response needs (issue 1053). It is `createRateLimiter` over a
- * single constant key — one shared bucket per receiver, the deliberate shape
- * issue 852 chose for unauthenticated senders — so the decline mechanism is
- * the #1054 limiter's own `firstDecline` transition rather than a second
- * implementation beside it. A declined request bumps the receiver's running
- * decline count; the burst's FIRST decline emits one fixed-template line
- * naming the receiver and that count, and the burst's continuation stays
- * silent until a refilled token admits (which ends the burst), so a sustained
- * flood costs one line per burst, never one line per request.
+ * the incident response needs. It is `createRateLimiter` over a single constant
+ * key — one shared bucket per receiver, the deliberate shape for unauthenticated
+ * senders — so the decline mechanism is the keyed limiter's own `firstDecline`
+ * transition rather than a second implementation beside it. A declined request
+ * bumps the receiver's running decline count; the burst's FIRST decline emits
+ * one fixed-template line naming the receiver and that count, and the burst's
+ * continuation stays silent until a refilled token admits (which ends the
+ * burst), so a sustained flood costs one line per burst, never one line per
+ * request.
  */
 export function createReceiverRateLimiter(options: ReceiverRateLimiterOptions): ReceiverRateLimiter {
   const { receiver, capacity, refillPerMinute } = options;
   const limiter = createRateLimiter({ nowMs: options.nowMs ?? (() => Date.now()) });
   const error = options.error ?? ((...args: unknown[]) => console.error(...args));
   let declines = 0;
-  // The receivers share one bucket per process by design (issue 852); the
+  // The receivers share one bucket per process by design; the
   // constant key is that design expressed in the keyed limiter's terms.
   const sharedKey = "webhook-receiver-shared";
 

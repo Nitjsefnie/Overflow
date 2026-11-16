@@ -1106,8 +1106,8 @@ describe("initial PostgreSQL materialization", () => {
       .rejects.toThrow("Issue opening rating is immutable");
     // A login still cannot be blanked away while opening evidence remains
     // attached. The trigger refuses every blanking transition, including the
-    // whitespace spellings; since migration 031 the completeness check refuses
-    // them too, so the trigger is a backstop rather than the only guard.
+    // whitespace spellings; the completeness check refuses them too, so the
+    // trigger is a backstop rather than the only guard.
     for (const blanked of [null, "", "   ", "\t", "\n", " \t\n "]) {
       await expect(sql`
         update issues set owner_github_login = ${blanked} where id = ${issue.id}
@@ -1125,13 +1125,9 @@ describe("initial PostgreSQL materialization", () => {
     }]);
   });
 
-  // Migration 031 made both evidence-completeness checks two-valued, so the
-  // whitespace-only and partially-null records they used to admit can no longer
-  // be written at all. The two tests this file once carried for those hole
-  // states — keeping a whitespace-only login row writable, and redating an
-  // opening timestamp standing without its event id — described states that
-  // are now unwritable, and their rejection coverage moved to
-  // tests/db/evidence-completeness.test.ts.
+  // Both evidence-completeness checks are two-valued, so whitespace-only and
+  // partially-null records cannot be written at all. Their rejection coverage
+  // lives in tests/db/evidence-completeness.test.ts.
   it("persists immutable issue-owned rating evidence and an exact merge commit OID", async () => {
     const pullRequest = await insertPullRequest(sql);
     const mergeCommitOid = "0123456789abcdef0123456789abcdef01234567";
@@ -2947,7 +2943,7 @@ describe("initial PostgreSQL materialization", () => {
 
   it("bounds reconciliation coordination at no less than the work pool's capacity", () => {
     const sharedPoolCapacity = sql.options.max;
-    // A coordinator used to hold one of the work pool's own connections, so the
+    // A coordinator on the work pool would hold one of its own connections, so the
     // work pool's capacity is the coordinator concurrency the isolated client has
     // to keep serving.
     expect(RECONCILIATION_COORDINATION_POOL_MAX).toBeGreaterThanOrEqual(sharedPoolCapacity);
@@ -3281,7 +3277,7 @@ describe("initial PostgreSQL materialization", () => {
     // created_at is the recording transaction's start time and id is a random
     // uuid, so neither is the record order. Demote the CHANGE row's created_at
     // below its neighbours' to build that disagreement into the fixture
-    // deterministically — under the old `order by created_at, id` this query
+    // deterministically — under `order by created_at, id` this query
     // returns CHANGE, ADD, REMOVE and the assertion below fails.
     await sql`
       update reconciliation_changes
@@ -3507,7 +3503,7 @@ describe("initial PostgreSQL materialization", () => {
     // Same pin as the rejected-evidence provenance read-back above: the query
     // must follow the recorded sequence, not `created_at, id` — created_at is
     // the transaction's start time, not the record order, and the random uuid
-    // id orders nothing. Demote the CHANGE row's created_at so the old sort
+    // id orders nothing. Demote the CHANGE row's created_at so that sort
     // deterministically returns CHANGE, ADD, REMOVE here too.
     await sql`
       update reconciliation_changes
@@ -3646,11 +3642,11 @@ describe("initial PostgreSQL materialization", () => {
       });
 
       // Raw seeds at the 028 shape — only columns that exist at the freeze —
-      // because the HEAD materializer writes the forge columns 038 provides
-      // (issue 296). 029's backfill then assigns recorded_seq to these
-      // genuinely pre-existing rows in physical insertion order, which is the
-      // order this fixture inserts them in. The fold computes the values; the
-      // seeds name the 028-era subset of them, body now a literal (issue 681).
+      // because the HEAD materializer writes the forge columns 038 provides.
+      // 029's backfill then assigns recorded_seq to these genuinely pre-existing
+      // rows in physical insertion order, which is the order this fixture inserts
+      // them in. The fold computes the values; the seeds name the 028-era subset
+      // of them, and body is a literal.
       const fold = foldRepository(snapshot);
       const addRun = randomUUID();
       const changeRun = randomUUID();
@@ -4884,7 +4880,7 @@ function gatewayForSnapshot(snapshot: RepositoryFoldSnapshot): ReconciliationGat
     id: issue.id,
     number: issue.number,
     title: issue.title,
-    // The snapshot carries no body text (issue 681), and the fold reads none;
+    // The snapshot carries no body text, and the fold reads none;
     // the gateway's forge shape still demands the field.
     body: "",
     url: issue.url,

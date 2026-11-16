@@ -203,10 +203,9 @@ export class GitLabGateway {
     // GitLab embeds no timeline in its issue listing, so there is nothing
     // embedded to refresh and the controls stay unimplemented rather than
     // silently ignored. Instead every listed issue's evidence is read fresh
-    // from the per-issue surfaces below — the N+1 decision (issue 539): two
-    // requests per issue plus one per merged closing merge request, the
-    // simple correct cost on a reconciliation that runs on a budget hold,
-    // not a hard rate ceiling.
+    // from the per-issue surfaces below — the N+1 decision: two requests per
+    // issue plus one per merged closing merge request, the simple correct cost
+    // on a reconciliation that runs on a budget hold, not a hard rate ceiling.
     const since = options?.since === undefined ? "" : `?updated_after=${encodeURIComponent(options.since)}`;
     const objects = await this.listAllPages<GitLabIssueObject>(
       `/projects/${segment(`${repository.owner}/${repository.name}`)}/issues${since}`,
@@ -218,13 +217,12 @@ export class GitLabGateway {
         issues.push(await this.issueWithEvidence(repository, object));
       } catch (error) {
         // Only 404 answers "this issue is gone": definitive for that issue
-        // alone (issue 563), so the listing omits it and the run completes
-        // for the remaining issues. The repository itself is not gone — any
-        // other status is an upstream problem and still fails the run. The
-        // skip is logged because a silent skip on a list endpoint is easy to
-        // misread as "no issues". Every value in the line is the instance's own
-        // text — the issue number and the repository path arrive from its
-        // responses — so each is encoded (issue 1042).
+        // alone, so the listing omits it and the run completes for the remaining
+        // issues. The repository itself is not gone — any other status is an
+        // upstream problem and still fails the run. The skip is logged because a
+        // silent skip on a list endpoint is easy to misread as "no issues".
+        // Every value in the line is the instance's own text — the issue number
+        // and the repository path arrive from its responses — so each is encoded.
         if (error instanceof GitLabApiError && error.status === 404) {
           console.warn(
             `GitLab issue ${logField(String(object.iid))} in ${logField(`${repository.owner}/${repository.name}`)}`
@@ -468,10 +466,10 @@ export class GitLabGateway {
   }
 
   /**
-   * Contract item 30, graded NOT SUPPLIED by the 2026-09-11 probe: GitLab CI
-   * has no issue-comment pipeline source, so no in-repo workflow artifact can
-   * evidence claim automation. A GitLab gateway's claim-path verdict is
-   * permanently NOT_CHECKED.
+   * Contract item 30 is graded NOT SUPPLIED: GitLab CI has no issue-comment
+   * pipeline source, so no in-repo workflow artifact can evidence claim
+   * automation. A GitLab gateway's claim-path verdict is permanently
+   * NOT_CHECKED.
    */
   public async listWorkflowFiles(_repository: GitHubRepositoryReference): Promise<ClaimPathEvidence[]> {
     void _repository;
@@ -727,7 +725,7 @@ function toGitHubRepository(project: GitLabProject): GitHubRepository {
     // GitLab's `name` is the display name and may differ from the path slug,
     // while every project endpoint is addressed owner/name. `name` is
     // therefore the last path segment, so owner/name joined always equals
-    // path_with_namespace (issue 543).
+    // path_with_namespace.
     name: pathParts[pathParts.length - 1],
     ownerType: project.namespace?.kind === "group" ? "ORGANIZATION" : "USER",
     fullName: project.path_with_namespace,

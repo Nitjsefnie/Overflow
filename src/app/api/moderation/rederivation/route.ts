@@ -22,7 +22,7 @@ import { readBodyWithinLimit } from "@/lib/http/request-body";
 
 /**
  * The rederivation body is one repository id, so 32 KiB bounds the read with
- * wide margin (issue 661).
+ * wide margin.
  */
 const REDERIVATION_BODY_LIMIT_BYTES = 32 * 1024; // 32 KiB
 
@@ -50,7 +50,7 @@ export type RederivationRouteDependencies = {
 
 /**
  * Which derived rows the current fold logic produced and which are still an
- * older revision's output, per repository — issue 197's third obligation.
+ * older revision's output, per repository.
  */
 export function createRederivationGetHandler(dependencies: RederivationRouteDependencies) {
   return async function getRederivationStatus(request: Request): Promise<Response> {
@@ -123,9 +123,8 @@ export function createRederivationPostHandler(dependencies: RederivationRouteDep
 /**
  * Reads the body through readBodyWithinLimit and parses it with the schema.
  * Returns "tooLarge" when the body crosses the route's limit — the caller
- * answers 413 — and null for an unparsable or schema-invalid body, exactly as
- * request.json()'s rejection did before the bounded reader. A body read that
- * itself fails also keeps the null answer.
+ * answers 413 — and null for an unparsable or schema-invalid body. A body read
+ * that itself fails also keeps the null answer.
  */
 async function parseRederivationRequest(
   request: Request,

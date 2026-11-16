@@ -6,8 +6,8 @@ import { grantsWebhookAdministration } from "@/lib/auth/github-oauth-scopes";
 /**
  * The liveness state of the GitHub account row, as the session refresh reads
  * it: a LIVE row keeps the session, a DELETED row ends it, and a MISSING row
- * was never there (or dropped out from under an old JWT) — that is today's
- * stale-session route, unchanged.
+ * was never there (or dropped out from under an old JWT) — that is the
+ * stale-session route.
  */
 export type SessionAccountState = "LIVE" | "DELETED" | "MISSING";
 
@@ -25,8 +25,8 @@ export type SessionAccountSnapshot = {
 
 /**
  * The stored OAuth-token bytes for a GitHub identity, or null when no account
- * row exists or nothing is stored for it. The continuity ruling's "is there a
- * token worth protecting" read.
+ * row exists or nothing is stored for it. `shouldKeepStoredGitHubToken`'s
+ * "is there a token worth protecting" read.
  */
 export async function findStoredGitHubToken(
   githubUserId: number,
@@ -43,8 +43,9 @@ export async function findStoredGitHubToken(
 /**
  * Whether this GitHub identity sponsors at least one ACTIVE registered
  * repository (`registered_repositories.active = true`, the state both a
- * sponsor unregistration and a moderation deactivation clear). The continuity
- * ruling's "is there something the stored token still serves" read.
+ * sponsor unregistration and a moderation deactivation clear).
+ * `shouldKeepStoredGitHubToken`'s "is there something the stored token still
+ * serves" read.
  */
 export async function sponsorsActiveRegisteredRepository(
   githubUserId: number,
@@ -63,11 +64,11 @@ export async function sponsorsActiveRegisteredRepository(
 }
 
 /**
- * What the stored token's OWN probe established (issue 1154 fix round): a
- * stored token can be dead — the sponsor revoked the app's authorization on
- * GitHub — or scope-less, and keeping either gains nothing while a live new
- * token is discarded. The storage path probes it with the same
- * X-OAuth-Scopes read the new token gets, and this is that probe's verdict.
+ * What the stored token's OWN probe established: a stored token can be dead —
+ * the sponsor revoked the app's authorization on GitHub — or scope-less, and
+ * keeping either gains nothing while a live new token is discarded. The
+ * storage path probes it with the same X-OAuth-Scopes read the new token gets,
+ * and this is that probe's verdict.
  */
 export type StoredTokenProbeOutcome =
   /** GitHub answered the stored token and it grants webhook administration. */
@@ -82,22 +83,20 @@ export type StoredTokenProbeOutcome =
   /**
    * No reliable answer — a transport failure, a deadline, or an unreliable
    * status (an outage or a rate limit, not 401/404). The stored token's
-   * capability is UNKNOWN, and unknown reads as keep: the unchanged
-   * fail-safe direction.
+   * capability is UNKNOWN, and unknown reads as keep: the fail-safe direction.
    */
   | "unanswered";
 
 /**
- * The sign-in continuity ruling (issue 1154): whether the storage path keeps
- * the STORED token instead of the new sign-in's. GitHub issues a new
- * authorization carrying only the scopes the sign-in requested (an
- * already-authorized account skips the consent screen), so a contributor
- * sign-in mints a zero-scope token that would otherwise overwrite the token
- * the sponsor's registered repositories' webhook repairs still spend. Keep
- * the stored token exactly when there is one, the account sponsors an active
- * registration, the new token is not known to administer webhooks (a probe
- * that failed leaves that unknown, which reads as keep — fail-safe), and the
- * stored token itself proved live and hook-capable when probed — or its own
+ * Whether the storage path keeps the STORED token instead of the new sign-in's.
+ * GitHub issues a new authorization carrying only the scopes the sign-in
+ * requested (an already-authorized account skips the consent screen), so a
+ * contributor sign-in mints a zero-scope token that would otherwise overwrite
+ * the token the sponsor's registered repositories' webhook repairs still spend.
+ * Keep the stored token exactly when there is one, the account sponsors an
+ * active registration, the new token is not known to administer webhooks (a
+ * probe that failed leaves that unknown, which reads as keep — fail-safe), and
+ * the stored token itself proved live and hook-capable when probed — or its own
  * probe could not answer, which fails safe the same way. A stored token that
  * answers revoked or scope-less is replaced by the new token.
  */
@@ -127,9 +126,9 @@ export function shouldKeepStoredGitHubToken(input: StoredTokenContinuity): boole
 
 /**
  * The one writer of `users.github_login`/`encrypted_oauth_token`: the sign-in
- * upsert, moved verbatim from `src/auth.ts`. Nothing writes `avatar_url`
- * anymore (issue 1075) — the column stays in the schema only so old rows need
- * no drop; the deletion scrub still clears it and the migration nulled it.
+ * upsert. Nothing writes `avatar_url`: the column stays in the schema only so
+ * old rows need no drop; the deletion scrub still clears it and a migration
+ * nulled every existing value.
  * On conflict it also clears `deleted_at` IN THE SAME statement that
  * restores the OAuth token — the `users_deleted_account_scrubbed_check`
  * admits no half-restored state, and this is the exact shape it allows (a

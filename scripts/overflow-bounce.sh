@@ -6,25 +6,25 @@
 # route cannot be delivered, the relay's own mailer daemon (exim on the
 # smarthost, Gmail upstream of it) mails a delivery-failure notification back
 # to the envelope sender - overflow-canary@<fqdn> or overflow-alert@<fqdn>.
-# Until those addresses became local aliases, exim refused such bounces at
-# RCPT and every delivery failure on the alert route vanished without a
-# trace: the alert route has no way to report its own mail being lost. With
-# the addresses aliased to root (the acceptance leg, host configuration),
-# those bounces now file into root's mail spool, and this script is the
-# reporting leg: a root-run oneshot that tails the spool from a persisted
-# byte offset and forwards each new bounce to the out-of-band Discord
+# Exim refuses such bounces at RCPT unless those addresses are local aliases,
+# and a refused bounce would make every delivery failure on the alert route
+# vanish without a trace: the alert route has no way to report its own mail
+# being lost. The addresses are aliased to root (the acceptance leg, host
+# configuration), so those bounces file into root's mail spool, and this
+# script is the reporting leg: a root-run oneshot that tails the spool from a
+# persisted byte offset and forwards each new bounce to the out-of-band Discord
 # webhook the canary script already uses.
 #
 # Why an offset rather than a "seen" list: the spool is append-only and cron
 # mail keeps arriving, so a byte offset is the only bookkeeping that stays
 # correct forever without pruning. The offset file starts at the spool's
-# current size (the existing backlog is cron mail; re-reporting 5.5 MB of it
-# once would be noise, so the watcher reports only what arrives after it is
-# installed) and advances only after every new message in the batch was
-# examined and every report due was successfully posted. A run whose webhook
-# post was refused therefore leaves the offset alone, and the next run
-# re-reads the same bounce and reports again - the canary's own discipline
-# that a report lost is a report owed, never a report recorded.
+# current size (the backlog is cron mail; re-reporting 5.5 MB of it once would
+# be noise, so the watcher reports only what arrives after its first run), and
+# advances only after every new message in the batch was examined and every
+# report due was successfully posted. A run whose webhook post was refused
+# therefore leaves the offset alone, and the next run re-reads the same bounce
+# and reports again - the canary's own discipline that a report lost is a
+# report owed, never a report recorded.
 #
 # When the offset points past the spool's end (the spool was rotated or
 # truncated), the position is meaningless, so it resets to 0 and the whole
@@ -43,7 +43,7 @@
 #   a failure; and a DSN about any other address is the rest of the system's
 #   mail working as intended. This is the bounce the smarthost sends back
 #   when it could not deliver the alert.
-# - Class B - the alert landed locally (issue 848's class). Exim resolves
+# - Class B - the alert landed locally. Exim resolves
 #   the alert recipient to this host far more often than it fails remotely,
 #   and a successful LOCAL write produces no bounce at all - so a Class-A-only
 #   watcher stays silent through the most common real failure. The message
@@ -58,8 +58,8 @@
 #   bounce (Mailer-Daemon's, carrying the alert's text inside it) is
 #   classified as A and never double-reported as B.
 #
-# Together with the canary's own verdict the watcher now distinguishes all
-# three outcomes: off-host accepted (silence), local write (Class B), and
+# Together with the canary's own verdict the watcher distinguishes all three
+# outcomes: off-host accepted (silence), local write (Class B), and
 # refused/deferred/remote-dead (Class A).
 #
 # The offset parks at the end of the last COMPLETE message. The spool is

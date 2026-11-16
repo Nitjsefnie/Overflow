@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The ledger relay's PURE DECISION LAYER (issue 885 polish): everything the
+// The ledger relay's PURE DECISION LAYER: everything the
 // relay decides from data it has already been handed, with no IO, no clock and
 // no environment. scripts/ledger-relay.ts holds the wiring and the API calls;
 // scripts/ledger-relay-sweep.ts holds the sweep; both reach their decisions
@@ -8,8 +8,8 @@
 //
 // It imports NOTHING from either sibling: a decision layer that reached back
 // into a sibling for a type or a constant would be neither pure nor honest
-// about where it ends. The relay entry re-exports every symbol here, so the
-// public surface it has always presented is unchanged.
+// about where it ends. The relay entry re-exports every symbol here, so its
+// public surface presents all of them.
 
 /** One job of the triggering run, as the jobs listing reports it. The API's field names are kept so the listing's JSON maps straight through. */
 export interface RelayJob {
@@ -36,13 +36,13 @@ export const PIN_SHAPE = /^\.github\/workflows\/[^/]+\.ya?ml$/;
  * One required context's producer workflow paths: the single path every
  * committed entry uses, or a non-empty list of them.
  *
- * The list form exists because issue 1090 splits a workflow that reads
- * pull-request data out of its privileged triggers, which leaves one required
- * context produced by TWO workflow files — a `pull_request_target` leg and a
- * `push`/`workflow_dispatch` leg. A context pinned to a single path cannot
- * name both, and the paths it does not name are not merely unverified: the
- * relay's "nothing is pinned to this run's workflow" branch makes them
- * SILENT, so the second file's completions post no App check-run at all.
+ * The list form serves a required context produced by TWO workflow files: a
+ * `pull_request_target` leg and a `push`/`workflow_dispatch` leg, as when a
+ * workflow that reads pull-request data is split away from its privileged
+ * triggers. A context pinned to a single path cannot name both, and the paths
+ * it does not name are not merely unverified: the relay's "nothing is pinned
+ * to this run's workflow" branch makes them SILENT, so the second file's
+ * completions post no App check-run at all.
  *
  * Read through {@link pinsFor} everywhere rather than narrowed by hand, so a
  * consumer cannot learn the shape by accident and split on it.
@@ -278,19 +278,19 @@ export function openPullRequestsAtHead(body: unknown, headSha: string): HealPull
 }
 
 /**
- * The never-started evidence the rerun-heal supplies (issue 1037): two signals
+ * The never-started evidence the rerun-heal supplies: two signals
  * for the same question, did the run ever start executing.
  *
  * - `runStartedAt` is the PRIMARY signal — the run object's `run_started_at`,
  *   which GitHub names the moment the run began executing. On the relay's
  *   dispatch path it is read from the fetched run body; on the workflow_run
  *   path the workflow passes no started-at through the environment (the
- *   workflow file is a gate-executed surface this change does not open), so
+ *   workflow file is a gate-executed surface that is not opened here), so
  *   it carries null there and the fallback decides.
  * - `anyJobStarted` is the FALLBACK signal — whether the run's job listing
  *   (which the mirror has already fetched on both paths) holds any job that
  *   started. A step can only start inside a job that started, so the
- *   job-level signal subsumes the issue's "no started job or step".
+ *   job-level signal subsumes the "no started job or step" condition.
  *
  * The recognition rule (runNeverStarted below): a run that NEVER started is
  * the supersession case the heal exists for; a run that DID start was
@@ -334,15 +334,15 @@ export function anyJobStartedOf(body: unknown): boolean {
  * The rule's boundary: a deliberate cancellation of a run that has STARTED
  * stays cancelled; a cancellation of a never-started run is indistinguishable
  * from supersession (GitHub's data carries no discriminator) and heals up to
- * the attempt cap. This is the issue's own operationalization — "only runs
- * that never started" — not a narrower rule, because none exists.
+ * the attempt cap. This operationalizes "only runs that never started" — the
+ * rule as stated, not a narrower one, because none exists.
  */
 export function runNeverStarted(evidence: RerunStartedEvidence): boolean {
   return evidence.runStartedAt === null && !evidence.anyJobStarted;
 }
 
 /**
- * The rerun-heal's decision (issue 861), pure. Every condition is required;
+ * The rerun-heal's decision, pure. Every condition is required;
  * they are evaluated in this order:
  *
  * - a. the run concluded `cancelled` — the shape GitHub leaves when it cancels
@@ -353,11 +353,12 @@ export function runNeverStarted(evidence: RerunStartedEvidence): boolean {
  * - c. the attempt is under RERUN_ATTEMPT_CAP — a run cancelled from the
  *   pending slot never started, so attempts increment only via rerun and the
  *   cap bounds the churn;
- * - c2. the run NEVER STARTED (issue 1037): `startedEvidence` decides, and a
- *   call that supplies none decides as the pre-1037 heal did — the relay
- *   always supplies it, gating on runNeverStarted BEFORE its queries (so a
- *   started run is never probed for a heal that must not happen) and passing
- *   the same evidence here so the decision is self-contained;
+ * - c2. the run NEVER STARTED: `startedEvidence` decides, and a call that
+ *   supplies none skips this check and decides on the other conditions
+ *   alone — the relay always supplies it, gating on runNeverStarted BEFORE
+ *   its queries (so a started run is never probed for a heal that must not
+ *   happen) and passing the same evidence here so the decision is
+ *   self-contained;
  *   tests/scripts/ledger-relay-never-started.test.ts pins both legs;
  * - d. the head is still live: an open PR whose tip is the run's head SHA;
  * - e. no live run of the same workflow is already queued, in_progress,
@@ -391,7 +392,7 @@ export function isHealableEvent(event: string): boolean {
  * object whose every value is a workflow path, or a non-empty list of them.
  * The string form is what every committed entry uses, and it is kept rather
  * than normalised away so the file stays readable; the list form is what a
- * context with more than one producing workflow writes (issue 1090).
+ * context with more than one producing workflow writes.
  *
  * An EMPTY list is refused rather than read as "no producer". It is the one
  * shape that would let a context name itself into the map and then never be

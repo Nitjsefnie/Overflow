@@ -332,7 +332,7 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
         return { kind: "NOT_REGISTERED" };
       }
       // Before the sponsor check, in the order the register.ts guard pins: a
-      // row another forge holds is a collision whoever asks (issue 571).
+      // row another forge holds is a collision whoever asks.
       if (row.provider !== input.provider) {
         return {
           kind: "PROVIDER_CONFLICT",
@@ -367,8 +367,8 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
       if (updated === undefined) {
         return { kind: "NOT_REGISTERED" };
       }
-      // The unregistered repository's free text leaves in the same transaction
-      // (issue 681): the materialized body columns unconditionally, the
+      // The unregistered repository's free text leaves in the same transaction:
+      // the materialized body columns unconditionally, the
       // evidence cache only when no fold can still run — see
       // scrubRepositoryFreeText for the gate.
       await new PostgresSweepPassStore().discardIfIdle(updated.id, transaction);
@@ -542,7 +542,7 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
           return null;
         }
         // Before the sponsor check, in the order the register.ts guard pins: a
-        // row another forge holds is a collision whoever asks (issue 571).
+        // row another forge holds is a collision whoever asks.
         if (row.provider !== input.provider) {
           throw new RepositoryProviderConflictError(input.githubRepositoryId, input.provider, row.provider);
         }
@@ -623,8 +623,8 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
 
   /**
    * The active registration's forge columns — the pair the webhook upgrade
-   * drain branches on (issue 547). Null when the row is gone or no longer
-   * active; the drain answers REGISTRATION_FAILED for that.
+   * drain branches on. Null when the row is gone or no longer active; the
+   * drain answers REGISTRATION_FAILED for that.
    */
   public async findActiveRepositoryForgeById(
     repositoryId: string,
@@ -666,8 +666,8 @@ export class PostgresRepositoryStore implements RepositoryRegistrationStore {
     );
   }
 
-  // The abandoned-webhook cleanup surface (issue 451): the record written before
-  // the compensating delete is attempted, the queue the drain reads, and the
+  // The abandoned-webhook cleanup surface: the record written before the
+  // compensating delete is attempted, the queue the drain reads, and the
   // removal once the hook is proven gone. Kept as one contiguous block so a
   // concurrent edit of this file lands beside it, not inside it.
 

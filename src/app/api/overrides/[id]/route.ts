@@ -26,7 +26,7 @@ import { reasonText } from "@/lib/validation/reason";
  * The decision body carries one reason capped at 2000 characters by
  * reasonText(); 2000 three-byte UTF-8 characters is ~6 KB, so the limit is
  * 8 KiB rather than the 4 KiB the small single-field bodies get, and a
- * legitimate max-length reason is never refused as oversize (issue 661).
+ * legitimate max-length reason is never refused as oversize.
  */
 const OVERRIDE_DECISION_BODY_LIMIT_BYTES = 8 * 1024; // 8 KiB
 
@@ -118,9 +118,8 @@ async function readRequestId(context: SettlementOverrideDecisionContext): Promis
 /**
  * Reads the body through readBodyWithinLimit and parses it with the schema.
  * Returns "tooLarge" when the body crosses the route's limit — the caller
- * answers 413 — and null for an unparsable or schema-invalid body, exactly as
- * request.json()'s rejection did before the bounded reader. A body read that
- * itself fails also keeps the null answer.
+ * answers 413 — and null for an unparsable or schema-invalid body. A body read
+ * that itself fails also keeps the null answer.
  */
 async function parseDecision(
   request: Request,

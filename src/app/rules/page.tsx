@@ -156,9 +156,9 @@ export default async function RulesPage() {
   const user = session?.user as { id?: unknown; name?: unknown } | undefined;
   // The rendered chrome follows the ledger's current role, not the JWT's role
   // claim: the claim freezes whatever the session carried at sign-in, so a
-  // demoted moderator's live session would keep showing the Moderation link
-  // (issue 810). A null role (account gone or pseudonymised) or a failed
-  // lookup falls back to the public view rather than crashing the page.
+  // demoted moderator's live session would keep showing the Moderation link.
+  // A null role (account gone or pseudonymised) or a failed lookup falls back
+  // to the public view rather than crashing the page.
   if (typeof user?.id === "string") {
     const currentRole = await getCurrentUserRole(user.id).catch(() => null);
     if (currentRole !== null) {

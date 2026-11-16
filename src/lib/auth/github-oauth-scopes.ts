@@ -1,6 +1,6 @@
 /**
  * The GitHub OAuth scopes Overflow asks for, and the reading of the scopes
- * GitHub actually granted (issue 599).
+ * GitHub actually granted.
  *
  * Two sign-ins exist. A contributor grants nothing beyond public identity:
  * the scope is the explicit empty string, which must stay explicit because

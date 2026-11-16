@@ -11,12 +11,9 @@ import { runMigrations } from "../../scripts/migrate";
 const exec = promisify(execFile);
 
 /**
- * Issue 661, worker level: while the database is unreachable the server's
- * reconciliation wiring printed one full stack trace per five-second poll, and
- * recovery was visible only by the errors stopping. This suite runs the REAL
- * instrumentation wiring against a real database, stops the database, and
- * pins the bound end to end: exactly one full drain failure across a
- * multi-poll outage, and one recovery line when it returns.
+ * This suite runs the REAL instrumentation wiring against a real database, stops the database,
+ * and pins the logging bound end to end: exactly one full drain failure across a multi-poll
+ * outage, and one recovery line when it returns.
  *
  * The database is a container of its own (the init script takes the suite off
  * the shared server, tests/support/postgres-container.ts): stopping it is the

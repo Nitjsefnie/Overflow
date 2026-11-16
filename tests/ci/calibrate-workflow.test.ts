@@ -9,18 +9,16 @@ import { parse } from "yaml";
  * doubles as the calibrate self-test: a workflow_dispatch carrying the
  * simulate-refused-raise input fabricates a raise so that main's branch
  * protection is guaranteed to refuse the bot push, and a job must then fail
- * VISIBLY — the inline shell a previous wiring replaced exited 0 on a refusal,
- * so a floor that silently stopped rising read as green (issue 684). Issue
- * 1036 splits that single job along its privilege boundary: calibrate computes
- * the recalibrated document with no write token — its scripts run on Node
- * built-ins alone, so it installs nothing — and push-recalibration, the only
- * contents: write holder in the file, commits and pushes the document bytes
- * calibrate exported while running no repository or dependency code. This
- * suite pins the wiring: the trigger, the token boundary, the no-install
- * shape, and the output handoff the push job consumes. The push job's
- * behavioral half — what its shell actually does to a repository — is covered
- * by tests/ci/push-recalibration-step.test.ts, which executes the step's real
- * `run:` text.
+ * VISIBLY: a floor that silently stopped rising must never read as green.
+ * Calibrate computes the recalibrated document with no write token — its
+ * scripts run on Node built-ins alone, so it installs nothing — and
+ * push-recalibration, the only contents: write holder in the file, commits and
+ * pushes the document bytes calibrate exported while running no repository or
+ * dependency code. This suite pins the wiring: the trigger, the token boundary,
+ * the no-install shape, and the output handoff the push job consumes. The push
+ * job's behavioral half — what its shell actually does to a repository — is
+ * covered by tests/ci/push-recalibration-step.test.ts, which executes the
+ * step's real `run:` text.
  */
 type WorkflowStep = {
   name?: string;
@@ -335,12 +333,12 @@ describe("the calibrate job's steps", () => {
   const named = (name: string) => steps.filter((step) => step.name === name);
 
   it("installs nothing, because its scripts run on Node built-ins alone", () => {
-    // The issue's own reproduction: git-archive the three scripts plus the
-    // floor document into a directory with no node_modules and
-    // calibrate-coverage.ts loads and runs — it imports node:fs, node:path,
-    // node:url and node:child_process, and the one module beside it. The
-    // install this job used to run repeated the one verify had just done for
-    // the same push, on a job that measures a JSON document.
+    // Reproduction: git-archive the three scripts plus the floor document into a
+    // directory with no node_modules and calibrate-coverage.ts loads and runs —
+    // it imports node:fs, node:path, node:url and node:child_process, and the
+    // one module beside it. Installing dependencies here would repeat the work
+    // verify had just done for the same push, on a job that measures a JSON
+    // document.
     for (const name of ["Install dependencies", "Enable the pinned package manager"]) {
       expect(
         named(name),

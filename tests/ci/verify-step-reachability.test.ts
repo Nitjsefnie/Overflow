@@ -4,14 +4,13 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 /**
- * Issue 849: every contract suite over `.github/workflows/ci.yml` asserted that
- * the verify job's test steps EXIST. None of them asserted that those steps
- * RUN, because `if:` was never evaluated by anything. The audit campaign
- * (domain D17) rewrote each of the three `if:` expressions guarding the test
- * steps so that it can never fire on a pull request, and all three mutations
- * left the entire `tests/ci/` surface green — the third disables both test
- * steps at once, so the job concludes green having executed zero of 6 646
- * tests.
+ * Contract suites over `.github/workflows/ci.yml` assert that the verify job's
+ * test steps EXIST. None of them asserts that those steps RUN, because nothing
+ * else evaluates `if:`. Each of the three `if:` expressions guarding the test
+ * steps can be rewritten so that it never fires on a pull request, and each such
+ * mutation leaves the rest of the `tests/ci/` surface green — the third disables
+ * both test steps at once, so the job concludes green having executed zero of
+ * 6 646 tests.
  *
  * The gap is specifically REACHABILITY, and the controls say so: mutating what
  * a step RUNS is killed by an existing suite, so these suites are not inert.
@@ -520,9 +519,9 @@ type Scenario = {
   event: string;
   /**
    * The workflow file that would receive this event, and therefore whose
-   * verify job the scenario selects over. Issue 1090 split ci.yml into a file
-   * per leg, so the event no longer determines the file: push and
-   * workflow_dispatch reach ci.yml and workflow_run reaches ci-pr.yml.
+   * verify job the scenario selects over. ci.yml is split into a file per leg,
+   * so the event no longer determines the file: push and workflow_dispatch
+   * reach ci.yml and workflow_run reaches ci-pr.yml.
    */
   file: string;
   /** What `scripts/docs-only.ts` wrote into `detect-docs`'s output. */
@@ -599,16 +598,16 @@ const DETECT_STEP_NAME = "Detect docs-only change";
  * reporter flags, so a substring test for it is satisfied by any single
  * reporter and can never fail — and it is not a redundant pin either: with the
  * reporters left alone but the bare flag dropped, vitest 5.0.0 writes no
- * reports directory at all (measured by the fix round 2 reviewer), so the run
- * measures nothing and every downstream reader is handed a file that was never
- * written. The same holds for `--coverage.include`, which was on the step and
- * pinned nowhere in the repository before this list carried it.
+ * reports directory at all (measured), so the run measures nothing and every
+ * downstream reader is handed a file that was never written. The same holds
+ * for `--coverage.include`, which the step passes and nothing else in the
+ * repository pins.
  *
  * Splitting on whitespace is what makes the tokens whole words, and it is also
  * what keeps the assertion indifferent to how the `run:` block is laid out: a
  * folded `>-` block, extra tabs and re-wrapped lines all arrive here as the same
- * list of words (measured by the fix round 3 reviewer — reformatting stayed
- * green at 178/178 and must stay that way).
+ * list of words (measured: reformatting stayed green at 178/178, and must stay
+ * that way).
  */
 const COVERAGE_FLAGS = [
   "--coverage",
@@ -639,19 +638,20 @@ function shellWords(command: string): string[] {
 /**
  * The steps that compute or publish a coverage artifact. They carry the same
  * `docs_only != 'true'` condition as the test steps, and rewriting only one of
- * those conditions leaves every assertion this file made before fix round 1
- * green — the artifact simply stops existing while the job concludes green.
+ * those conditions leaves every assertion in this file outside the
+ * coverage-artifact checks green — the artifact simply stops existing while the
+ * job concludes green.
  *
  * Each is recognised by what it does rather than by its name, so a rename does
  * not fail the suite: the script one runs, and the artifact name the other two
  * upload.
  *
- * A hand-written table is a hole in itself, and every campaign run against this
- * file so far was scoped to the WORKFLOW, which is structurally unable to reach
- * a deletion in here: deleting the entry for the patch-coverage report turns the
- * mutation that entry was written to catch green, with the test count unmoved.
- * The completeness assertion below is what closes it, and it closes it by
- * comparing this table against the workflow rather than trusting it.
+ * A hand-written table is a hole in itself, and mutation campaigns scoped to the
+ * WORKFLOW are structurally unable to reach a deletion in here: deleting the
+ * entry for the patch-coverage report turns the mutation that entry was written
+ * to catch green, with the test count unmoved. The completeness assertion below
+ * is what closes it, and it closes it by comparing this table against the
+ * workflow rather than trusting it.
  */
 /** An upload's first attempt; its retry (`overwrite: true`) is held to it by Half 4. */
 const isFirstUpload = (step: WorkflowStep) =>
@@ -753,10 +753,10 @@ function captureError(run: () => unknown): string {
 }
 
 /**
- * The verify job of each file the split produced, and the events that file's
- * `on:` declares. A run of ci-pr.yml reaches the first entry's steps; a run of
+ * The verify job of each workflow file, and the events that file's `on:`
+ * declares. A run of ci-pr.yml reaches the first entry's steps; a run of
  * ci.yml reaches the second's. Both carry the job id `verify`, which is what
- * makes the pair one required context rather than two (issue 1090).
+ * makes the pair one required context rather than two.
  */
 const LEGS = ["ci-pr.yml", "ci.yml"] as const;
 type Leg = (typeof LEGS)[number];
@@ -838,9 +838,9 @@ describe("the workflow files this suite simulates", () => {
     // The scenarios are a hand-written list, so a trigger added to `on:` would
     // arrive with no scenario, no context and no assertions: an event the
     // workflow receives, about which this file would then say nothing. Equality
-    // in both directions, and per file — after issue 1090's split the event no
-    // longer determines the file, so asserting over the union would let a
-    // trigger land in the wrong file unnoticed.
+    // in both directions, and per file — the event does not determine the file,
+    // so asserting over the union would let a trigger land in the wrong file
+    // unnoticed.
     for (const leg of LEGS) {
       const covered = [
         ...new Set(SCENARIOS.filter((scenario) => scenario.file === leg).map((scenario) => scenario.event)),
@@ -1224,9 +1224,9 @@ for (const scenario of SCENARIOS) {
         ? "runs the test suite exactly once"
         : "runs no test suite of its own and awaits the pull request suite exactly once",
       () => {
-        // Zero is issue 849's own failure mode: a condition that can never fire
-        // leaves the step in the file, so every presence assertion in tests/ci/
-        // stays green while CI executes no tests. Two is a different bug — the
+        // Zero is the failure mode of a condition that can never fire: it leaves
+        // the step in the file, so every presence assertion in tests/ci/ stays
+        // green while CI executes no tests. Two is a different bug — the
         // suite would run twice against the same database — and neither count
         // is acceptable, which is why this asserts the cardinality and not a
         // substring. Under workflow_run the suite is the pull request's
@@ -1380,7 +1380,7 @@ describe("superseded cancelled suite step selection", () => {
 });
 
 /**
- * Issue 1099: the ONE sanctioned package-manager invocation on this leg. The
+ * The ONE sanctioned package-manager invocation on this leg. The
  * base-defined zizmor gate resolves the pull request's pin against PyPI — with
  * the strict pre-parse standing between the pull request's bytes and pip, and
  * with NO token mapped (PyPI is anonymous). Sanctioned by exact step name and
@@ -1467,7 +1467,7 @@ const ZIZMOR_PIN_RUN_TEXT = [
 function isSanctionedZizmorPinStep(step: WorkflowStep): boolean { return (step.run ?? "") === ZIZMOR_PIN_RUN_TEXT; }
 
 /**
- * Issue 1035: the suppression-list divergence gate is the second inline
+ * The suppression-list divergence gate is the second inline
  * `python3 -c` step sanctioned on the workflow_run leg. Like the zizmor
  * gate, it reads the pull request's package.json as GIT OBJECTS on both the
  * merge tree and the base, and its behavioural contract is executed end to end
@@ -1978,12 +1978,12 @@ describe("the untrusted-execution detector the boundary assertions rely on", () 
 // Asserted over the scenarios that MEASURE coverage, not inside the loop
 // above. COVERAGE_ARTIFACTS describes the push leg's three steps — the ones
 // carrying `docs_only != 'true'` without running a test — and a mutation on
-// any one of them leaves every file in tests/ci/ green (fix round 1, finding
-// 4), because nothing asserted over their EXECUTION before this. The
-// pull-request leg has no such step, and a version of this test that ran
-// there would assert only that its own `expect(...).toHaveLength(1)` premise
-// held — i.e. nothing. The table is completeness-checked against ci.yml
-// above, and ci-pr.yml's carrying none of it is asserted in the same place.
+// any one of them leaves every other assertion in tests/ci/ green, because
+// nothing but this test asserts over their EXECUTION. The pull-request leg has
+// no such step, and a version of this test that ran there would assert only
+// that its own `expect(...).toHaveLength(1)` premise held — i.e. nothing. The
+// table is completeness-checked against ci.yml above, and ci-pr.yml's carrying
+// none of it is asserted in the same place.
 for (const scenario of SCENARIOS.filter((entry) => entry.file === COVERAGE_LEG)) {
   describe(`the coverage artifacts CI publishes when it runs ${scenario.label}`, () => {
     const selected = () => selectSteps(stepsFor(scenario), contextFor(scenario));
@@ -2018,8 +2018,8 @@ for (const scenario of PRT_SCENARIOS) {
     it("runs no package manager and executes only the base checkout's scripts", () => {
       const offences = selected().flatMap((step) => {
         // The one exception, by exact name AND exact argv: anything else, in
-        // any workflow, fails here exactly as before (see the structural pin
-        // directly below, which fails closed if the step's shape drifts).
+        // any workflow, fails here (see the structural pin directly below,
+        // which fails closed if the step's shape drifts).
         if (step.name === ZIZMOR_PIN_STEP_NAME && isSanctionedZizmorPinStep(step)) return [];
         // The issue-1035 suppression gate is the second sanctioned inline
         // `python3 -c` step, under the same fail-closed discipline: its run

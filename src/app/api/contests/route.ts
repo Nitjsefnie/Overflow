@@ -20,7 +20,7 @@ import { reasonText } from "@/lib/validation/reason";
 
 /**
  * The filing body is one event id plus a reason reasonText() caps at 2000
- * characters, so 32 KiB bounds the read with wide margin (issue 661).
+ * characters, so 32 KiB bounds the read with wide margin.
  */
 const CONTESTS_BODY_LIMIT_BYTES = 32 * 1024; // 32 KiB
 

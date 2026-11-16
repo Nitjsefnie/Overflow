@@ -21,8 +21,8 @@ const migrationNames = readdirSync(migrationsDirectory)
   .sort();
 
 /**
- * The settled status check exactly as `003_multi_issue_settlements_and_claims.sql` shipped it
- * before this branch — copied verbatim from `f361962`, enum literals and all.
+ * The settled status check exactly as `003_multi_issue_settlements_and_claims.sql` defines it
+ * at `f361962`, copied verbatim, enum literals and all.
  *
  * This is what every already-deployed database holds, and it is the reference the assertions
  * below compare 015's result against. It must never be regenerated from the current tree or read
@@ -269,10 +269,10 @@ describe("upgrading an already-deployed database", () => {
         await expect(appliedMigrationNames(sql)).resolves.toEqual(migrationNames.slice(0, applied));
 
         if (applied >= 3 && boundary < donatedStatusCheckMigration) {
-          // A database deployed before 015's branch ran the old 003 and holds the enum-typed
-          // check. Rebuilding it here is what makes this the population 015 exists to converge;
-          // without it every boundary carries the transitional text form 015 also produces, and
-          // the comparison below has nothing to disagree about.
+          // A database deployed before 015 ran the earlier 003 and holds the enum-typed check.
+          // Rebuilding it here is what makes this the population 015 exists to converge; without it
+          // every boundary carries the transitional text form 015 also produces, and the comparison
+          // below has nothing to disagree about.
           await installDeployedStatusCheck(sql);
         }
 

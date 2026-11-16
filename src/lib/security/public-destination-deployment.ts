@@ -1,6 +1,6 @@
 /**
  * The deny list a deployment seeds the outbound fetch guard with, so a
- * member-chosen destination cannot name the host itself (issue 899). The
+ * member-chosen destination cannot name the host itself. The
  * host's own public addresses are public, so the address class alone admits
  * them; everything non-public is already refused by the class. This module
  * is the one place that knows what this deployment is, and the guard module
@@ -27,7 +27,7 @@ import { denyListFromCidrs, isPublicAddress } from "@/lib/security/public-destin
  * or CIDR subnets; an invalid entry throws at the call, which is startup for
  * the singletons. Fail loud; never a silently-dropped entry.
  *
- * Interface enumeration itself fails soft (issue 924): a serving unit that
+ * Interface enumeration itself fails soft: a serving unit that
  * pins `RestrictAddressFamilies` denies AF_NETLINK, libuv's enumeration
  * socket, so the unsatisfied default degrades to the environment's entries
  * alone — an empty deny list when the variable is unset — with one loud
@@ -64,7 +64,7 @@ function hostPublicAddresses(enumerateInterfaces: typeof networkInterfaces): str
   } catch (error) {
     // An optional defense-in-depth default never kills the process: the
     // singletons build their transports at module evaluation, so a throw here
-    // is a startup crash (issue 924). Degrade to the env-driven list and say
+    // is a startup crash. Degrade to the env-driven list and say
     // so, once per failed enumeration.
     console.warn(
       "os.networkInterfaces() is unavailable, so the outbound fetch guard's default deny list is empty: carry the host's public addresses in PUBLIC_DESTINATION_DENY_CIDRS explicitly.",

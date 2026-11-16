@@ -17,7 +17,7 @@ import { observeRetentionSql } from "../support/retention-probe";
 import { startPostgresContainer } from "../support/postgres-container";
 
 /**
- * The retention prune's contract against a real database (issue 901): each
+ * The retention prune's contract against a real database: each
  * arm deletes exactly its own rows, nothing else, and reports what it
  * deleted. Seeds carry explicit timestamps relative to now(), so the
  * predicates' age gates and the live-lease guard are exercised on both

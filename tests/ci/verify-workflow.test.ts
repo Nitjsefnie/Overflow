@@ -55,7 +55,7 @@ describe("the verify workflow's package-manager step", () => {
 
 /**
  * jsdom does no layout, so the component suite stays green while a stylesheet
- * edit pushes the landing page's sign-in button below the fold (issue 111). The
+ * edit pushes the landing page's sign-in button below the fold. The
  * behavioral cover for that is a real-browser check in CI, `node
  * scripts/check-page-geometry.mjs`, and this suite pins the wiring so the check
  * cannot silently drop out of the release gate: the step must exist in the
@@ -114,12 +114,11 @@ describe("the verify workflow's page-geometry step", () => {
     );
 
     expect(step, "the geometry step must exist to be gated").toBeDefined();
-    // The gate moved with the file (issue 1090). The step runs the
-    // checked-out commit's build, so it belongs to the leg that checks a commit
-    // out and executes it; this file receives only push and workflow_dispatch,
-    // which is exactly that set, so the closed trigger set IS the gate and an
-    // `if` here would be dead code. A pull request's geometry runs in
-    // pr-suite.yml, whose completed outcome verify reads as data.
+    // The step runs the checked-out commit's build, so it belongs to the leg that
+    // checks a commit out and executes it; this file receives only push and
+    // workflow_dispatch, which is exactly that set, so the closed trigger set IS
+    // the gate and an `if` here would be dead code. A pull request's geometry runs
+    // in pr-suite.yml, whose completed outcome verify reads as data.
     expect(
       step.if,
       "the geometry step must carry no event gate: ci.yml admits nothing but push and " +
@@ -229,13 +228,13 @@ describe("the verify workflow's migration immutability step", () => {
 
 /**
  * The verify job's "Legal revision currency" step runs the per-commit
- * legal-revision gate (scripts/check-legal-revisions.ts, issue 955) over the
- * merge ref's range — HEAD^1 the base tip, HEAD the merge ref — after
- * completing the history of both sides. The wiring is pinned exactly because a
- * rewiring can be silent: a depth-limited fetch leaves the range's ancestry
- * incomplete and the per-commit walk misses commits, a swapped endpoint judges
- * the head against the wrong side, and an added `if` or continue-on-error
- * leaves the step in the file while CI stops gating on it.
+ * legal-revision gate (scripts/check-legal-revisions.ts) over the merge ref's
+ * range — HEAD^1 the base tip, HEAD the merge ref — after completing the
+ * history of both sides. The wiring is pinned exactly because a rewiring can be
+ * silent: a depth-limited fetch leaves the range's ancestry incomplete and the
+ * per-commit walk misses commits, a swapped endpoint judges the head against the
+ * wrong side, and an added `if` or continue-on-error leaves the step in the file
+ * while CI stops gating on it.
  *
  * Assertions are made on the parsed YAML data (step.name / step.run / step.if),
  * never on the raw bytes, so reformatting the file does not disturb them and
@@ -249,8 +248,8 @@ describe("the verify workflow's legal revision currency step", () => {
     steps.filter((step) => step.name === "Legal revision currency");
 
   beforeAll(async () => {
-    // The merge-ref gates moved to ci-pr.yml with the rest of the pull-request
-    // leg (issue 1090).
+    // The merge-ref gates live in ci-pr.yml with the rest of the pull-request
+    // leg.
     const source = await readFile(resolve(".github/workflows/ci-pr.yml"), "utf8");
     const workflow = parse(source) as {
       jobs?: { verify?: { steps?: WorkflowStep[] } };
@@ -369,16 +368,13 @@ describe("the verify workflows' concurrency groups", () => {
  * base that has since advanced: the run tests refs/pull/N/merge — the head
  * merged with the base as it stood at event time — and nothing re-runs the
  * checks when main moves underneath them, so the tree GitHub actually lands
- * (its rebase onto current main) was never tested by a required check (PR 290
- * is the worked example). The base-freshness step is the automated form of the
- * manual final-gate check: as the last step of each required job it issues
- * the freshness certificate only when
- * the advance from the tested base to main's
- * current tip is disjoint from the files the pull request changes (issue 510's
- * relevant-advance condition, replacing issue 441's unsatisfiable
- * main-frozen-for-the-whole-run demand). The step delegates to the committed
- * script scripts/ci-base-freshness.sh, whose behavior tests/ci/
- * base-freshness.test.ts covers against a stubbed gh.
+ * (its rebase onto current main) is never tested by a required check. The
+ * base-freshness step is the automated form of the manual final-gate check: as
+ * the last step of each required job it issues the freshness certificate only
+ * when the advance from the tested base to main's current tip is disjoint from
+ * the files the pull request changes (the relevant-advance condition). The step
+ * delegates to the committed script scripts/ci-base-freshness.sh, whose
+ * behavior tests/ci/base-freshness.test.ts covers against a stubbed gh.
  *
  * Assertions are made on the parsed YAML data (step.name / step.run), never on
  * the raw bytes, so reformatting or reordering unrelated steps does not
@@ -703,14 +699,13 @@ describe("the verify workflows' untrusted-code boundary", () => {
   });
 });
 
-/** Issue 988 ports both gates into the existing required verify context. */
+/** Both gates run in the existing required verify context. */
 describe("the verify workflow's conflict-marker and commit-scope gates", () => {
-  // The marker gate lives in BOTH files after issue 1090's split — over the
-  // pull request's tree in one and the checked-out commit in the other — but
-  // the commit-scope gate only ever judged the pull request's merge tree, so it
-  // is asserted here against ci-pr.yml alone. Reading ci.yml for either found
-  // none, and every assertion below would have been a vacuous "the step I could
-  // not find is absent".
+  // The marker gate lives in BOTH files — over the pull request's tree in one
+  // and the checked-out commit in the other — but the commit-scope gate judges
+  // only the pull request's merge tree, so it is asserted here against
+  // ci-pr.yml alone. Reading ci.yml for it finds none, and every assertion
+  // below would be a vacuous "the step I could not find is absent".
   let steps: WorkflowStep[] = [];
   let pushSteps: WorkflowStep[] = [];
   const markerName = "Check no tracked file carries a merge-conflict marker";
@@ -754,7 +749,7 @@ describe("the verify workflow's conflict-marker and commit-scope gates", () => {
     expect(step?.run).toContain("git grep -nI -E '^(<{7}( |$)|>{7}( |$)|={7}$)' -- .");
     // This file receives nothing but workflow_run, so the tree searched
     // is always the pull request's and its path is the materialise step's
-    // output — the step no longer branches on the event to decide that.
+    // output — the step does not branch on the event to decide that.
     expect(step?.env).toEqual({ OVERFLOW_PR_TREE: "${{ steps.pr-tree.outputs.path }}" });
     expect(step?.run).toContain(
       'cd "${OVERFLOW_PR_TREE:?the pull request tree was not materialised}"\n',

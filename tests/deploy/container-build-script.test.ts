@@ -13,7 +13,7 @@ const scriptPath = fileURLToPath(new URL("../../scripts/container-build.sh", imp
 const script = readFileSync(scriptPath, "utf8");
 
 /**
- * Issue 461: the committed mechanical build path for the container route.
+ * The committed mechanical build path for the container route.
  * The script turns the Dockerfile's provenance machinery (mandatory
  * SOURCE_SHA, revision label, label verification) into one command an
  * operator can run and trust, so the pins below hold its contract textually,
@@ -116,7 +116,7 @@ exec "$REAL_GIT" "$@"
 `;
 
 // Deny-by-default, the shape of this repository's own .gitignore: the probe
-// below is ignored, so git status cannot see it (issue 648).
+// below is ignored, so git status cannot see it.
 const FIXTURE_GITIGNORE = [
   "*",
   "!.gitignore",
@@ -188,7 +188,7 @@ async function makeBuildFixture(dir: string): Promise<BuildFixture> {
   git("add", PAGE);
   git("commit", "-q", "-m", "fixture head");
   await writeFile(path.join(repo, PROBE), "export default function Probe() { return null; }\n");
-  // The premise of issue 648: the ignored probe leaves git status clean,
+  // The ignored probe leaves git status clean,
   // so the dirty-tree refusal cannot catch it.
   expect(git("status", "--porcelain")).toBe("");
   await writeFile(path.join(bin, "docker"), DOCKER_SHIM);

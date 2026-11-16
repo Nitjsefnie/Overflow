@@ -25,9 +25,9 @@ const { enqueued, readSession, registerRepositoryMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/auth", () => ({ auth: readSession }));
-// The production repositories wiring reads the live role through getSql()
-// (issue 733); the stub answers one live MEMBER role row so the wiring's own
-// authorization succeeds for these wiring-shape tests.
+// The production repositories wiring reads the live role through getSql();
+// the stub answers one live MEMBER role row so the wiring's own authorization
+// succeeds for these wiring-shape tests.
 vi.mock("@/lib/db/client", () => ({ getSql: () => vi.fn(async () => [{ role: "MEMBER" }]) }));
 vi.mock("@/lib/fold/postgres-store", () => ({
   PostgresFoldStore: class {
@@ -123,8 +123,8 @@ describe("production reconciliation wiring", () => {
     vi.stubEnv("OVERFLOW_GITHUB_WEBHOOK_URL", "https://overflow.example/api/github/webhooks");
     readSession.mockResolvedValue({ user: { id: "member-1", role: "MEMBER" } });
     // The production wiring asks GitHub which scopes the sponsor token holds
-    // before building the flow (issue 599); answer that one probe here so
-    // nothing in this test reaches the network.
+    // before building the flow; answer that one probe here so nothing in this
+    // test reaches the network.
     const probe = vi.fn<typeof fetch>(async (input) => {
       expect(String(input)).toBe("https://api.github.com/user");
       return new Response("{}", { status: 200, headers: { "x-oauth-scopes": "admin:repo_hook" } });

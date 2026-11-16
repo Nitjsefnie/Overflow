@@ -68,9 +68,8 @@ function firstPageLink(): Element | undefined {
  * resolve onto an element of this document, and must not be the page's own
  * reference anchor. That is the test modelled here, and the anchor it is
  * measured against is the one above — NOT "the first a[href] in the document",
- * which is the earlier version's mistake and which cost the skip link its
- * exemption as soon as any link preceded it, including a link inside a nav that
- * axe accepts outright.
+ * which would deny the skip link its exemption as soon as any link preceded it,
+ * including a link inside a nav that axe accepts outright.
  *
  * The `skip-link` class is the handle on the shell's own chrome, not part of
  * axe's rule: it keeps this exemption narrower than axe, so a stray element
@@ -106,9 +105,9 @@ function carriesOwnText(element: Element): boolean {
   );
 }
 
-// Issue 908: src/app had error.tsx and global-error.tsx but no not-found.tsx,
-// so an unknown URL rendered Next.js's default 404 — unstyled, no app shell,
-// and failing both the landmark-one-main and the region check. These cases walk
+// Without a not-found.tsx beside error.tsx and global-error.tsx in src/app, an
+// unknown URL renders Next.js's default 404 — unstyled, no app shell, and
+// failing both the landmark-one-main and the region check. These cases walk
 // the route itself, because what a reader depends on lives in the composition:
 // the chrome around the not-found content, not the content alone.
 describe("not-found page", () => {
@@ -164,10 +163,10 @@ describe("not-found page", () => {
 
     // axe-core's `region` rule: all page content must be contained by
     // landmarks. The walk covers the whole document rather than the shell, so
-    // content rendered outside .app-shell is caught too — the shell-scoped
-    // version was the one place this file was narrower than the rule it models,
-    // and narrower is the direction that misses defects. Body itself is the
-    // walk's root: it holds every string on the page and is not content.
+    // content rendered outside .app-shell is caught too — a shell-scoped walk
+    // would be narrower than the rule it models, and narrower is the direction
+    // that misses defects. Body itself is the walk's root: it holds every
+    // string on the page and is not content.
     //
     // The rule exempts the shell's skip link, which sits ahead of the header so
     // a keyboard reaches the content without traversing the chrome, under the

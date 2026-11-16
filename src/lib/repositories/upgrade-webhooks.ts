@@ -135,7 +135,7 @@ async function upgradeRegistration(
 }
 
 /**
- * The GitLab arm of the upgrade drain (issue 547): a GitLab registration's
+ * The GitLab arm of the upgrade drain: a GitLab registration's
  * hook is verified through a GitLab gateway built on the sponsor's forge
  * identity token for the registration's own instance. A missing identity is
  * CREDENTIALS_FAILED — the drain cannot repair the hook without the

@@ -1,5 +1,5 @@
-// The minimal permission set both Ledger-App installation-token mints request
-// (issue 1051): the exact union of what every GitHub API call the two scripts
+// The minimal permission set both Ledger-App installation-token mints request:
+// the exact union of what every GitHub API call the two scripts
 // make under the minted token needs, derived call by call:
 //
 // - `actions: read`        — the workflow-run, workflow-run-listing and
@@ -19,7 +19,7 @@
 // The Actions policies GET in check-actions-event-policy.ts needs
 // `administration: read`, which the App's grant LACKS — no subset of the grant
 // covers it, so it is deliberately absent here and that call keeps drawing its
-// documented 403 (the issue-1024 neutral path). The rerun-heal's POST needs
+// documented 403 (the neutral path). The rerun-heal's POST needs
 // `actions: write`, which the mint cannot request (the App lacks it too); the
 // relay runs that call under the workflow's own RELAY_RERUN_TOKEN instead, so
 // it never touches this token. The enumeration of the relay's calls is pinned

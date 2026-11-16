@@ -85,7 +85,7 @@ export async function requiredMemberSession(
 
   // The credential reference rides the admitted session the moderator gate's
   // shape already carries, so a caller that names the credential behind the
-  // action — the expensive-route bound keys by it (issue 1054) — never has to
+  // action — the expensive-route bound keys by it — never has to
   // re-resolve the request to get it.
   return { user: { id: credential.user.id, role }, credential: credential.credential };
 }

@@ -67,8 +67,8 @@ beforeEach(() => {
 });
 
 // A test whose subject legitimately emits server-side output (the
-// collection-walk bound diagnostic, issue 883) names the method here before
-// acting, and the teardown skips it.
+// collection-walk bound diagnostic) names the method here before acting, and
+// the teardown skips it.
 const consoleOutputAllowed = new Set<string>();
 
 afterEach(() => {
@@ -234,10 +234,10 @@ describe("GET /api/repositories/labels", () => {
     expect(JSON.stringify(body)).not.toMatch(/access-token-should-not-leak|private-body|private-header/);
   });
 
-  // Issue 890: no arm classifies a 5xx, so it reaches the generic 502 whose
-  // fixed string names neither the status nor anything else about the failure.
-  // The answer is unchanged; what an operator reads is the log, and the status
-  // is what it has to name.
+  // No arm classifies a 5xx, so it reaches the generic 502 whose fixed string
+  // names neither the status nor anything else about the failure. The answer is
+  // unchanged; what an operator reads is the log, and the status is what it has
+  // to name.
   it("names the unclassified GitHub status when the labels read answers a 5xx", async () => {
     consoleOutputAllowed.add("error");
     readSession.mockResolvedValue(memberSession());
@@ -390,11 +390,11 @@ describe("GET /api/repositories/labels", () => {
     expect(fetchGitHub).toHaveBeenCalledTimes(2);
   });
 
-  // Issue 883: a walk that trips the collection-walk bound answers the same
-  // generic 502 as any other upstream failure, and the bound's own message —
-  // the collection it was reading and the ceiling it stopped at — is the only
-  // thing that tells the two apart. The walk here is the real one: an instance
-  // that advertises a continuation on every response never stops on its own.
+  // A walk that trips the collection-walk bound answers the same generic 502
+  // as any other upstream failure, and the bound's own message — the collection
+  // it was reading and the ceiling it stopped at — is the only thing that tells
+  // the two apart. The walk here is the real one: an instance that advertises a
+  // continuation on every response never stops on its own.
   it("logs the collection-walk bound's error when a label walk trips the bound", async () => {
     consoleOutputAllowed.add("error");
     readSession.mockResolvedValue(memberSession());
@@ -500,13 +500,12 @@ describe("GET /api/repositories/labels (GitLab)", () => {
     expect(getForgeToken).not.toHaveBeenCalled();
   });
 
-  // Issue 892: a 500 has its own test below — no arm classifies it, so it is
-  // the route's one logged GitLab failure. These rows are exactly the
-  // classified set, and classified failures stay silent: each row's message
-  // already names the remedy, so the only operator-facing record is the
-  // answer itself. The assertion pins that silence on each row (and the
-  // file's afterEach harness fails any run where unexpected console output
-  // leaks anywhere).
+  // A 500 has its own test below — no arm classifies it, so it is the route's
+  // one logged GitLab failure. These rows are exactly the classified set, and
+  // classified failures stay silent: each row's message already names the
+  // remedy, so the only operator-facing record is the answer itself. The
+  // assertion pins that silence on each row (and the file's afterEach harness
+  // fails any run where unexpected console output leaks anywhere).
   it.each([
     [401, 403, "FORBIDDEN", "GitLab refused the labels read through your linked identity (HTTP 401). The identity may have been revoked; re-link it on the dashboard's Forge identities page, then retry."],
     [403, 403, "FORBIDDEN", "GitLab refused the labels read through your linked identity (HTTP 403). The identity may have been revoked; re-link it on the dashboard's Forge identities page, then retry."],
@@ -525,10 +524,10 @@ describe("GET /api/repositories/labels (GitLab)", () => {
     expect(console.error).not.toHaveBeenCalled();
   });
 
-  // Issue 892: no arm classifies a 5xx, so it reaches the generic 502 whose
-  // fixed string names neither the status nor anything else about the
-  // failure. The answer is unchanged; what an operator reads is the log, and
-  // the status is what it has to name.
+  // No arm classifies a 5xx, so it reaches the generic 502 whose fixed string
+  // names neither the status nor anything else about the failure. The answer is
+  // unchanged; what an operator reads is the log, and the status is what it has
+  // to name.
   it("logs the unclassified GitLab status when the labels read answers a 5xx", async () => {
     consoleOutputAllowed.add("error");
     readSession.mockResolvedValue(memberSession());

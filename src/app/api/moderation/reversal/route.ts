@@ -18,9 +18,8 @@ import { reasonText } from "@/lib/validation/reason";
 /**
  * The reversal body is one account id plus a reason reasonText() caps at 2000
  * characters; 2000 three-byte UTF-8 characters is ~6 KB, so 8 KiB bounds the
- * read with wide margin (issue 661) and a legitimate max-length reason is
- * never refused as oversize — the same body class the audit decision route
- * reads under 8 KiB.
+ * read with wide margin and a legitimate max-length reason is never refused as
+ * oversize — the same body class the audit decision route reads under 8 KiB.
  */
 const MODERATION_REVERSAL_BODY_LIMIT_BYTES = 8 * 1024; // 8 KiB
 
@@ -32,7 +31,7 @@ const reverseBanSchema = z
   .strict();
 
 /**
- * Reverses a ban (issue 1072): the account returns to ACTIVE, exactly the
+ * Reverses a ban: the account returns to ACTIVE, exactly the
  * repositories the sanction flagged are reactivated with the flag cleared, and
  * the moderator's stated reason rides the BANNED → ACTIVE event. The
  * confirmed-pattern count is deliberately untouched — a later substantiated
@@ -91,9 +90,8 @@ export const PATCH = createModerationReversalPatchHandler({
 /**
  * Reads the body through readBodyWithinLimit and parses it with the schema.
  * Returns "tooLarge" when the body crosses the route's limit — the caller
- * answers 413 — and null for an unparsable or schema-invalid body, exactly as
- * request.json()'s rejection did before the bounded reader. A body read that
- * itself fails also keeps the null answer.
+ * answers 413 — and null for an unparsable or schema-invalid body. A body read
+ * that itself fails also keeps the null answer.
  */
 async function parseReversalInput(
   request: Request,

@@ -18,7 +18,7 @@ const { sql, memberSession } = vi.hoisted(() => ({
   })),
 }));
 
-// The moderation page now renders the client-side open-audit form, which reads the
+// The moderation page renders the client-side open-audit form, which reads the
 // app router; a bare render has no router mounted.
 vi.mock("next/navigation", async (importOriginal) => ({
   ...await importOriginal<typeof import("next/navigation")>(),
@@ -114,9 +114,8 @@ function openCorrectionRow(): Record<string, unknown> {
  * What a reader of the settlement corrections region depends on: the heading,
  * an explanation paragraph beneath it, and the correction queue — or its load
  * error — beneath that, in that order, all visible. The wording is never
- * asserted: a substring-preserving negation in the copy must not be caught
- * here (issue 218 accepts that radius), but removing, emptying or reordering
- * these elements must fail.
+ * asserted, so a substring-preserving negation in the copy is a known limit
+ * here, but removing, emptying or reordering these elements must fail.
  *
  * The order is pinned where the two slots' tag shapes differ: with entries the
  * queue renders a list, so the paragraph → list chain distinguishes the

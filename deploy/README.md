@@ -367,12 +367,11 @@ files into private inodes instead of hardlinking the shared store.
 Ownership and mode resets therefore leave the store and unrelated checkouts'
 package files untouched. Existing deployments must first complete section 10's
 one-time dependency migration: an unchanged install does not replace old
-hardlinks. This addresses [issue 214](https://github.com/Nitjsefnie/Overflow/issues/214)
-without changing the permissions the service needs inside the deployment tree.
+hardlinks. The service's permissions inside the deployment tree stay as they are.
 
 `next start` writes inside `.next/cache` — the image optimizer's output and the
 `.previewinfo` and `.rscinfo` files — and that directory is the only one the
-unit makes writable. The cache now lives inside the new release. Create it and
+unit makes writable. The cache lives inside the new release. Create it and
 hand it to `overflow` before switching and starting the service: `ReadWritePaths`
 naming a missing path is a start failure, and a root-owned cache is not writable
 by the service account.
@@ -601,8 +600,8 @@ done
 
 Every path prints, present or missing, because `test` prints nothing either way:
 three blank results is what an operator sees whether the rollback is intact or
-gone, and a check that cannot be read has replaced the silent expiry it was
-added to catch.
+gone, and a check that cannot be read has replaced the silent expiry it exists
+to catch.
 
 ```bash
 systemctl show overflow.service -p MainPID --value > /run/overflow-preswitch-mainpid
@@ -697,14 +696,13 @@ caveat goes moot once every retained release postdates the endpoint.
 
 The endpoint refuses a database missing a migration the release bundles with
 `503`. A rollback never undoes migrations, so the database can also be ahead
-of the retained release. Releases built from the mixed-version review change
-onward answer `503` when an applied migration recorded as `review` is absent
-from their bundled list; extra unflagged migrations still allow `200`.
-Releases built before this change cannot see the flag and still answer `200`
-against an ahead schema, even after a flagged migration. That older readiness
-signal cannot establish compatibility. The classifier's limits below also
-mean that a `200` does not replace review of the retained release against the
-schema as it stands.
+of the retained release. A release that checks the `review` flag answers `503`
+when an applied migration recorded as `review` is absent from its bundled list;
+extra unflagged migrations still allow `200`. An older release that does not
+check the flag still answers `200` against an ahead schema, even after a flagged
+migration, so its readiness signal cannot establish compatibility. The
+classifier's limits below also mean that a `200` does not replace review of
+the retained release against the schema as it stands.
 
 This rolls back the build, not the revision. The checkout and `node_modules`
 are shared with the current revision, and database migrations are not undone.
@@ -783,32 +781,30 @@ running either.
 
 The script runs in two phases joined by one exec. Bash reads a script
 incrementally, and the fast-forward rewrites the script file mid-run, so the
-tail after the fast-forward would otherwise execute from the pre-merge copy —
-observed on the 2026-09-27 deploy, where the sign-in smoke that PR 745 added
-to the script printed nothing during its own deploy. Phase 1 is everything
-through the fast-forward, run from wherever the deploy was started; it then
-re-executes, handing the resolved SHA and the pre-fetch serving anchor to the
-merged tree's own copy of the script, which runs the install→prune half. The
-deploy lock travels with the exec — the lock is held on the open file
-description, which the re-executed process inherits — so the fence still
-serializes the whole procedure. The handoff names are internal: the script
-sets both itself, production never seeds them, and a re-executed entry
-refuses fail-closed unless fd 9 is open on the deploy lock itself, the
-serving anchor is set, and the tree is already at the exact commit the
-handoff carries — the one the gates blessed.
+tail after the fast-forward would otherwise execute from the pre-merge copy.
+Phase 1 is everything through the fast-forward, run from wherever the deploy
+was started; it then re-executes, handing the resolved SHA and the pre-fetch
+serving anchor to the merged tree's own copy of the script, which runs the
+install→prune half. The deploy lock travels with the exec — the lock is held
+on the open file description, which the re-executed process inherits — so the
+fence still serializes the whole procedure. The handoff names are internal:
+the script sets both itself, production never seeds them, and a re-executed
+entry refuses fail-closed unless fd 9 is open on the deploy lock itself, the
+serving anchor is set, and the tree is already at the exact commit the handoff
+carries — the one the gates blessed.
 So the verification steps a deployed commit adds to the script run in their
 own deploy.
 
-The script's prune is guarded in a way the manual path is not, and this is new
-behaviour, not a restatement of the confirm-first rule below: before pruning,
-the script consults its own retention listing and refuses to prune unless the
-recorded previous release is inside the newest-3 retention set. When the
-previous release is older, the script prints its name, prints the exact manual
-`release:prune` command with `--keep` raised above 3, and runs nothing — the
-deploy still exits 0, because the deploy itself succeeded and only the prune
-was withheld. The manual path keeps a human as the guard through the
-confirm-first rule below; the script's guard is additional automation, and the
-manual rule is what still applies when pruning by hand.
+The script's prune is guarded in a way the manual path is not, separately from
+the confirm-first rule below: before pruning, the script consults its own
+retention listing and refuses to prune unless the recorded previous release is
+inside the newest-3 retention set. When the previous release is older, the
+script prints its name, prints the exact manual `release:prune` command with
+`--keep` raised above 3, and runs nothing — the deploy still exits 0, because
+the deploy itself succeeded and only the prune was withheld. The manual path
+keeps a human as the guard through the confirm-first rule below; the script's
+guard is additional automation, and the manual rule is what still applies when
+pruning by hand.
 
 The script deploys only a SHA that main's required checks have blessed. The
 gate parses `.github/required-checks.json` at the deployed SHA with the tree's
@@ -874,8 +870,8 @@ dispatch without a base always measures coverage.
 
 Each required check is resolved to the jobs of the workflow files
 `.github/required-checks.json` pins it to — a pin may be one file or a list of
-them, and since issue 1090's split every pinned context names both a
-repository-level file and a pull-request-only file — and a same-named
+them, and every pinned context names both a repository-level file and a
+pull-request-only file — and a same-named
 check-run from any other producer holds the deploy as pending, so it is
 refused at the deadline and never passed.
 
@@ -1019,8 +1015,8 @@ path cannot violate it: purely additive statements (a new table, a nullable
 column, a plain index; a plain index built without `CONCURRENTLY` blocks the
 previous release's writes for the scan's duration) are safe, and so is an
 enforcing statement the previous release already satisfies on every write
-path — `settlements` has carried `settlements_issue_unique` since migration
-003 alongside the writer that maintains it.
+path — `settlements` carries `settlements_issue_unique` (migration 003)
+alongside the writer that maintains it.
 
 After loading the environment and before `pnpm db:migrate`, the deploy script
 runs `node scripts/deploy-migration-status.ts` and lists every migration not
@@ -1081,13 +1077,14 @@ the migration knowingly: the still-serving release and every retained
 rollback target older than it will fail against the changed schema.
 
 During a flagged migration's build window, the still-serving old release
-reports not-ready at `/api/readiness`, provided it was built from this change
-onward. On the container route, the image `HEALTHCHECK` and the
+reports not-ready at `/api/readiness`, provided its readiness check reads the
+`review` flag. On the container route, the image `HEALTHCHECK` and the
 `docker-compose.yml` healthcheck mark the old container unhealthy; compose
-does not restart it on that by itself. Releases predating this change still
-report `200` and leave that window unprotected. Acknowledge the migration
-knowingly. The deploy script probes readiness only after the release switch
-and restart, so this old-release `503` does not block the switch.
+does not restart it on that by itself. An older release whose readiness check
+does not read the flag still reports `200` and leaves that window unprotected.
+Acknowledge the migration knowingly. The deploy script probes readiness only
+after the release switch and restart, so this old-release `503` does not block
+the switch.
 
 Before running the standing block below, read every migration the run will
 apply for the first time — anything `schema_migrations` does not yet record —
@@ -1099,11 +1096,10 @@ writer correction in this release and the enforcing statement in the next
 deploy, or shape the constraint so the previous release cannot violate it
 (for example, a partial constraint excluding the shape the old writer can
 produce). Shipping the constraint and its writer correction in the same
-release does not close the window — that is precisely what PR 312 and
-migration `033_self_work_calibrations_issue_unique.sql` did, and the build
-duration reopened the gap the branch had closed.
+release does not close the window: the previous release keeps serving with
+the constraint applied for the whole build duration.
 `ADD CONSTRAINT ... NOT VALID` does not rescue a failing constraint. A unique
-constraint — the form of both examples above — cannot be marked NOT VALID at
+constraint cannot be marked NOT VALID at
 all, and where the mark exists (a `CHECK` or `FOREIGN KEY` constraint) it
 defers only the scan of existing rows while still enforcing new-row writes
 immediately, so it does not make a constraint safe to apply before the
@@ -1129,8 +1125,8 @@ only confirms review in the deploy script and does not add a manual gate.
 
 The manual required-checks gate trusts check-run names; it does not use
 `.github/required-checks.json` to attribute each name to its producing
-workflow (a name may be pinned to several since issue 1090's split, and the
-gate keeps trusting the check-run name alone). It does not wait for CI: an
+workflow (a name may be pinned to several workflows, and the gate keeps
+trusting the check-run name alone). It does not wait for CI: an
 absent, non-completed or unsuccessful
 required check refuses the deploy. Once CI completes, rerun the gates part of
 the block. The script's `OVERFLOW_DEPLOY_CI_GATE=skip` setting has no manual
@@ -1925,8 +1921,8 @@ script never treats the first as the second.** The local exim daemon answers a
 submission it has merely spooled with `250 OK id=<id>`, and it writes
 `Completed` in its mainlog whether it handed the message to the smarthost or
 dropped it into a mailbox on this machine. Every signal below the SMTP
-conversation is therefore green for a message that reached nobody, and a unit
-failure used to produce a log line that read like a delivered alert. So the
+conversation is therefore green for a message that reached nobody, and a check
+that stopped there would log an undelivered alert as delivered. So the
 script does not stop at the daemon's answer: it takes the id off the final
 `250 OK id=`, follows that id into `/var/log/exim4/mainlog`, and calls the
 alert delivered only when exim `Completed` the id **and** the routing line for
@@ -2338,8 +2334,7 @@ systemctl daemon-reload
 
 The watched units work unchanged without the wiring: nothing else references
 the alert unit, and a failure of `overflow.service` or
-`overflow-backup.service` is still visible in the journal the way it was
-before this section.
+`overflow-backup.service` is visible in the journal.
 
 ### The alert path canary
 
@@ -2351,12 +2346,12 @@ so a route that stopped delivering looks exactly like a host with nothing to
 report. When enabled, `overflow-canary.timer` starts `overflow-canary.service`
 daily at 03:20 UTC to check that route.
 
-**On the documented deployment the timer has been disabled since 2026-10-01
-by maintainer decision**, because the daily mail was noise; the maintainer
-accepted the consequence. The scheduled check does not run, so a silent
-mail-path failure is no longer checked automatically by the canary. The unit
-files still ship, and the install and verification instructions below remain
-available for an operator who chooses to restore that check.
+**On the documented deployment the timer is disabled by maintainer decision**,
+because the daily mail was noise; the maintainer accepted the consequence. The
+scheduled check does not run, so a silent mail-path failure is not checked
+automatically by the canary. The unit files still ship, and the install and
+verification instructions below remain available for an operator who chooses to
+restore that check.
 
 With the canary installed and its host files configured, run one check by hand
 and inspect its verdict:
@@ -2424,12 +2419,11 @@ the same silent route this section exists to end. A healthy run retires the
 fault marker, and so does a run that reports a real outage after a stretch of
 blindness.
 
-That distinction is the whole point, and it was paid for. The canary's first
-production run had neither the membership nor the capability: it could not
-open the file, spent its full 60-second budget proving it, and reported that
-the relay had never completed a message exim had logged as `Completed` **one
-second after submission** — a false page, on the one channel the maintainer
-trusts, about a host that was healthy.
+That distinction is the whole point: without it, a canary lacking the
+membership and capability to open the log spends its full 60-second budget
+proving it and then reports that the relay never completed a message exim had
+logged as `Completed`, a false page, on the one channel the maintainer
+trusts, about a healthy host.
 
 **What `Completed` means, precisely — and what it does not.** Where the
 message was routed off the host, it means the smarthost **accepted** the
@@ -2443,11 +2437,12 @@ a route that silently accepts.
 That case is not detectable from here, and pretending otherwise would be
 worse than saying so. Measured against the real smarthost and an RFC 2606
 reserved domain, so that delivery is impossible by construction, the relay
-answered `250 2.0.0 OK … - gsmtp`, exim logged `Completed`, and the canary
-reported the path healthy. It was not wrong. Once the message has left the
-queue there is no observation available through the local exim that
-distinguishes "the smarthost accepted it" from "the remote mailbox exists" —
-`exim -Mvb` inspects **queued** messages, and this one is long gone by then.
+answers `250 2.0.0 OK … - gsmtp`, exim logs `Completed`, and the canary
+reports the path healthy, which is correct for what it can see. Once the
+message has left the queue there is no observation available through the
+local exim that distinguishes "the smarthost accepted it" from "the remote
+mailbox exists" — `exim -Mvb` inspects **queued** messages, and such a
+message is long gone by then.
 
 **So the detector for a dead mailbox is the heartbeat itself stopping
 arriving**, and it is the operator's job, not the script's. This canary
@@ -2807,16 +2802,16 @@ be delivered, the relay's mailer daemon mails a delivery-failure notification
 back to the envelope sender — `overflow-canary@<fqdn>` or
 `overflow-alert@<fqdn>` — and until those addresses are aliased they are
 unrouteable, so exim refuses the notification outright and every delivery
-failure on the alert route vanishes without a trace (`exim4 -bt`, verified on
-the host 2026-09-30). `overflow-bounce.service`, started every 15 minutes by
+failure on the alert route vanishes without a trace (verified on the host with
+`exim4 -bt`). `overflow-bounce.service`, started every 15 minutes by
 `overflow-bounce.timer`, is the reporting leg for that mail: a root-run oneshot
 that tails root's mail spool from a persisted byte offset and forwards each new
 bounce to the out-of-band Discord webhook the canary already posts to.
 
 With the canary plus this watcher the route distinguishes all three outcomes it
 can have. **Off-host accepted**: silence — the canary's `Completed` line and no
-watcher report. **Local write**: the watcher's Class B report, the class issue
-848 measured at 183 local writes against 5 off-host — a non-DSN message whose
+watcher report. **Local write**: the watcher's Class B report, the class
+measured at 183 local writes against 5 off-host — a non-DSN message whose
 From header local part is `overflow-alert` or `overflow-canary` is an alert
 that resolved to this host, and a successful local write produces no bounce, so
 this class produces no other signal anywhere on the host. **Remote failure**:
@@ -2833,17 +2828,14 @@ straight at the webhook — is rejected on host evidence: Debian's
 spool-watcher shape keeps the webhook root-only: root reads the spool, root
 posts the report, and no file's permissions move.
 
-The alternatives were priced with their costs in the issue thread. An IMAP or
-POP probe of the recipient mailbox is the definitive remote-mailbox check —
-the only option that observes the mailbox itself — and it needs a Gmail
-app-password credential that does not exist on this host (the credential
-constraint recorded on issue 842), so its cost is one new third-party
-credential plus one poll per canary interval; it is deliberately not
+An IMAP or POP probe of the recipient mailbox is the definitive remote-mailbox
+check — the only option that observes the mailbox itself — and it needs a Gmail
+app-password credential that does not exist on this host, so its cost is one new
+third-party credential plus one poll per canary interval; it is deliberately not
 implemented. Piping the aliases at the webhook is rejected above, on the
-`address_pipe` evidence. Doing nothing is rejected because both of its
-detectors already fail: the heartbeat-stops detector is human-in-the-loop (the
-canary's own closing paragraphs), and the local-write class produces no
-heartbeat gap at all.
+`address_pipe` evidence. Doing nothing is rejected because both of its detectors
+already fail: the heartbeat-stops detector is human-in-the-loop (the canary's own
+closing paragraphs), and the local-write class produces no heartbeat gap at all.
 
 #### Prerequisites
 
@@ -2868,10 +2860,10 @@ Unlike the canary unit, the bounce unit carries one capability. The spool it
 tails is delivery state owned by the MTA — `mail:mail`, mode `0600` on this
 host — and systemd's empty capability bounding set strips `CAP_DAC_OVERRIDE`,
 so root's plain open of the spool is denied under the unit's sandbox and every
-run exits 2 at the script's spool readability check. That was measured, not
+run exits 2 at the script's spool readability check. That is measured, not
 assumed. The unit therefore pins `CapabilityBoundingSet=CAP_DAC_OVERRIDE` and
 `AmbientCapabilities=CAP_DAC_OVERRIDE` and nothing beyond that one bit. Two
-cheaper-looking shapes were tested and rejected: `SupplementaryGroups=mail`
+cheaper-looking shapes are tested and rejected: `SupplementaryGroups=mail`
 still cannot open the file, because a `0600` spool carries no group bits for
 the supplementary group to exercise; and re-owning the spool to root would
 rewrite MTA-owned delivery state, which is not host configuration this
@@ -2921,8 +2913,8 @@ exim4 -bt "$(cat /etc/overflow/alert-recipient)"
 
 This one must show `R: smarthost for <recipient>` and
 `router = smarthost, transport = remote_smtp_smarthost`. A
-`transport = address_file` resolution here is the issue-848 local-write class —
-the alert is being filed into a local mailbox and never leaves the host — and
+`transport = address_file` resolution here is the local-write class — the alert
+is being filed into a local mailbox and never leaves the host — and
 it means the alert path is **not** verified; fix the resolution before
 continuing, because the watcher's Class B report is the only other thing that
 would ever name it.
@@ -2995,9 +2987,8 @@ rm -rf /var/lib/overflow-bounce
 ```
 
 The alert path itself is unchanged by any of it: removing the aliases returns
-the route to refusing bounces for the two sender addresses at RCPT — the
-pre-install behavior this section exists to replace — and the alerts and the
-canary keep working exactly as before.
+the route to refusing bounces for the two sender addresses at RCPT, and the
+alerts and the canary keep working unchanged.
 
 **Known limitations.** A Gmail-format DSN names its failed recipient
 differently from exim's, so those reports render subject-only — the shape the
@@ -3032,8 +3023,8 @@ come from a forger on loopback.
 
 The application change is safe to deploy before any host step: until the
 variable is set, every entry is written with the claimed address recorded and
-`clientAddressVerified: false`, which is the previous behavior with an honest
-marker added. The steps below close that gap.
+`clientAddressVerified: false`, so each entry is marked unverified. The steps
+below close that gap.
 
 1. Generate the secret once per host:
 

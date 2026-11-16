@@ -1,11 +1,11 @@
 import type { GitLabRestResponse } from "@/lib/gitlab/client";
 
 /**
- * The gateway's error taxonomy, extracted verbatim from client.ts (issue 871):
- * every upstream failure shape the module recognizes folds into this class —
- * an HTTP status, or status 0 with a fixed diagnostic body for a transport
- * failure or, now, a structurally wrong success response. `message` carries
- * only the status; the diagnostic travels in `.body`, truncated to 500.
+ * The gateway's error taxonomy: every upstream failure shape the module
+ * recognizes folds into this class — an HTTP status, or status 0 with a fixed
+ * diagnostic body for a transport failure or a structurally wrong success
+ * response. `message` carries only the status; the diagnostic travels in
+ * `.body`, truncated to 500.
  */
 export class GitLabApiError extends Error {
   public readonly body: string | null;
@@ -27,7 +27,7 @@ export class GitLabApiError extends Error {
 
 /**
  * Whether no arm of the labels route's GitLab classification explains this
- * failure, and it is therefore worth recording (issue 892).
+ * failure, and it is therefore worth recording.
  *
  * The classified set is exactly what the repository-labels route's GitLab arm
  * maps to a structured answer (route.ts, `gitlabLabelsResponse`'s catch):
@@ -55,8 +55,8 @@ export function isUnclassifiedGitLabFailure(error: unknown): boolean {
 
 /**
  * A 200 whose body fails to parse as JSON at all — an HTML error page from an
- * intermediary, or an empty body (issue 879) — is the instance misbehaving,
- * one step earlier than 871's non-array body: the parse throws a raw
+ * intermediary, or an empty body — is the instance misbehaving, one step
+ * earlier than a non-array body (responseJsonArray): the parse throws a raw
  * SyntaxError outside the taxonomy (no status, no endpoint). The failure is
  * recognized here and folded into the same typed rank as a transport failure:
  * status 0 — never a fabricated HTTP status the server never sent — with the
@@ -73,16 +73,16 @@ function parseJsonBody(response: GitLabRestResponse, path: string): unknown {
 }
 
 /**
- * Issue 871: a 200 whose JSON body parses but is not an array — an object,
- * or the JSON literal null — is an instance misbehaving, not a shape the
- * walker can consume. Letting it reach `CollectionWalkBound.add` dies with a
- * raw TypeError outside the taxonomy (no status, no endpoint), so it is
- * recognized here and folded into the same typed rank as a transport failure:
- * status 0 — never a fabricated HTTP status the server never sent — with the
- * endpoint in `.body`, so run failure records name the failed boundary. The
- * endpoint arrives explicitly from the walker; the walk's ceilings contract
- * in CollectionWalkBound is not changed by it. A body that fails to parse at
- * all takes the same rank through `parseJsonBody` (issue 879).
+ * A 200 whose JSON body parses but is not an array — an object, or the JSON
+ * literal null — is an instance misbehaving, not a shape the walker can
+ * consume. Letting it reach `CollectionWalkBound.add` dies with a raw TypeError
+ * outside the taxonomy (no status, no endpoint), so it is recognized here and
+ * folded into the same typed rank as a transport failure: status 0 — never a
+ * fabricated HTTP status the server never sent — with the endpoint in `.body`,
+ * so run failure records name the failed boundary. The endpoint arrives
+ * explicitly from the walker; the walk's ceilings contract in
+ * CollectionWalkBound is not changed by it. A body that fails to parse at all
+ * takes the same rank through `parseJsonBody`.
  */
 export async function responseJsonArray<T>(response: GitLabRestResponse, path: string): Promise<T[]> {
   const parsed = parseJsonBody(response, path);
@@ -93,16 +93,15 @@ export async function responseJsonArray<T>(response: GitLabRestResponse, path: s
 }
 
 /**
- * The single-object counterpart of `responseJsonArray`, moved here from
- * client.ts (issue 879): the repository, issue, merge-request and hook reads
- * all parse their 200 bodies through it. Issue 886: a body that parses but is
- * not an object — the literal null, a quoted string, a number — reaches the
- * mappers and dies as a raw TypeError outside the taxonomy (no status, no
- * endpoint), so like the array walker it is recognized here and folded into
- * the same typed rank as a transport failure: status 0 — never a fabricated
- * HTTP status the server never sent — with the endpoint in `.body`, so run
- * failure records name the failed boundary. Every single-object read in the
- * module consumes a non-null object (GitLabProject, GitLabIssueObject,
+ * The single-object counterpart of `responseJsonArray`: the repository, issue,
+ * merge-request and hook reads all parse their 200 bodies through it. A body
+ * that parses but is not an object — the literal null, a quoted string, a
+ * number — reaches the mappers and dies as a raw TypeError outside the taxonomy
+ * (no status, no endpoint), so like the array walker it is recognized here and
+ * folded into the same typed rank as a transport failure: status 0 — never a
+ * fabricated HTTP status the server never sent — with the endpoint in `.body`,
+ * so run failure records name the failed boundary. Every single-object read in
+ * the module consumes a non-null object (GitLabProject, GitLabIssueObject,
  * GitLabMergeRequestObject, the `{ id: number }` hook lookup, GitLabHookObject),
  * so the guard cannot reject a body any caller consumes. Like the walker, it
  * names the endpoint in `.body`.

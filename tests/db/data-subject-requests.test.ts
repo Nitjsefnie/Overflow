@@ -82,7 +82,7 @@ type HandSeeded = {
 };
 
 /**
- * The exact scenario issue 1071 reproduced: a person who never signed in
+ * The scenario: a person who never signed in
  * (forge id + login, no users row) across issues, pull requests, settlements,
  * the evidence cache, the change log and a moderation note, in a repository
  * that also holds a member's own issue body.
@@ -701,10 +701,10 @@ describe("data-subject removal", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Suppression at the reconciliation import (issue 1071's "the next
-// reconciliation re-reads everything from the forge"): the real reconcile
-// driver runs against a forge double seeded with the person, exactly as the
-// incremental-reconciliation suite drives it.
+// Suppression at the reconciliation import, since the next reconciliation
+// re-reads everything from the forge: the real reconcile driver runs against a
+// forge double seeded with the person, exactly as the incremental-reconciliation
+// suite drives it.
 // ---------------------------------------------------------------------------
 
 type ForgeDouble = {

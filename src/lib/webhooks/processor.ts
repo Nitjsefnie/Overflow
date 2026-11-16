@@ -8,11 +8,10 @@ import { redactPostgresError } from "@/lib/db/redact-postgres-error";
  * computed by the receiver route after its signature check. A repeat digest
  * that matches a PROCESSED receipt for this registration under the same
  * event name is a duplicate, whatever the delivery id; a null or absent
- * digest falls back to the delivery-id-only rule the previous release used
- * (issue 1041). The event name rides the key because distinct event headers
- * can carry byte-identical bodies — an `issues/edited` and an
- * `issue_comment/edited` envelope can match byte for byte — and each
- * accepted delivery must write its own effects, so the key is
+ * digest falls back to the delivery-id-only rule. The event name rides the key
+ * because distinct event headers can carry byte-identical bodies — an
+ * `issues/edited` and an `issue_comment/edited` envelope can match byte for
+ * byte — and each accepted delivery must write its own effects, so the key is
  * (provider, registration, event, digest), never the digest alone.
  */
 export type WebhookReceiptScope = { provider: "github" | "gitlab"; registrationId: string; bodyDigest?: string };
@@ -37,7 +36,7 @@ export type WebhookDeliveryStore = {
    * Resolves the registration holding this forge identity — provider,
    * normalized instance URL, forge project id. A GitLab delivery resolves
    * through it and never through the numeric id alone, which a GitHub
-   * registration could equally hold (issue 547).
+   * registration could equally hold.
    */
   findRepositoryByForgeIdentity(
     provider: string,

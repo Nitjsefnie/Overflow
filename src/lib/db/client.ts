@@ -28,8 +28,8 @@ export const RECONCILIATION_COORDINATION_POOL_MAX = WORK_POOL_MAX;
  * Seconds a connection attempt may take, counting from the socket connecting
  * to the server's first response. A database on the same host answers or it
  * is down, so anything above a few seconds is only the client waiting to
- * report a failure it already knows (issue 661): the library default is 30 s,
- * which is how long every caller queued behind a dead database hangs.
+ * report a failure it already knows: the library default is 30 s, which is how
+ * long every caller queued behind a dead database hangs.
  * DATABASE_CONNECT_TIMEOUT_SECONDS overrides it for a host too starved to
  * connect in 5 s; it has no disabled value, so a dead database never hangs.
  */
@@ -41,21 +41,21 @@ const MAX_CONNECT_TIMEOUT_SECONDS = Math.floor(2147483647 / 1000);
 /**
  * Seconds a pooled connection may sit fully idle before the client closes it.
  * The library default keeps every connection forever; 5 minutes retires the
- * ones a burst left behind without touching the steady-state set (issue 661).
+ * ones a burst left behind without touching the steady-state set.
  */
 const IDLE_TIMEOUT_SECONDS = 300;
 
 /**
  * Seconds a pooled connection is kept before the client recycles it, bounded
  * so no connection outlives a bounded amount of server-side state. The
- * library default is a random 30-60 minutes (issue 661).
+ * library default is a random 30-60 minutes.
  */
 const MAX_LIFETIME_SECONDS = 1800;
 
 /**
  * The statement deadline, in milliseconds, that every connection of the work
  * pool advertises through its startup packet, so the server — not a
- * client-side race — bounds a statement that runs too long (issue 661).
+ * client-side race — bounds a statement that runs too long.
  *
  * The bound this default exists for is not outage detection: a down database
  * is caught by connect_timeout (5 s) and an unreachable one fails every queued
@@ -71,12 +71,12 @@ const MAX_LIFETIME_SECONDS = 1800;
 const DEFAULT_STATEMENT_TIMEOUT_MS = "600000";
 
 /**
- * The coordination pool advertises NO statement deadline (issue 661, task 5):
- * its statements are coordination primitives — advisory try-locks, unlock and
- * session-identity checks, the webhook-upgrade transaction lock — each fast on
- * an uncontended server, and the one blocking wait it can queue on (the
- * webhook-upgrade lock behind a slow holder) is a wait, not work. A deadline
- * there could only cancel a legitimate wait, so it is absent outright.
+ * The coordination pool advertises NO statement deadline: its statements are
+ * coordination primitives — advisory try-locks, unlock and session-identity
+ * checks, the webhook-upgrade transaction lock — each fast on an uncontended
+ * server, and the one blocking wait it can queue on (the webhook-upgrade lock
+ * behind a slow holder) is a wait, not work. A deadline there could only cancel
+ * a legitimate wait, so it is absent outright.
  */
 const COORDINATION_STATEMENT_TIMEOUT_MS = "0";
 
@@ -97,9 +97,9 @@ function reportPostgresNotice(notice: PostgresNotice): void {
  * Reads the statement deadline the environment names, falling back to the
  * default only when the variable is UNSET. A set-but-invalid value — empty,
  * non-numeric, negative, or zero — throws at client construction, naming the
- * variable and the problem (issue 661): the value rides the startup packet of
- * every connection this client opens, and an empty string in particular
- * silently disabled the deadline the default exists to guarantee.
+ * variable and the problem: the value rides the startup packet of every
+ * connection this client opens, so an empty string is rejected rather than
+ * read as no deadline.
  */
 function statementTimeoutMs(): string {
   return positiveWholeNumberFromEnv("DATABASE_STATEMENT_TIMEOUT_MS",
@@ -123,11 +123,11 @@ function positiveWholeNumberFromEnv(name: string, meaning: string, max = Infinit
 }
 
 /**
- * Builds one of the shared pools with the deadlines the pools carry (D4/D3 of
- * issue 661): a bounded connect phase, an idle cap, a bounded lifetime, and a
- * server-enforced statement deadline delivered as a startup parameter — the
- * server applies it session-wide, so it reaches every statement the pool
- * serves, including ones queued behind a stuck lock.
+ * Builds one of the shared pools with the deadlines the pools carry: a bounded
+ * connect phase, an idle cap, a bounded lifetime, and a server-enforced
+ * statement deadline delivered as a startup parameter — the server applies it
+ * session-wide, so it reaches every statement the pool serves, including ones
+ * queued behind a stuck lock.
  */
 function openPool(max: number, statementTimeout: string): SqlClient {
   return postgres(requireDatabaseUrl(), {

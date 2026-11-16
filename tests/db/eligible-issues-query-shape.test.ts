@@ -15,17 +15,17 @@ const AURORA_DONE_WHEN = "Done when the cache replays\n<strong>every</strong> ti
  * Two load-independent pins on the eligible-issues query, per the
  * performance-debugging field guide:
  *
- * 1. EQUITY — the shipped implementation and a reference copy of the ORIGINAL
- *    correlated headroom expression agree row for row (same rows, same order)
+ * 1. EQUITY — the shipped implementation and a reference copy of the correlated
+ *    headroom expression agree row for row (same rows, same order)
  *    over a fixture that exercises every coalesce, exclusion and identity
- *    branch. The reference retains the pre-reshape correlated calculations
- *    with exact settled-balance ordering: parity is proven over real data,
+ *    branch. The reference keeps the correlated calculations with exact
+ *    settled-balance ordering: parity is proven over real data,
  *    not by re-reading the SQL.
  *
  * 2. SHAPE — EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) of the query the shipped
  *    implementation actually issues, asserting the per-sponsor aggregates
  *    execute once per query: no correlated SubPlan node remains, every
- *    aggregate node reports Actual Loops 1 (the old shape re-ran the
+ *    aggregate node reports Actual Loops 1 (a correlated shape would re-run the
  *    reservation sum and the balance lookup once per output row — six
  *    subplans, each at the output-row loop count), and the once-computed
  *    reservation total reaches the issue rows through a left join rather than
@@ -149,15 +149,16 @@ describe("eligible issues query shape against PostgreSQL", () => {
     const nodes: ExplainPlanNode[] = [];
     walkPlan(root!, (node) => nodes.push(node));
 
-    // 1. No correlated SubPlan survives: the old shape priced the balance and
-    //    the reservation sum with per-row subplans (the auditor's six subplans
-    //    at one loop per output row).
+    // 1. No correlated SubPlan survives: a correlated shape prices the balance and
+    //    the reservation sum with per-row subplans (six subplans at one loop per
+    //    output row).
     const subplans = nodes.filter((node) => node["Parent Relationship"] === "SubPlan");
     expect(subplans, planJson(plan)).toEqual([]);
 
     // 2. Every aggregate in the plan executes exactly once: the per-sponsor
     //    reservation total is priced once per query, not once per issue row
-    //    (the old shape's sums reported Actual Loops at the output-row scale).
+    //    (a correlated shape's sums would report Actual Loops at the output-row
+    //    scale).
     const aggregates = nodes.filter((node) => /aggregate/i.test(node["Node Type"]));
     expect(aggregates.length, planJson(plan)).toBeGreaterThan(0);
     for (const aggregate of aggregates) {
@@ -191,8 +192,8 @@ describe("eligible issues query shape against PostgreSQL", () => {
     for (const page of [1e17, 1e308, Number.MAX_SAFE_INTEGER]) {
       await expect(listEligibleIssues(seeded.viewerId, { page }), String(page)).resolves.toEqual([]);
     }
-    // The largest page whose offset is still a safe integer was and stays a
-    // valid, empty page of this small fixture board.
+    // The largest page whose offset is still a safe integer is a valid, empty
+    // page of this small fixture board.
     await expect(listEligibleIssues(seeded.viewerId, { page: 45_035_996_273_705 })).resolves.toEqual([]);
     // Control: the first page still carries the fixture's five open rows.
     await expect(listEligibleIssues(seeded.viewerId, { page: 1 })).resolves.toHaveLength(5);

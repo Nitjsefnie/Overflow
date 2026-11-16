@@ -111,7 +111,7 @@ export function githubSetupError(
   repository: GitHubRepository | null,
   step: "check the registration App installation" | "retrieve the submitted GitHub repository" | "read the repository difficulty labels" | "create the repository webhook" | "delete the repository webhook",
 ): RepositoryRegistrationError {
-  // Issue 93: a 401 means GitHub rejected Overflow's own authorization — not retryable, unlike a 403/404.
+  // A 401 means GitHub rejected Overflow's own authorization — not retryable, unlike a 403/404.
   if (error instanceof GitHubApiError && classifyGitHubApiFailure(error) === "CREDENTIALS") {
     return new RepositoryRegistrationError(
       "GITHUB_CREDENTIALS",
@@ -132,7 +132,7 @@ export function githubSetupError(
       const observation = `GitHub answered 404 for the request to ${step}. GitHub returns 404 rather than 403 when it will not reveal a resource, which can indicate missing authorization. The repository may also have been renamed, moved or deleted${repository === null ? "" : " since it was looked up"}.`;
       return new RepositoryRegistrationError("GITHUB_ACCESS", `${observation}${authorizationRemedies}`);
     }
-    // Issue 97: a 403 with no rate-limit evidence cannot separate a missing authorization
+    // A 403 with no rate-limit evidence cannot separate a missing authorization
     // from a secondary rate limit — GitHub answers 403 both ways. Lead with the retry.
     return new RepositoryRegistrationError(
       "GITHUB_ACCESS",
@@ -157,7 +157,7 @@ export function githubSetupError(
     step === "retrieve the submitted GitHub repository"
       ? "Unable to retrieve the submitted GitHub repository."
       : `Unable to ${step} on GitHub.`,
-    // Issue 883/890: only the bounded label read keeps a cause, and only for a failure no status arm
+    // Only the bounded label read keeps a cause, and only for a failure no status arm
     // classified — a walk cut short, or a GitHub status nothing here can explain. A thrown value of undefined keeps none.
     step === "read the repository difficulty labels" && isUnclassifiedGitHubFailure(error) ? error : undefined,
   );

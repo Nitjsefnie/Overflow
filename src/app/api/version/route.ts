@@ -1,7 +1,7 @@
 import { SERVER_VERSION } from "@/lib/version";
 
 /**
- * Advertised server version endpoint — issue 654.
+ * Advertised server version endpoint.
  *
  * Answers the single version that covers both the HTTP API and the MCP
  * endpoint, so a client can pin what it was built against with one number.

@@ -14,9 +14,8 @@ import { logField } from "@/lib/webhooks/log-field";
  * The largest serialized fact payload the evidence cache stores by default.
  *
  * Far under jsonb's ~256 MiB ceiling, so an evidence document cannot wedge the
- * fold the way the single-document write did (issue 850): a fact over this
- * limit is omitted from the cache instead of written, and the write succeeds.
- * Injectable per store instance so tests can set it low.
+ * fold: a fact over this limit is omitted from the cache instead of written, and
+ * the write succeeds. Injectable per store instance so tests can set it low.
  */
 export const DEFAULT_RECONCILIATION_FACT_BYTE_LIMIT = 64 * 1024 * 1024;
 
@@ -69,7 +68,7 @@ function serializedPayloadBytes(payload: unknown): number {
  * serialized payload exceeds `factByteLimit` (default 64 MiB).
  *
  * Keyed by the GitHub numeric id, so a subject's row is stable across passes
- * and only changed content is rewritten (issue 853). A duplicated key's last
+ * and only changed content is rewritten. A duplicated key's last
  * occurrence decides its whole fate — kept with the last payload, or omitted
  * with the last measured size — so a key is never both stored and counted as
  * omitted. GitHub ids cannot collide, so this only orders a pathological
@@ -122,9 +121,8 @@ export function splitEvidenceFacts(
 }
 
 /**
- * Rebuilds the evidence document shape the fold reads — the same
- * `{ issues, pullRequests }` the single-row document used to carry — from the
- * stored fact rows, ordered by numeric subject key ascending so reassembly is
+ * Rebuilds the evidence document shape the fold reads, `{ issues, pullRequests }`,
+ * from the stored fact rows, ordered by numeric subject key ascending so reassembly is
  * deterministic regardless of the rows' physical order.
  *
  * Keys that are not numeric (impossible from this module's own writes) sort
@@ -212,16 +210,15 @@ function factStorageRow({ kind, subjectKey, payload }: ReconciliationFact): Fact
 
 /**
  * Publishes one fold pass's evidence inside the caller's publication
- * transaction — the same fence and atomicity the single-document write had,
- * with the document split into per-fact rows.
+ * transaction — fenced and atomic, with the document split into per-fact rows.
  *
- * The `version` fence is unchanged: the metadata row's next version must equal
- * what the caller read, or the pass is stale and nothing is written. The two
- * wholesale-rewritten jsonb arrays are gone from the metadata row; the facts
- * are written around it — inserts and updates carrying a no-op guard, deletes
- * strictly targeted at keys the new document no longer carries — so a pass
- * whose document came back unchanged moves no fact row at all (issue 853),
- * and no fact ever written can approach jsonb's size ceiling (issue 850).
+ * The `version` fence: the metadata row's next version must equal what the
+ * caller read, or the pass is stale and nothing is written. The metadata row
+ * carries no wholesale-rewritten fact arrays; the facts are written around it —
+ * inserts and updates carrying a no-op guard, deletes strictly targeted at keys
+ * the new document no longer carries — so a pass whose document came back
+ * unchanged moves no fact row at all, and no fact ever written can approach
+ * jsonb's size ceiling.
  */
 export async function synchronizeReconciliationEvidence(
   transaction: TransactionClient,
@@ -242,7 +239,7 @@ export async function synchronizeReconciliationEvidence(
   // Split before any write: a fact over the byte limit is omitted from the
   // cache — never attempted — so one enormous subject lands as an
   // operator-visible, non-retried state instead of a permanently failing
-  // write the sweep revives forever (issue 850).
+  // write the sweep revives forever.
   const { facts, oversized } = splitEvidenceFacts({
     issues: narrowCachedIssueBodies(synchronization.issues),
     pullRequests: synchronization.pullRequests,
@@ -266,7 +263,7 @@ export async function synchronizeReconciliationEvidence(
 
   // Per-fact writes with a no-op guard: a fact whose payload is jsonb-equal to
   // the stored one is not rewritten, so a pass whose document came back
-  // unchanged moves no fact row and orphans no TOAST (issue 853).
+  // unchanged moves no fact row and orphans no TOAST.
   for (const batch of chunkEvidenceFactWrites(facts, factByteLimit)) {
     await transaction`
       insert into repository_reconciliation_evidence_facts (repository_id, kind, subject_key, payload)
@@ -299,8 +296,8 @@ export async function synchronizeReconciliationEvidence(
 
 /**
  * Reassembles a repository's evidence document from the metadata row and its
- * fact rows — the same shape the single-document read returned, so the fold's
- * merge logic is unchanged. Deterministic ordering by numeric subject key.
+ * fact rows, in the shape the fold's merge logic reads. Deterministic ordering
+ * by numeric subject key.
  *
  * One statement, one snapshot: metadata and facts are fetched by a single
  * join, so a fold pass committing mid-read can never hand the reader a
@@ -308,11 +305,11 @@ export async function synchronizeReconciliationEvidence(
  * selects could). The statement returns ROWS — one per fact plus the metadata
  * row — never a jsonb aggregate: an aggregate of all facts would be one jsonb
  * value under jsonb's 268,435,455-byte total ceiling, reintroducing at read
- * time the exact permanent-failure shape issue 850 removed from the write
- * path (the write deliberately admits documents whose facts total more than
- * that; only the per-fact limit bounds a fact). Each row detoasts its own
- * payload, so the read is bounded by the per-fact limit no matter how many
- * facts a repository carries.
+ * time the permanent-failure shape the per-fact limit exists to prevent (the
+ * write deliberately admits documents whose facts total more than that; only
+ * the per-fact limit bounds a fact). Each row detoasts its own payload, so the
+ * read is bounded by the per-fact limit no matter how many facts a repository
+ * carries.
  */
 export async function readReconciliationEvidence(
   sql: SqlClient,

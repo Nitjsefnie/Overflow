@@ -1,5 +1,5 @@
 /**
- * Issue 869: a GitLab collection walk must terminate.
+ * A GitLab collection walk must terminate.
  *
  * A walk ends only when the instance stops advertising a continuation — a
  * fresh `x-next-cursor`, a strictly increasing `x-next-page`, or a `next` Link

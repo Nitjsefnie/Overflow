@@ -68,11 +68,10 @@ describe("closing the shared clients before a socket error", () => {
   afterAll(async () => {
     // The reset socket means no client-side signal can reach the backend this
     // test strands mid-pg_sleep(300): closeSql() settles while the server-side
-    // session keeps sleeping, and on a private container stop() used to reap
-    // it. On the shared server the suite reaps what it stranded itself — the
-    // survivor audit in vitest.setup.ts (rightly) fails this file otherwise.
-    // A backend already gone terminates to false; any other failure is left
-    // for the audit to report.
+    // session keeps sleeping. On the shared server the suite reaps what it
+    // stranded itself — the survivor audit in vitest.setup.ts (rightly) fails
+    // this file otherwise. A backend already gone terminates to false; any
+    // other failure is left for the audit to report.
     if (strandedBackendPid !== undefined) {
       const reaper = postgres(databaseUrl, { max: 1 });
       try {

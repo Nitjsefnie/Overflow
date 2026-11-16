@@ -77,7 +77,7 @@ function journalSection(): { body: string; firstLine: number } {
   return sectionBody(journalHeading);
 }
 
-/** The heading that identifies the request-flood section (issue 1053). */
+/** The heading that identifies the request-flood section. */
 const floodHeading = "### Request flood";
 
 /** The flood section's body, extracted the same way as the journal's. */

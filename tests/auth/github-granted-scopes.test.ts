@@ -21,7 +21,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-// Issue 599: the scopes GitHub actually granted are read from an authenticated
+// The scopes GitHub actually granted are read from an authenticated
 // response's X-OAuth-Scopes header — never from the scope the sign-in asked
 // for or the hint the JWT carries.
 describe("readGitHubGrantedScopes", () => {

@@ -106,8 +106,8 @@ describe("consuming sweep authorization", () => {
     const f = await fixture();
     // The sponsor's stored backlog is over the diff-only threshold, so this
     // repository folds diff-only: the sweep offers it no slot, and its queued
-    // webhook job keeps its reason instead of being upgraded to the full sweep
-    // pass the old slot upgrade forced on it.
+    // webhook job keeps its reason rather than being upgraded to the full sweep
+    // pass.
     const sizes = new PostgresRepositorySizeStore(sql);
     await sizes.store(f.repositoryId, 1356, at);
     await reconcileRepository(f.dependencies, f.repositoryId);

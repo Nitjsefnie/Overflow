@@ -6,7 +6,7 @@
  * text inputs' height, border, background and focus treatment through rules that apply at
  * every viewport, and it must inherit the form's font like the sibling controls do —
  * without `font: inherit` a select renders at the platform default size, visibly smaller
- * than the inputs beside it (issue 32). The geometric consequence of this wiring is
+ * than the inputs beside it. The geometric consequence of this wiring is
  * verified against a real browser by `scripts/measure-field-controls.ts`; this file pins
  * the wiring itself, so a selector edit that drops the select silently fails a committed
  * check.

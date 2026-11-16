@@ -1,10 +1,10 @@
-// The ledger relay's fork-head liveness decision (issue 1142), in its own
-// module because scripts/ledger-relay.ts sits at its tooling-family line
-// ceiling and this block is one cohesive unit: proving a fork head's owner
-// from the run body, and deciding liveness from the base repository's open
-// pulls at `head=<owner>:<branch>`. Pure functions: the relay issues the
-// requests and turns a live verdict into the byte-identical throw (issue
-// 1083's visibility) and a dead one into the visible exit-0 refusal.
+// The ledger relay's fork-head liveness decision, in its own module because
+// scripts/ledger-relay.ts sits at its tooling-family line ceiling and this
+// block is one cohesive unit: proving a fork head's owner from the run body,
+// and deciding liveness from the base repository's open pulls at
+// `head=<owner>:<branch>`. Pure functions: the relay issues the requests and
+// turns a live verdict into the byte-identical throw that keeps the refusal
+// visible, and a dead one into the visible exit-0 refusal.
 
 /**
  * A fork head's owner login, as the `head=` query parameter can carry it:
@@ -15,7 +15,7 @@ export const VALID_FORK_OWNER = /^[^\s/\u0000-\u001f\u007f]+$/;
 
 /**
  * The fork head's owner login, read from the run body's
- * `head_repository.owner.login` (issue 1142). The login must be present and
+ * `head_repository.owner.login`. The login must be present and
  * carry only characters the `head=` parameter can; when the same object also
  * names `head_repository.full_name`, the login must equal the name's prefix
  * before the first "/". Throws otherwise, before any request: an unprovable

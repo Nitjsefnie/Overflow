@@ -27,17 +27,16 @@ export type GuardedCallback<Arguments extends unknown[]> = (
  * member is read once, through the thunk, because an accessor can have a side
  * effect as well as a failure.
  *
- * The receiver is passed rather than left to the call, because the local no
- * longer supplies the one the property access did: these members are declared as
+ * The receiver is passed rather than left to the call, because the local does
+ * not carry the receiver the property access does: these members are declared as
  * methods, so a bare call would leave `this` undefined and turn the callback
  * itself into the failure this guard exists to prevent. A callback that cannot
  * be invoked that way falls into the guard below like any other failing one.
  *
  * One caller hands over a callback that is not a member of its receiver at all:
- * armSweepInterval falls back to this module's own defaultSchedule, which now
- * runs with `this` bound to the caller's schedule where the bare call left it
- * undefined. That is the one observable change this guard makes on a path that
- * already worked, and it is safe because defaultSchedule never reads `this`.
+ * armSweepInterval falls back to this module's own defaultSchedule, which runs
+ * with `this` bound to the caller's schedule, where a bare call would leave it
+ * undefined. This is safe because defaultSchedule never reads `this`.
  *
  * Every member this guards declares its return as `void | PromiseLike<unknown>`
  * rather than `void`, because an async callback is supported rather than merely
@@ -48,10 +47,10 @@ export type GuardedCallback<Arguments extends unknown[]> = (
  * awaiting one, and awaiting would put whatever follows behind a callback that
  * may never settle at all. For the same reason this is not written as an async
  * function awaiting the callback — that puts a second floating promise into a
- * module whose whole defect was a floating promise, and it hides the synchronous
- * case, which survives only because an async body runs eagerly up to its first
- * await. Settling the result and catching separately shows both failure modes
- * where they happen.
+ * module built to contain them, and it hides the synchronous case, which
+ * survives only because an async body runs eagerly up to its first await.
+ * Settling the result and catching separately shows both failure modes where
+ * they happen.
  *
  * What stays fatal, deliberately: a console broken at every arity, since
  * catching that would leave the module unable to report anything at all with no

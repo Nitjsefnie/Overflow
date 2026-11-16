@@ -82,7 +82,7 @@ export type RepositoryUnregisterOutcome =
   | { kind: "FORBIDDEN" }
   /**
    * The row is held by another forge than the one the caller resolved it
-   * under (issue 571). Decided inside the write transaction, so a
+   * under. Decided inside the write transaction, so a
    * registration that moved the row between the caller's provider read and
    * the write is refused rather than deactivated across forges.
    */
@@ -91,7 +91,7 @@ export type RepositoryRegistrationGateway = ClaimActionReleaseGateway & {
   getRepository(repository: GitHubRepositoryReference): Promise<GitHubRepository>;
   /**
    * Reads the repository by its immutable GitHub numeric id — the drain's
-   * resolution primitive (issue 516). The id survives a rename and an owner
+   * resolution primitive. The id survives a rename and an owner
    * transfer (see the parallel note on `GitHubPullRequest.repositoryGitHubId`),
    * while an owner/name path stored earlier does not. Answers null only when
    * GitHub 404s the id — no repository visible to this token; every other
@@ -121,10 +121,11 @@ export type AbandonedWebhookCleanup = {
   webhookId: number;
   createdAt: string;
   /**
-   * The forge the hook lives on. Every pre-547 record is GitHub (migration
-   * 041's column default); a GitLab registration's compensation (issue 547)
-   * records 'gitlab', reusing the numeric repository id and hook id columns
-   * for the GitLab side of their dual use.
+   * The forge the hook lives on. Every record written before GitLab
+   * registration compensation existed is GitHub (migration 041's column
+   * default); a GitLab registration's compensation records 'gitlab', reusing
+   * the numeric repository id and hook id columns for the GitLab side of
+   * their dual use.
    */
   provider: "github" | "gitlab";
   /**
@@ -149,12 +150,12 @@ export type RepositoryRegistrationStore = {
   createRepository(repository: NewRegisteredRepository): Promise<RegisteredRepository | null>;
   /**
    * Appends the submitted catalog as the repository's next version and moves
-   * the stored current catalog in the same transaction (issue 180). Answers
+   * the stored current catalog in the same transaction. Answers
    * `changed: false` when the submitted catalog already is the current one,
    * and null when no registration holds the GitHub identity. `provider` is
    * the forge the caller resolved the row under; the transaction refuses
    * with `RepositoryProviderConflictError` when the stored provider differs,
-   * so the cross-forge check holds at write time (issue 571).
+   * so the cross-forge check holds at write time.
    */
   appendDifficultySchemeVersion(input: {
     githubRepositoryId: number;
@@ -190,8 +191,7 @@ export type RepositoryRegistrationStore = {
    * unregistered — holds after every path. The row is locked by owner_name
    * for the whole decision, so a concurrent reactivation cannot interleave.
    * `provider` is the forge the caller resolved the row under; a row another
-   * forge holds answers PROVIDER_CONFLICT, decided under the same lock
-   * (issue 571).
+   * forge holds answers PROVIDER_CONFLICT, decided under the same lock.
    */
   unregisterRepository(input: {
     ownerName: string;
@@ -289,7 +289,7 @@ export class RepositoryRegistrationError extends Error {
     public readonly code: "CONFLICT" | "FORBIDDEN" | "GITHUB_ACCESS" | "GITHUB_CREDENTIALS" | "GITHUB_RATE_LIMITED" | "INVALID_INPUT" | "NOT_FOUND" | "ROLLBACK_INCOMPLETE" | "UPSTREAM_FAILURE",
     message: string, cause?: unknown, public readonly refusal?: import("@/lib/stats/registration-attempts").RegistrationRefusalKind | null,
   ) {
-    // Issue 883: the message is the submitter's; the cause is what the wrap was handed. Omitted installs none.
+    // The message is the submitter's; the cause is what the wrap was handed. Omitted installs none.
     super(message, cause === undefined ? undefined : { cause });
     this.name = "RepositoryRegistrationError";
   }
@@ -331,7 +331,7 @@ export class RepositorySchemeChangeOrderError extends Error {
 }
 
 /**
- * The store's write-time cross-forge refusal (issue 571): the row holding the
+ * The store's write-time cross-forge refusal: the row holding the
  * forge id is registered under another provider than the one the caller
  * resolved it as. Raised inside the store transaction, so it cannot be
  * invalidated by a registration committing between the caller's provider
@@ -471,7 +471,7 @@ export async function registerRepository(
     // compensating for the webhook once here covers every failure the store can raise,
     // including one raised as a RepositoryRegistrationError by a store, decorator or retry
     // wrapper the interface does not constrain. The cleanup record is written before the
-    // deletion is attempted (issue 451), so even a webhook whose deletion never completes
+    // deletion is attempted, so even a webhook whose deletion never completes
     // stays known to Overflow and reachable by the drain.
     const abandonment = await abandonCreatedWebhook(
       dependencies,
@@ -582,10 +582,10 @@ async function completeGitHubRegistration(
 }
 
 /**
- * The GitLab registration path (issue 296 step 2, webhooks + initial import
- * since issue 547). The submitter must hold a verified linked identity on the
- * submitted instance — its PAT is the gateway credential. The project must be
- * reachable through that PAT, public, and maintainer-held by the identity.
+ * The GitLab registration path (webhooks + initial import). The submitter
+ * must hold a verified linked identity on the submitted instance — its PAT is
+ * the gateway credential. The project must be reachable through that PAT,
+ * public, and maintainer-held by the identity.
  * A project hook is installed on the instance (the same shared webhook secret
  * the GitHub hooks carry; deliveries arrive at the GitLab receiver), the row
  * stores the hook id in `githubWebhookId` (the column's dual use — the numeric
@@ -656,8 +656,8 @@ async function registerGitLabRepository(
     }
   }
 
-  // The same two refusals the GitHub path makes before anything is stored
-  // (issue 550): a project that is not public is declined here rather than
+  // The same two refusals the GitHub path makes before anything is stored:
+  // a project that is not public is declined here rather than
   // left for the sweep's NOT_PUBLIC reconciliation, and the linked identity
   // must hold maintainer permission — a catalog whose labels the sponsor may
   // not be able to apply must never be stored. The gateway maps GitLab's
@@ -739,8 +739,8 @@ async function registerGitLabRepository(
   } catch (error) {
     // Every route out of this catch abandons the registration, so the hook
     // this call created has no repository to deliver to. The compensation is
-    // the issue-451 pattern over the GitLab gateway: the cleanup record —
-    // carrying provider 'gitlab' and the instance URL — is written BEFORE the
+    // the same pattern the GitHub path uses, over the GitLab gateway: the cleanup record — carrying
+    // provider 'gitlab' and the instance URL — is written BEFORE the
     // compensating deletion is attempted, so the hook id survives every
     // failure combination and stays reachable by the drain.
     const abandonment = await abandonCreatedGitLabWebhook(
@@ -755,7 +755,7 @@ async function registerGitLabRepository(
       throw new RepositoryRegistrationError("ROLLBACK_INCOMPLETE", gitlabRollbackIncompleteMessage);
     }
 
-    // The same three named store failures the GitHub catch answers (issues 180/451/515):
+    // The same three named store failures the GitHub catch answers:
     // the owner-name path claimed by another registration, the webhook id
     // colliding with one another registration records, and a sponsor whose
     // eligibility changed under the save. Each maps through the catalog as
@@ -807,7 +807,7 @@ async function registerGitLabRepository(
 
   // The registration stands. The initial import queues through the same
   // reconciliation job the GitHub path uses — reconciliation reads GitLab
-  // evidence fully (PR 557), so the queued job runs — and a scheduling failure
+  // evidence fully, so the queued job runs — and a scheduling failure
   // reports honestly rather than undoing a registration that stands.
   const initialImportScheduled = await scheduleInitialImport(dependencies, created.id);
 
@@ -825,11 +825,11 @@ async function registerGitLabRepository(
 
 /**
  * The GitLab abandonment sequence for a hook a failed registration created —
- * the issue-451 pattern run against the GitLab gateway. The cleanup record
+ * the GitHub abandonment's pattern, run against the GitLab gateway. The cleanup record
  * (provider 'gitlab' + the instance URL) is written FIRST; only then is the
  * deletion attempted, with a GitLab 404 counting as proven. Diagnostics are
  * the GitHub abandonment's, forge-neutral, and `saveCause` rides into them as
- * the bounded, secret-safe rendering issue 515 prescribes.
+ * the bounded, secret-safe rendering.
  */
 async function abandonCreatedGitLabWebhook(
   dependencies: RepositoryRegistrationDependencies,
@@ -904,9 +904,9 @@ async function abandonCreatedGitLabWebhook(
  * registration came back holding the same webhook id only has its record
  * cleared (the hook is wanted again), every other one is resolved through its
  * repository's immutable id to the owner/name GitHub serves now — the id
- * survives renames and owner transfers while a stored path does not (issue
- * 516) — and the hook is deleted through that current path, where a GitHub 404
- * counts as proven. A null resolution — the repository deleted, or hidden
+ * survives renames and owner transfers while a stored path does not — and
+ * the hook is deleted through that current path, where a GitHub 404 counts as
+ * proven. A null resolution — the repository deleted, or hidden
  * from this credential since registration — clears the record without a
  * deletion call. A webhook that cannot be proven deleted keeps its record for
  * the next drain. Never throws: the drain must never disturb the registration
@@ -961,7 +961,7 @@ export async function drainAbandonedWebhooks(
       // from this credential since registration (a public repository can go
       // private). Either way the hook can no longer be addressed, so the
       // record clears below; a hook that somehow still lives is cleared
-      // unrecorded, the same decision the stored-name drain made in this case.
+      // unrecorded.
       if (repository !== null) {
         const reference: GitHubRepositoryReference = { owner: repository.owner, name: repository.name };
         try {
@@ -986,7 +986,7 @@ export async function drainAbandonedWebhooks(
 }
 
 /**
- * The drain's GitLab arm (issue 547): a GitLab orphan is addressed instance +
+ * The drain's GitLab arm: a GitLab orphan is addressed instance +
  * project path, so deleting needs the linked PAT for that exact instance. The
  * registering actor's `forgeIdentity` is the only credential at hand — when
  * there is none, or it names another instance, the record stays for a drain
@@ -1052,7 +1052,7 @@ function gitlabProjectReference(ownerName: string): GitHubRepositoryReference | 
 }
 
 /**
- * Unregisters a repository on its sponsor's behalf (issue 48).
+ * Unregisters a repository on its sponsor's behalf.
  *
  * A GitHub submission (`repositoryUrl`, no `provider`) runs the GitHub-first
  * flow: the webhook Overflow created at registration is deleted before the
@@ -1066,7 +1066,7 @@ function gitlabProjectReference(ownerName: string): GitHubRepositoryReference | 
  * A GitLab submission (`provider: "gitlab"` plus `instanceUrl` and `project`)
  * resolves the row by forge identity instead of a GitHub-shaped path, because a
  * nested group's path_with_namespace is not expressible as a two-segment
- * owner/name reference (issue 549), and deletes the registration's project
+ * owner/name reference, and deletes the registration's project
  * hook forge-first like the GitHub flow deletes its webhook; the details are
  * on `unregisterGitLabRepository`.
  *
@@ -1181,17 +1181,17 @@ export async function unregisterRepository(
 }
 
 /**
- * Unregisters a GitLab registration by forge identity (issue 549).
+ * Unregisters a GitLab registration by forge identity.
  *
  * The submission names the normalized instance URL plus the numeric project id
  * or the project's path_with_namespace, and the store resolves the row
  * directly — never through `parseGitHubRepository`, which a nested group's
- * path cannot survive. The hook Overflow installed at registration (issue
- * 547) is deleted forge-first through the linked identity — the same
- * module the GitHub flow's deleteWebhook block parallels — before the local
- * row is touched: a GitLab 404 or a pre-webhook row (null hook id) continues
- * with `webhookDeleted: false`, and any other refusal leaves the row
- * untouched, converging when the sponsor relinks.
+ * path cannot survive. The hook Overflow installed at registration is deleted
+ * forge-first through the linked identity — the same module the GitHub flow's
+ * deleteWebhook block parallels — before the local row is touched: a GitLab 404
+ * or a pre-webhook row (null hook id) continues with `webhookDeleted: false`,
+ * and any other refusal leaves the row untouched, converging when the sponsor
+ * relinks.
  *
  * The sponsor check, the idempotent outcome handling, and the abandoned-webhook
  * drain run exactly as the GitHub flow runs them.
@@ -1262,7 +1262,7 @@ async function unregisterGitLabRepository(
     );
   }
 
-  // Forge-first, the GitHub flow's shape (issue 547): the hook Overflow
+  // Forge-first, the GitHub flow's shape: the hook Overflow
   // installed at registration is deleted on the instance BEFORE the local row
   // is touched, so a refusal leaves the registration exactly as it stood and
   // a retry converges once the sponsor relinks. A GitLab 404 reads as the
@@ -1311,7 +1311,7 @@ async function unregisterGitLabRepository(
   }
 
   // The unregistration stands, so this is the other moment the cleanup table can be
-  // drained best-effort (issue 451): any webhook an earlier failed registration recorded
+  // drained best-effort: any webhook an earlier failed registration recorded
   // is retired here, and the drain never disturbs the answer that unregistration gave.
   await drainAbandonedWebhooks(dependencies);
 
@@ -1348,7 +1348,7 @@ async function unregisterThroughStore(
 }
 
 /**
- * Changes a registered repository's difficulty catalog (issue 180).
+ * Changes a registered repository's difficulty catalog.
  *
  * The submission is validated exactly like a registration and resolved through
  * GitHub to the same numeric identity, so the catalog change lands on the
@@ -1492,7 +1492,7 @@ export type RepositoryCatalogChangeResult = RepositoryCatalogChange & {
 };
 
 /**
- * The GitLab catalog-change path (issue 548). The submission is the same body
+ * The GitLab catalog-change path. The submission is the same body
  * a GitLab registration takes (`provider`, `instanceUrl`, `project`, catalogs)
  * and the authorization is the same: the submitter must hold a verified linked
  * identity on the submitted instance, whose PAT reads the project and its
@@ -1851,10 +1851,10 @@ const gitlabRollbackIncompleteMessage =
 
 /**
  * The bounded cause rendered into the abandonment diagnostic when the store's
- * on-conflict arbiter answers null without raising (issue 515). No exception
- * exists to describe there, and a diagnostic left without a cause would read
- * as "save error unknown" — the save was declined because another registration
- * holds the GitHub path.
+ * on-conflict arbiter answers null without raising. No exception exists to
+ * describe there, and a diagnostic left without a cause would read as "save
+ * error unknown" — the save was declined because another registration holds
+ * the GitHub path.
  */
 const arbiterDeclinedSaveCause = "the store's on-conflict arbiter declined the save (another registration holds the GitHub path)";
 
@@ -1862,7 +1862,7 @@ const arbiterDeclinedSaveCause = "the store's on-conflict arbiter declined the s
 const describeErrorCauseLimit = 200;
 
 /**
- * Renders a thrown save failure for an operator diagnostic (issue 515):
+ * Renders a thrown save failure for an operator diagnostic:
  * deterministic, single-line, and secret-safe — credentials the message
  * carried (connection URLs, password fragments, prefix-shaped bearer
  * tokens) are redacted before the string is capped. Log-side only: the
@@ -1891,7 +1891,7 @@ function capRenderedCause(value: string): string {
 }
 
 /**
- * The abandonment sequence for a webhook a failed registration created (issue 451).
+ * The abandonment sequence for a webhook a failed registration created.
  *
  * The cleanup record is written FIRST — durably, before anything can forget the id. Only
  * then is the deletion attempted; a GitHub 404 counts as proven, the hook is already gone.
@@ -1900,10 +1900,10 @@ function capRenderedCause(value: string): string {
  * or the record itself could not be saved, a bounded diagnostic names the owner, the hook
  * id, and whether the cleanup record is retained — and the caller answers
  * ROLLBACK_INCOMPLETE instead of the original save failure, because the orphaned webhook
- * is the actionable state. `saveCause` (issue 515) rides into that diagnostic as a
- * bounded, secret-safe rendering of the original save failure, so an operator can
- * separate a database outage from a constraint conflict; the thrown error's public
- * message never carries it.
+ * is the actionable state. `saveCause` rides into that diagnostic as a bounded,
+ * secret-safe rendering of the original save failure, so an operator can separate a
+ * database outage from a constraint conflict; the thrown error's public message never
+ * carries it.
  */
 async function abandonCreatedWebhook(
   dependencies: RepositoryRegistrationDependencies,
@@ -1940,7 +1940,7 @@ async function abandonCreatedWebhook(
 
   if (!proven || !recordSaved) {
     // `; cause: <saveCause>` integrates before the final period; with no cause the
-    // rendered text is byte-identical to the pre-515 diagnostic.
+    // rendered text carries no cause clause.
     const causeSuffix = saveCause !== undefined && saveCause.length > 0
       ? `; cause: ${saveCause}.`
       : ".";

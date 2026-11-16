@@ -17,8 +17,8 @@ type CalibrationProofPageProps = {
  *
  * A sponsor who closes their own issue is both parties, so the fold records a
  * calibration instead of a settlement and no credits move. Nothing else on the
- * product shows that row, which left the one account entitled to correct it
- * with no way to reach it.
+ * product shows that row, so this page is the one way the account entitled to
+ * correct it reaches it.
  */
 export default async function CalibrationProofPage({ params }: CalibrationProofPageProps) {
   const session = await requireMemberPageSession();

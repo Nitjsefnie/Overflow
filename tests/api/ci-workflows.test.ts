@@ -20,7 +20,7 @@ type Workflow = {
     { branches?: string[]; paths?: string[]; types?: string[]; inputs?: Record<string, unknown> } | Array<{ cron: string }> | null
   >;
   // Optional: a workflow that scopes its permission to the job carries no
-  // workflow-level block at all, and that absence is what claim.yml now has.
+  // workflow-level block at all, and that absence is what claim.yml has.
   permissions?: Record<string, string>;
   concurrency: { group: string; "cancel-in-progress": boolean | string; queue?: string };
   jobs: Record<string, {
@@ -168,14 +168,14 @@ fi
 
   it("judges main's own commits against the ratchet documents they replaced", async () => {
     const workflow = await readWorkflow("ratchet-guard.yml");
-    // The other half of the split (issue 1090). push covers the commits main
+    // The push half of the pull-request/push split covers the commits main
     // itself lands: the repo merges with --rebase, so a merged SHA is a
     // brand-new commit no pull_request run covered, and every push to main must
     // carry a ratchet-guard run for the check to be required and for the deploy
     // gate (scripts/deploy-revision.sh) to pass on the tip it lands. No paths
     // filter: a push without one of the compared files still needs its own run,
     // or deploys of the tip it lands hang on `(absent)`. Dispatch recovers a
-    // main tip when the push event launched no runs (issue 796).
+    // main tip when the push event launched no runs.
     //
     // This file reads NO pull-request data — no `refs/pull` fetch, and no
     // `pull_request.*` value in any step's run or env — which is the property
@@ -295,7 +295,7 @@ fi
 
   it("fails an unhandled ratchet-guard event before checkout", async () => {
     // Both files, each against the events IT accepts. The pull-request leg's
-    // guard no longer mentions push at all — its file has no push trigger — so
+    // guard names no push event at all — its file has no push trigger — so
     // reading the guard out of only one file would test one leg's gate twice
     // and the other's not at all.
     const cases: Array<{ file: string; accepted: string[]; refused: string[] }> = [
@@ -338,7 +338,7 @@ fi
       push: { branches: ["main"] },
       // The dispatch trigger carries the calibrate self-test's input: a
       // boolean, defaulting false, whose fabricated raise must be refused by
-      // branch protection so the calibrate job fails visibly (issue 684).
+      // branch protection so the calibrate job fails visibly.
       // Pinned in full so a retyped, re-defaulted or renamed input — the
       // difference between a self-test dispatch and an accidental
       // fabrication — fails here.
@@ -386,7 +386,7 @@ fi
     expect(uploads).toHaveLength(4);
     expect(downloads).toHaveLength(1);
     // Exactly one checkout: under push and workflow_dispatch the default
-    // checkout takes the event's own commit, at full history (issue 1098) so
+    // checkout takes the event's own commit, at full history so
     // the suite's secret-scan provenance check has the history its baseline
     // names. It carries no event gate because this file admits nothing else —
     // no pull_request trigger and no pull_request.* value, so the depth pulls
@@ -412,11 +412,11 @@ fi
   });
 
   it("parses the pull-request leg of the release gate with no privileged trigger beside it", async () => {
-    // The other half of the split ci.yml into two (issue 1090). Every property
-    // is asserted here per file rather than over the pair, because the two legs
-    // genuinely differ and a single equality covering both would have to be
-    // loosened to fit: this one has no PostgreSQL service, no package manager
-    // and no build, because the pull request's own code runs in pr-suite.yml.
+    // Every property is asserted here per file rather than over the pair of
+    // legs (ci.yml and this file), because the two genuinely differ and a
+    // single equality covering both would have to be loosened to fit: this
+    // one has no PostgreSQL service, no package manager and no build, because
+    // the pull request's own code runs in pr-suite.yml.
     const workflow = await readWorkflow("ci-pr.yml");
     // The whole `on:` set is pinned, and it is exactly one event. This file
     // materialises the pull request's merge commit, so a privileged trigger
@@ -431,7 +431,7 @@ fi
     expect(workflow.permissions).toEqual({ contents: "read" });
     // Concurrency group names are repository-global, so this one must not be
     // ci.yml's: a collision would let a pull request cancel a merged SHA's
-    // pending push run, which the deploy gate refuses on (issue 474).
+    // pending push run, which the deploy gate refuses on.
     expect(workflow.concurrency).toEqual({
       group: "ci-pr-${{ github.event.workflow_run.head_sha }}",
       "cancel-in-progress": false,
@@ -454,7 +454,7 @@ fi
     // Exactly one checkout, and it is the base branch's tip with full history
     // and no ref input: under workflow_run that is actions/checkout's
     // default, which is what makes the pull request's own edit to a gated
-    // script unable to change the judge (issue 822). It carries no event gate
+    // script unable to change the judge. It carries no event gate
     // because this file admits nothing else.
     const verifyCheckouts = verify.steps.filter((step) =>
       step.uses?.startsWith("actions/checkout@"),
@@ -469,7 +469,7 @@ fi
       'node "${GITHUB_WORKSPACE}/scripts/await-pr-suite.ts"',
       'bash "${GITHUB_WORKSPACE}/scripts/ci-base-freshness.sh"',
     ]));
-    // The issue-1035 suppression gate is the one sanctioned exception, by
+    // The suppression gate is the one sanctioned exception, by
     // exact name — the same sanction the reachability suite grants it (its run
     // text is pinned byte-identical there, and any drift re-arms this pin).
     // The step must NAME the pnpm.auditConfig key in its fixed refusals, so the
@@ -530,12 +530,11 @@ fi
         `${file}'s consuming job must declare postgres-image in needs`,
       ).toContain("postgres-image");
     }
-    // The digest-literal images are gone from both sources: the reference is
+    // Neither source holds a digest-literal image: the reference is
     // resolved at run time from the Dockerfile the postgres-image job reads.
     // The Dockerfile's own pin — which tag and which digest — is asserted by
-    // no test here (issue 1334; #1328 settled): which pin is right is the
-    // Dependabot /ci/ docker lane's judgment, and this file reads the
-    // path, never the pin's value.
+    // no test here: which pin is right is the Dependabot /ci/ docker lane's
+    // judgment, and this file reads the path, never the pin's value.
     for (const file of ["ci.yml", "pr-suite.yml"]) {
       const source = await readFile(resolve(".github/workflows", file), "utf8");
       expect(source, `${file} must not carry a literal postgres service image`).not.toMatch(
@@ -547,8 +546,8 @@ fi
   it("parses a catalogue-style workflow gate with explicit least privilege", async () => {
     const workflow = await readWorkflow("pr-gates.yml");
     // pull_request_target executes main's definition and main's tools; the
-    // pull request head enters only as git objects extracted with `git show`
-    // (issue 822). Same trigger shape as pr-gates.yml.
+    // pull request head enters only as git objects extracted with `git show`.
+    // Same trigger shape as pr-gates.yml.
     //
     // The whole `on:` set is pinned, and it is exactly one event: the file
     // holds a `refs/pull` fetch, so a privileged trigger here is the shape
@@ -622,9 +621,9 @@ git ls-tree -z --name-only refs/remotes/pr/head:.github/workflows/ |
 
   it("lints main's own workflows on push and dispatch, reading no pull-request data", async () => {
     const workflow = await readWorkflow("actionlint.yml");
-    // The other half of the split (issue 1090). `on:` is pinned whole, and it
-    // names no pull-request event at all: this file's remaining legs lint the
-    // checked-out, trusted tree, so a `refs/pull` fetch or a
+    // The push half of the pull-request/push split. `on:` is pinned whole, and
+    // it names no pull-request event at all: this file's remaining legs lint
+    // the checked-out, trusted tree, so a `refs/pull` fetch or a
     // `github.event.pull_request.*` value here would be a privileged trigger
     // reaching untrusted content.
     expect(workflow.on).toEqual({ push: { branches: ["main"] }, workflow_dispatch: null });
@@ -727,8 +726,7 @@ cp .github/workflows/*.yml .github/workflows-pr/
 
   it("parses a lockfile audit that fires on every push to main, daily, and on demand", async () => {
     const workflow = await readWorkflow("dependency-audit.yml");
-    // The whole `on`, because the shape IS the fix (issue 985 gave the audit
-    // its first pull-request trigger; issue 1149's rounds finished the job).
+    // The whole `on`, because the trigger shape is the property under test.
     // The push trigger carries NO paths filter, deliberately: once branch
     // protection requires `dependency-audit`, the deploy gate derives its
     // required set from protection, so a push whose diff touched no manifest
@@ -736,15 +734,13 @@ cp .github/workflows/*.yml .github/workflows-pr/
     // MISSING context, which protection refuses, and every such deploy would
     // be refused. The audit step itself classifies no-manifest pushes (an
     // outcome, never a skip; tests/ci/dependency-audit-push.test.ts holds
-    // that). The pull_request trigger is gone entirely: the pull-request leg
-    // is pr-gates.yml, the issue-1090 split's base-defined
-    // pull_request_target file.
+    // that). The pull_request trigger is absent entirely: the pull-request leg
+    // is pr-gates.yml, a base-defined pull_request_target file.
     expect(workflow.on).toEqual({ push: { branches: ["main"] }, schedule: [{ cron: "37 6 * * *" }], workflow_dispatch: null });
     expect(workflow.permissions).toEqual({ contents: "read" });
-    // The issue-1090 split is complete for this file: no pull-request trigger
-    // reaches it, so the per-SHA group is the sibling push files' shape — no
-    // two pushes share a group, so a cancelled conclusion on a merged SHA
-    // makes the deploy gate refuse immediately (issue 474). The
+    // This file has no pull-request trigger, so the per-SHA group is the
+    // sibling push files' shape — no two pushes share a group, so a cancelled
+    // conclusion on a merged SHA makes the deploy gate refuse immediately. The
     // PR gates share pr-gates.yml's per-PR cancelling group.
     expect(workflow.concurrency).toEqual({ group: "dependency-audit-${{ github.sha }}", "cancel-in-progress": false });
 
@@ -762,15 +758,14 @@ cp .github/workflows/*.yml .github/workflows-pr/
     //
     // On pinning this 78-line script verbatim, at roughly eight times the
     // largest run string this file pinned before it: the duplication stands,
-    // and the reason is the opposite of redundancy. When this copy was written
-    // it was the ONLY thing holding seven classifier mutations dead —
-    // `every`/`some` on the status set, the `< 600` bound, the exit-0 conjunct
-    // on the clean verdict, the retry budget, the sleep — because the executing
-    // suite had no fixture for a split endpoint answer, an out-of-range status,
-    // or an empty advisories map with a nonzero exit. Those fixtures now exist,
-    // so the string is a second line of defence rather than the only one, and
-    // it is worth keeping anyway because it fails for a different reason than
-    // the behavioural suite: exact equality makes drift impossible, so the only
+    // and the reason is the opposite of redundancy. The executing suite holds
+    // seven classifier mutations dead — `every`/`some` on the status set, the
+    // `< 600` bound, the exit-0 conjunct on the clean verdict, the retry
+    // budget, the sleep — through fixtures for a split endpoint answer, an
+    // out-of-range status, and an empty advisories map with a nonzero exit, so
+    // the string is a second line of defence rather than the only one. It is
+    // worth keeping anyway because it fails for a different reason than the
+    // behavioural suite: exact equality makes drift impossible, so the only
     // cost of the copy is a partial edit leaving one side stale, which fails
     // loudly and immediately instead of quietly.
     expect(gateBehavior(workflow.jobs["dependency-audit"])).toEqual({
@@ -1011,7 +1006,7 @@ exit 1
       "dependency-name": "node",
       "update-types": ["version-update:semver-major"],
     }]);
-    // The CI service image lane (issue 1334): it covers ci/Dockerfile, so `find` by ecosystem "docker" returns the root entry first and this lane is found by its directory.
+    // The CI service image lane: it covers ci/Dockerfile, so `find` by ecosystem "docker" returns the root entry first and this lane is found by its directory.
     const ciDocker = config.updates.find((u) => u["package-ecosystem"] === "docker" && u.directory === "/ci/")!;
     expect(ciDocker.directory).toBe("/ci/");
     expect(ciDocker.schedule).toEqual({
@@ -1027,7 +1022,7 @@ exit 1
       "dependency-name": "postgres",
       "update-types": ["version-update:semver-major"],
     }]);
-    // The compose image lane (issue 1335): it covers docker-compose.yml, the
+    // The compose image lane: it covers docker-compose.yml, the
     // file the compose database service and POSTGRES_IMAGE read.
     const compose = config.updates.find((u) => u["package-ecosystem"] === "docker-compose")!;
     expect(compose.directory).toBe("/");
@@ -1042,13 +1037,13 @@ exit 1
       "dependency-name": "postgres",
       "update-types": ["version-update:semver-major"],
     }]);
-    // The Nitjsefnie-Actions workflows are SHA-pinned by maintainer
-    // decision and dependabot now proposes their SHA bumps; one group per lane
-    // collects every action — major bumps included — into a single weekly pull
-    // request. This is the exact-value pin: on its own it catches any edit to
-    // the groups object. The coverage gate below is what still holds if this
-    // pin is ever loosened, and it is the one that resolves the patterns
-    // against the workflows' real `uses:` inventory rather than restating them.
+    // The Nitjsefnie-Actions workflows are SHA-pinned and dependabot proposes
+    // their SHA bumps; one group per lane collects every action — major bumps
+    // included — into a single weekly pull request. This is the exact-value pin:
+    // on its own it catches any edit to the groups object. The coverage gate
+    // below is what still holds if this pin is ever loosened, and it is the one
+    // that resolves the patterns against the workflows' real `uses:` inventory
+    // rather than restating them.
     const actions = config.updates.find((u) => u["package-ecosystem"] === "github-actions")!;
     expect(actions.groups).toEqual({
       "github-actions": { patterns: ["*"] },
@@ -1227,9 +1222,9 @@ exit 1
     });
     expect(new Set(codeqlCarriers).size).toBe(1);
 
-    // No version group may narrow itself with update-types: that key is what
-    // held the old `minor-and-patch` group, which left every major bump
-    // (codeql-action v4 to v5) as one pull request per `uses:` line.
+    // No version group may narrow itself with update-types: a group limited to
+    // minor and patch updates leaves every major bump (codeql-action v4 to v5,
+    // for example) as one pull request per `uses:` line.
     for (const [name, group] of groups) {
       if ((group["applies-to"] ?? "version-updates") === "version-updates") {
         expect(group["update-types"], name).toBeUndefined();
@@ -1383,9 +1378,9 @@ exit 1
   it("reopens only shipped yml workflows in the deny-by-default ignore policy", () => {
     expect(checkIgnore(".github/workflows/ci.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/actionlint.yml")).toBe(1);
-    // The split's new producer files (issue 1090). A workflow file that exists
-    // on disk and is invisible to git ships nothing, and the check that would
-    // notice is the one this line stands in for.
+    // The producer files. A workflow file that exists on disk and is invisible
+    // to git ships nothing, and the check that would notice is the one this
+    // line stands in for.
     expect(checkIgnore(".github/workflows/pr-gates.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/ci-pr.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/pr-gates.yml")).toBe(1);
@@ -1395,7 +1390,7 @@ exit 1
     expect(checkIgnore(".github/workflows/secret-scan.yml")).toBe(1);
     expect(checkIgnore(".github/workflows/pr-suite.yml")).toBe(1);
     expect(checkIgnore(".github/dependabot.yml")).toBe(1);
-    // The CI service image both workflows resolve at run time (issue 1334).
+    // The CI service image both workflows resolve at run time.
     expect(checkIgnore("ci/Dockerfile")).toBe(1);
     expect(checkIgnore(".github/workflows/unshipped.yaml")).toBe(0);
     expect(checkIgnore(".github/junk.txt")).toBe(0);
@@ -1495,10 +1490,10 @@ exit 1
    * 8. **A key nobody reads.** Every assertion in this test reads a key this
    *    workflow is expected to carry, so a key they do NOT read is a hole
    *    rather than a coverage gap — and the same is true one level down of a
-   *    key that IS read. Both of these shipped and both read green under
-   *    actionlint and zizmor: an unpinned top-level `env:` block, and a second
-   *    job carrying `contents: write` beside the one this suite pins. The two
-   *    key-set equalities are what close them.
+   *    key that IS read. Both pass actionlint and zizmor unflagged: an
+   *    unpinned top-level `env:` block, and a second job carrying
+   *    `contents: write` beside the one this suite pins. The two key-set
+   *    equalities are what close them.
    * 9. **A run that never ends.** With no `timeout-minutes` a hung analysis
    *    holds a runner and concludes nothing at all.
    * 10. **A gate that is not a gate.** Promoting `scorecard` into
@@ -1534,7 +1529,7 @@ exit 1
     });
 
     // Widened for `name`, which the shared job type omits: every workflow pinned
-    // above this point leaves its job unnamed, so the field was never needed.
+    // above this point leaves its job unnamed, so the field is not needed there.
     // The whole-job equality below does need it, because a job's `name` is the
     // check-run name branch protection sees — a renamed job is a real change,
     // not a cosmetic one.
@@ -1640,15 +1635,14 @@ exit 1
       "permissions",
     ]);
 
-    // The same argument one level down, and this is the gap that survived the
-    // whole-branch review's eight mutants: the pin above is a single lookup of
+    // The same argument one level down: the pin above is a single lookup of
     // `analysis`, and the whole-job equality is scoped to that one job, so a
-    // SECOND job on this file was invisible to everything here. It carried
-    // `permissions: contents: write` and a `run:` step interpolating
-    // `${{ github.repository }}`, and passed 34/34 green with actionlint and
-    // zizmor both reporting nothing. One assertion enumerates the jobs key
-    // rather than looking one entry up, which is what turns "a job nobody
-    // reviewed" into a named failure.
+    // SECOND job on this file would be invisible to everything here. A second
+    // job carrying `permissions: contents: write` and a `run:` step
+    // interpolating `${{ github.repository }}` passes every other assertion in
+    // this file with actionlint and zizmor both reporting nothing. One assertion
+    // enumerates the jobs key rather than looking one entry up, which is what
+    // turns "a job nobody reviewed" into a named failure.
     expect(
       Object.keys(workflow.jobs).sort(),
       "scorecard.yml must carry exactly the one job this suite pins. Every job assertion above " +
@@ -1663,10 +1657,10 @@ exit 1
       await readFile(resolve(".github/required-checks.json"), "utf8"),
     ) as Record<string, string | string[]>;
     const promotableCheckNames = [workflow.name, analysis.name ?? "analysis"];
-    // A pin may name several files (issue 1090's split), so the path clause
-    // reads every path of a pin: stringifying a list would compare
-    // ".github/workflows/a.yml,.github/workflows/b.yml" and find no
-    // ".yml" suffix, letting a scorecard pin through this guard.
+    // A pin may name several files, so the path clause reads every path of a
+    // pin: stringifying a list would compare
+    // ".github/workflows/a.yml,.github/workflows/b.yml" and find no ".yml"
+    // suffix, letting a scorecard pin through this guard.
     expect(
       Object.entries(requiredChecks).filter(
         ([check, pin]) =>

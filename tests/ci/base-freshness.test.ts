@@ -17,7 +17,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * a nonzero exit and a failed assertion instead of plausible-looking data.
  *
  * The gate must fail closed: every uncertain outcome — an API failure, an empty
- * response, an unrepresentable compare — is a refusal, never a pass (issue 510).
+ * response, an unrepresentable compare — is a refusal, never a pass.
  * The pass certificates and the shared-file failure are the only honest
  * verdicts; everything else is a refusal.
  */

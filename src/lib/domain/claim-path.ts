@@ -46,15 +46,14 @@ export function assessClaimPath(
     let document: unknown;
     try {
       // Maps preserve the boolean key produced by bare `on` in YAML 1.1.
-      // issue 673: parse() forwarded every doc warning to process.emitWarning,
-      // and those messages embed decoded contributor bytes. parseDocument
-      // captures them in doc.warnings; they are deliberately not emitted and
-      // not logged — nothing in them is actionable to the server operator, so
-      // nothing needs encoding. A file with parse errors skips to the next
-      // workflow exactly as the old catch did; that error message embeds raw
-      // decoded bytes too and is likewise never logged.
-      // mapAsMap is a toJS-time option on yaml 2.9.1's types (parse()
-      // forwarded it there); apply it to toJS alone.
+      // parse() forwards every doc warning to process.emitWarning, and those
+      // messages embed decoded contributor bytes. parseDocument captures them
+      // in doc.warnings; they are deliberately not emitted and not logged —
+      // nothing in them is actionable to the server operator, so nothing needs
+      // encoding. A file with parse errors skips to the next workflow; that
+      // error message embeds raw decoded bytes too and is likewise never logged.
+      // mapAsMap is a toJS-time option on yaml 2.9.1's types (parse() forwards
+      // it there); apply it to toJS alone.
       const doc = parseDocument(content);
       if (doc.errors.length > 0) {
         continue;

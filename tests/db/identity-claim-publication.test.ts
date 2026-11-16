@@ -206,15 +206,14 @@ describe("identity claims survive republication of a stale fold", () => {
   });
 
   it("keeps a claim committing between the publication's identity read and its writes SETTLED", async () => {
-    // The mid-transaction window issue 446 could not pin: the users read in
-    // reResolveIdentityClaims has already executed, and cannot see the
-    // creditor, by the time the hook runs — the hook inserts the users row and
-    // launches the claim into the gap between that read and the
-    // materialization writes. The fold therefore resolves stale and every
-    // write it produces carries the pre-claim state; an unfenced claim commits
-    // first and is overwritten — the run then records a CHANGE reverting the
-    // creditor to null. Fenced, the claim waits for the publication to commit
-    // and applies the claimed state last.
+    // The mid-transaction window: the users read in reResolveIdentityClaims
+    // has already executed, and cannot see the creditor, by the time the hook
+    // runs — the hook inserts the users row and launches the claim into the
+    // gap between that read and the materialization writes. The fold therefore
+    // resolves stale and every write it produces carries the pre-claim state;
+    // an unfenced claim commits first and is overwritten — the run then
+    // records a CHANGE reverting the creditor to null. Fenced, the claim waits
+    // for the publication to commit and applies the claimed state last.
     const scenario = await createUnclaimedScenario(sql);
     await publish(scenario.store, scenario.repositoryId, scenario.fold);
 

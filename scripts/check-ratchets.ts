@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Ratchet document guard (issue 647): refuses a change that relaxes the
+// Ratchet document guard: refuses a change that relaxes the
 // documents the coverage floor and SQL statement checks compare against.
 //
 //   node scripts/check-ratchets.ts <base-rev> <head-rev>

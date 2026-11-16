@@ -1,5 +1,4 @@
-// Per-commit legal revision gate (issue 955; text-unchanged exemption added by
-// issue 973):
+// Per-commit legal revision gate:
 //
 //   node scripts/check-legal-revisions.ts <base> <head>
 //
@@ -7,15 +6,13 @@
 // module's file must also change src/lib/legal-revisions.ts in the SAME commit,
 // or carry a `Legal-Text: unchanged; <justification>` claim in its message body.
 //
-// The earlier version of this header claimed the gate compared a legal page's
-// TEXT. It never did — it compares plain path membership, so any edit to a
-// page counts, including one that leaves the document byte-identical (the
-// static-import-to-dynamic-import relocation on PR 971). Comparing rendered
-// text instead was considered and rejected (#973): any extractor a real legal
-// text edit could slip past is worse than over-triggering, because a gate that
-// misses a real revision is silent where this one is loud. The exemption
-// therefore lives where a reviewer reads it — the commit message — rather than
-// in an extractor nobody can audit.
+// THE GATE COMPARES PATHS, NOT TEXT. It checks plain path membership, so any
+// edit to a page counts, including one that leaves the document byte-identical
+// (a static-import-to-dynamic-import relocation, for example). Comparing rendered
+// text is not done: any extractor a real legal text edit could slip past is
+// worse than over-triggering, because a gate that misses a real revision is
+// silent where this one is loud. The exemption therefore lives where a reviewer
+// reads it, the commit message, rather than in an extractor nobody can audit.
 //
 // THE MARKER. One whole line of the message BODY, at column 0:
 //
@@ -47,12 +44,11 @@
 // module; a commit that touches the record is already green and claims no
 // exemption, so nothing is printed for it. Every honoured marker is reported on
 // stderr — a count, then one line per exempted commit carrying its sha and its
-// justification — and it
-// is printed BEFORE the exit status is decided, so a run that reds for an
-// unrelated commit still shows what the gate let through. When nothing was
-// exempted the block is absent entirely, on either path. The success line on
-// stdout repeats the count and never carries the list, so the trail cannot be
-// read as part of the verdict. An unreadable commit message is an error, never
+// justification — and it is printed BEFORE the exit status is decided, so a run
+// that reds for an unrelated commit still shows what the gate let through. When
+// nothing was exempted the block is absent entirely, on either path. The success
+// line on stdout repeats the count and never carries the list, so the trail cannot
+// be read as part of the verdict. An unreadable commit message is an error, never
 // a silent pass.
 //
 // WHAT THE EXEMPTION ACTUALLY ENFORCES, and what it does not. It enforces that

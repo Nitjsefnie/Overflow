@@ -61,7 +61,7 @@ describe("reservations around shutdown of a reachable pool", () => {
     const [{ pid }] = await held<{ pid: number }[]>`select pg_backend_pid()::int as pid`;
 
     const shutdown = sql.end();
-    // Reproduce the issue's held-across-end ordering. The completed observer round trip
+    // Reproduce the held-across-end ordering. The completed observer round trip
     // proves shutdown's initial microtask ran before the release, without any fixed
     // sleep standing in for it: end()'s continuation is queued as microtasks of the
     // turn that called end(), and a database round trip spans event-loop turns of real

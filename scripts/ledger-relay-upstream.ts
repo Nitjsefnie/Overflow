@@ -117,7 +117,7 @@ export function triggeringRunFromApi(body: Record<string, unknown>): TriggeringR
         ? body.run_attempt
         : undefined,
     ),
-    // Issue 1037's primary never-started signal: the time the run began
+    // The primary never-started signal: the time the run began
     // executing, or null when the body names none — absent, null and empty all
     // read as absent, and the job-listing fallback decides in their place.
     runStartedAt:

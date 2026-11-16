@@ -108,8 +108,8 @@ describe("materialized body text is not persisted", () => {
     await reconcile(store, gateway("example/body-minimisation-two", () => issues), repositoryId);
 
     // A value that predates the minimisation (the migration leaves existing
-    // rows alone) survives a re-fold: the fold no longer writes the column in
-    // either the insert or the on-conflict update.
+    // rows alone) survives a re-fold: the fold writes the column in neither
+    // the insert nor the on-conflict update.
     await sql`update issues set body = 'legacy body text' where repository_id = ${repositoryId}`;
     await reconcile(store, gateway("example/body-minimisation-two", () => issues), repositoryId);
 
@@ -143,8 +143,8 @@ describe("materialized body text is not persisted", () => {
     await reconcile(store, gateway("example/body-minimisation-three", () => issues), repositoryId);
 
     // A value that predates the minimisation (the migration leaves existing
-    // rows alone) survives a re-fold on the pull request side too: the fold no
-    // longer writes the column in either the insert or the on-conflict update.
+    // rows alone) survives a re-fold on the pull request side too: the fold
+    // writes the column in neither the insert nor the on-conflict update.
     await sql`update pull_requests set body = 'legacy body text' where repository_id = ${repositoryId}`;
     await reconcile(store, gateway("example/body-minimisation-three", () => issues), repositoryId);
 

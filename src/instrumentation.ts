@@ -8,7 +8,7 @@
 // entirely; a runtime predicate would not do, because a function call is
 // invisible to the bundler and its Node-only imports would still be bundled
 // into Edge as dead code, warned about as a Node.js module loaded into the
-// Edge Runtime (issue 88).
+// Edge Runtime.
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     try {
@@ -17,7 +17,7 @@ export async function register(): Promise<void> {
     } catch (error) {
       // Next.js retries register() on every request once it has rejected, so a
       // throw here would leave the unit `active` serving 500s and printing the
-      // same rejection per request, forever, seen by nobody (issue 846).
+      // same rejection per request, forever, seen by nobody.
       // Exiting hands the failure to systemd instead: Restart=on-failure
       // restarts the process, the start limit then fails the unit visibly,
       // and OnFailure= alerts on it.

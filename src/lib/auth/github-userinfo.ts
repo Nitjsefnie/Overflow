@@ -34,7 +34,7 @@
  * default `profile()` — which maps `name: profile.name ??
  * profile.login` and `email: profile.email` — names the session with the
  * login and never sees a display name or an e-mail address. The avatar URL is
- * projected away too: Overflow stopped collecting it (issue 1075). The jwt
+ * projected away too: Overflow does not collect it. The jwt
  * callback keeps the cookie free of both (`src/auth.ts`).
  */
 import type { Profile } from "next-auth";
@@ -126,9 +126,9 @@ export async function requestGitHubPublicIdentity({
  * identity fields — the numeric user id and the login — so the display name,
  * the e-mail address, the avatar URL, and every other field GitHub answers
  * with never reach the profile, the session cookie the sign-in mints, or
- * anywhere else. Sign-in reads no email and no avatar anywhere
- * (issue 1075): the URL is dropped at this projection, before the provider's
- * default `profile()` could map it onto the session's image.
+ * anywhere else. Sign-in reads no email and no avatar anywhere: the URL is
+ * dropped at this projection, before the provider's default `profile()`
+ * could map it onto the session's image.
  */
 function projectPublicIdentity(profile: unknown): Profile {
   if (typeof profile !== "object" || profile === null) {

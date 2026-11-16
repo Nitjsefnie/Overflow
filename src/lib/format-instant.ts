@@ -4,7 +4,7 @@ function padTwo(value: number): string {
 
 /**
  * An instant rendered as "YYYY-MM-DD HH:MM UTC" — the product's one display
- * convention for instants (issue 1069): always UTC, always named.
+ * convention for instants: always UTC, always named.
  *
  * Timezone-independent by construction: parsing goes through
  * `new Date(...)` and rendering through the UTC getters, so the output is

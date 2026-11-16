@@ -16,9 +16,9 @@ let container: StartedTestContainer | undefined;
 let sql: Sql;
 const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
-// Issue 1057: the envelope shape the issue seeds — parseable as text, not a
-// valid v2 envelope — so the store's decrypt inside the credential lookup
-// throws and the route's catch answers the 503.
+// The envelope shape seeded here — parseable as text, not a valid v2 envelope —
+// so the store's decrypt inside the credential lookup throws and the route's
+// catch answers the 503.
 const INVALID_ENVELOPE = "v2.garbage.not-a-valid-envelope";
 
 // The same key material the upgrade suite drives the real store with: the
@@ -51,10 +51,10 @@ describe.each(["github", "gitlab"] as const)("%s receiver journals an unreadable
     try {
       const response = await route(bareRequest(provider, selector));
       expect(response.status).toBe(503);
-      // The journal line is the issue's demand: the phase, the selector
-      // encoded through logField, and the error's class name — never the
-      // message, which for a decrypt failure names material. The spy is
-      // asserted before its restore, which resets the recorded calls.
+      // The journal line carries the phase, the selector encoded through
+      // logField, and the error's class name — never the message, which for a
+      // decrypt failure names material. The spy is asserted before its restore,
+      // which resets the recorded calls.
       expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
         `Webhook credential lookup failed (phase credential lookup, selector ${logField(selector)},`
           + ` error ${logField("Error")}); answered 503 so the forge retries.`,
@@ -77,7 +77,7 @@ describe.each(["github", "gitlab"] as const)("%s receiver journals an unreadable
         expect((await route(bareRequest(provider, selector))).status).toBe(503);
       }
       // The FailureLogger bounds the site: the first failure prints in full,
-      // the rest inside the quiet window count silently (issue 661's bound).
+      // the rest inside the quiet window count silently.
       expect(errorSpy).toHaveBeenCalledTimes(1);
     } finally {
       errorSpy.mockRestore();

@@ -17,7 +17,7 @@ import { readBodyWithinLimit } from "@/lib/http/request-body";
 
 /**
  * The role-change body is one account id and a boolean, so 32 KiB bounds the
- * read with wide margin (issue 661).
+ * read with wide margin.
  */
 const MODERATOR_ROLE_BODY_LIMIT_BYTES = 32 * 1024; // 32 KiB
 

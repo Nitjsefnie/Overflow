@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// The ledger relay (issue 708): re-posts the three required checks as
+// The ledger relay: re-posts the three required checks as
 // check-runs owned by the Overflow Ledger GitHub App, so branch protection can
 // pin each required context to the App instead of the github-actions app.
-// As its second duty (issue 861) the sweep heals runs GitHub cancelled out of
+// As its second duty the sweep heals runs GitHub cancelled out of
 // the shared pending concurrency slot while its pull request's head is still
 // live: the relay re-dispatches that run, so a cancelled pending run does not
 // strand the PR.
-// As its third duty (issue 885) it sweeps for ORPHANS — completed producer runs
+// As its third duty it sweeps for ORPHANS — completed producer runs
 // whose own relay instance was itself cancelled out of that same pending slot
 // before it could post anything. Nothing else ever notices such a run: that
 // relay instance was the only thing that would have attested it, so the
@@ -23,17 +23,17 @@
 // the trusted main tip — and each context whose pin names the triggering run's
 // path is decided from the newest completed eligible producer's job records under
 // an App installation token minted in-process. A pin may name several paths
-// (issue 1090 splits the workflows that read pull-request data, leaving one
+// (the workflows that read pull-request data are split, leaving one
 // required context produced by a pull_request_target file and a push file),
 // and every path it names relays. A pinned run is relayed only when the
 // workflow definition it executed is the base branch's (isTrustedProducerRun);
 // any other pinned run is refused without posting, whichever of its context's
 // paths the run came from. The refusal keeps the byte-identical throw unless
 // the head is provably dead: a same-repository head reads the commit's
-// associated pulls, a fork head (issue 1142) the base repository's open pulls
+// associated pulls, a fork head the base repository's open pulls
 // at `head=<owner>:<branch>`, its owner proven from the run body's
 // head_repository; an unknown name — a deleted fork's null head_repository —
-// an unprovable fork owner, or any read failure throws (issue 1115). The App
+// an unprovable fork owner, or any read failure throws. The App
 // key arrives only through the
 // LEDGER_APP_KEY secret and is never logged; every failure exits nonzero so a
 // dead relay is visible as a red job, never as silence.
@@ -55,9 +55,9 @@ import { publishProducerContexts } from "./ledger-relay-publication.ts";
 import { readEffectiveDeadline } from "./ledger-relay-job-budget.ts";
 import { type CheckRunSuppression, type SweepCandidate } from "./ledger-relay-producers.ts";
 import { LEDGER_APP_MINT_PERMISSIONS } from "./ledger-app-mint-permissions.ts";
-// The pure decision layer. Re-exported below, with `.ts` specifiers, so the
-// surface this entry has always presented is unchanged: a caller importing
-// decideContexts from here keeps working without knowing the layer exists.
+// The pure decision layer. Re-exported below, with `.ts` specifiers, so a
+// caller importing decideContexts from here works without knowing the layer
+// exists.
 import {
   anyJobStartedOf,
   decideContexts,
@@ -90,8 +90,8 @@ export {
 export type { ContextDecision, HealPullRequest, PinMap, RelayJob, RerunRun, RerunStartedEvidence };
 
 // The trigger's identifying fields and the env rules that decide what kind of
-// relay a start is; their own module holds the ceiling headroom this entry
-// needed (issue 1116's sweep-only mode) without thinning any comment here.
+// relay a start is; their own module keeps this entry under its size ceiling
+// without thinning any comment here.
 import {
   assertShape,
   DIGITS,
@@ -143,22 +143,20 @@ export interface RelayResult {
   posted: string[];
   /** Writes stopped by a newer App identity during reconciliation, across both duties. */
   suppressed?: CheckRunSuppression[];
-  /** True when the rerun-heal dispatched a fresh run (issue 861). */
+  /** True when the rerun-heal dispatched a fresh run. */
   rerunDispatched: boolean;
-  /** What the orphan sweep found and healed (issue 885). */
+  /** What the orphan sweep found and healed. */
   sweep: SweepOutcome;
   /**
-   * Issue 1115: the refusal an untrusted run's DEAD head downgraded to the
-   * visible exit-0 no-op, carried as the byte-identical refusal message the
-   * renderer prints with the fixed reason line. Undefined on every other
-   * path.
+   * The refusal an untrusted run's DEAD head turns into the visible exit-0
+   * no-op, carried as the byte-identical refusal message the renderer prints
+   * with the fixed reason line. Undefined on every other path.
    */
   refusedDeadHead?: string;
   /**
-   * Issue 1116: the start was sweep-only — no triggering run, so the mirror
-   * is skipped and the sweep's own summary and heal lines are the whole
-   * output. Pre-set from the env (issue 1355), so false — not undefined —
-   * unless the env names the mode.
+   * The start is sweep-only — no triggering run, so the mirror is skipped
+   * and the sweep's own summary and heal lines are the whole output. Pre-set
+   * from the env, so false — not undefined — unless the env names the mode.
    */
   sweepOnly?: boolean;
   /**
@@ -321,7 +319,7 @@ export async function runRelay(inputDeps: RelayDeps): Promise<RelayResult> {
  * The App installation token both relay duties run under: a JWT minted from
  * the App key is exchanged for a repo-scoped installation token, whose failure
  * is the red job the failure direction demands. One helper because the
- * sweep-only start (issue 1116) mints the same credential for the same reason.
+ * sweep-only start mints the same credential for the same reason.
  */
 async function mintInstallationToken(
   deps: RunDeps,
@@ -376,17 +374,17 @@ async function findOpenPullRequestsAtHead(
 
 /**
  * The relay's refusal of a pinned run whose executed workflow definition was
- * not the base branch's, resolved against the head's liveness (issue 1115):
- * a live head keeps the byte-identical throw (issue 1083's visibility); a
- * DEAD head downgrades the refusal to the visible exit-0 no-op. The head's
- * repository is decided FIRST, because a fork head's commit resolves in the
- * base repository through its pull ref and the same-repo liveness listing
- * answers 200 with count 0 for it: an unknown name is learned by fetching
- * the run body. A same-repo head's liveness is the commit's associated-PR
- * listing; a fork head's (issue 1142) is the base repository's open pulls at
- * `head=<owner>:<branch>`, live only when one carries the run's head SHA. A
- * deleted fork, an unprovable fork owner, an unnamed branch, a missing name,
- * or any read failure throws (fail closed).
+ * not the base branch's, resolved against the head's liveness: a live head
+ * keeps the byte-identical throw, so the refusal stays visible; a DEAD head
+ * downgrades the refusal to the visible exit-0 no-op. The head's repository is
+ * decided FIRST, because a fork head's commit resolves in the base repository
+ * through its pull ref and the same-repo liveness listing answers 200 with
+ * count 0 for it: an unknown name is learned by fetching the run body. A
+ * same-repo head's liveness is the commit's associated-PR listing; a fork
+ * head's is the base repository's open pulls at `head=<owner>:<branch>`, live
+ * only when one carries the run's head SHA. A deleted fork, an unprovable fork
+ * owner, an unnamed branch, a missing name, or any read failure throws (fail
+ * closed).
  */
 async function refuseUntrustedProducer(
   deps: RunDeps,
@@ -419,7 +417,7 @@ async function refuseUntrustedProducer(
   }
   if (headRepository === "") {
     // Unknown name: a deleted fork's head_repository is null, so this limb
-    // is the deleted-fork throw too (issue 1142). Fails closed.
+    // is the deleted-fork throw too. Fails closed.
     throw new Error(untrustedProducerMessage(run));
   }
   if (headRepository === repo) {
@@ -431,7 +429,7 @@ async function refuseUntrustedProducer(
       ? refusedDeadHead()
       : { decisions: [], posted: [], rerunDispatched: false, sweep: NO_SWEEP };
   }
-  // Fork head (issue 1142): the owner must be provable from the run body
+  // Fork head: the owner must be provable from the run body
   // before any request; the branch-scoped listing then decides liveness.
   const ownerLogin = forkOwnerLoginOf(runBody ?? (await fetchRunBody()));
   if (run.headBranch === "") {
@@ -473,11 +471,11 @@ function untrustedProducerMessage(run: TriggeringRun): string {
 
 /**
  * The contexts a run of `path` may attest: every pin map entry whose pin names
- * that path. A context pinned to several paths (issue 1090's split, where one
- * required context is produced by a `pull_request_target` file and a push
- * file) resolves from EACH of them — matching only one would leave the other
- * file's runs on the "nothing is pinned to this run's workflow" branch, which
- * returns without posting anything and without failing.
+ * that path. A context pinned to several paths (one required context that both
+ * a `pull_request_target` file and a push file produce) resolves from EACH of
+ * them — matching only one would leave the other file's runs on the "nothing
+ * is pinned to this run's workflow" branch, which returns without posting
+ * anything and without failing.
  *
  * This decides WHICH runs relay; it decides nothing about which runs MAY
  * (refuseUntrustedProducer). The two are deliberately separate: widening this

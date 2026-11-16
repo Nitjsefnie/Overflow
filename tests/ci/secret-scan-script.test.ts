@@ -282,8 +282,7 @@ describe("the provenance check, against a repository this suite builds", () => {
   });
 
   it("rejects a token spliced in beside the redaction, at the length that beat a bound", () => {
-    // The reviewer planted exactly this shape and a 28-character bound let it
-    // through. 20 characters is under the tightened 24 bound too, so the
+    // A 20-character value is under the 24-character bound, so the
     // character count cannot reject it and only provenance can — which is why
     // the bound is the cheap first filter and this is the guard.
     const planted = "Ab3dEf9hIj2kLm4nOp6q";

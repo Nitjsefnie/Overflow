@@ -26,9 +26,9 @@ export class PostgresWebhookDeliveryStore implements WebhookDeliveryStore {
   ): Promise<WebhookRepositoryRegistration | null> {
     // The forge triple is the resolution primitive for GitLab deliveries: a
     // numeric id alone could match a GitHub registration holding the same
-    // number, so the provider and the normalized instance URL decide (issue
-    // 547). The partial unique index from migration 038 keeps the triple
-    // unique across non-GitHub registrations.
+    // number, so the provider and the normalized instance URL decide. The
+    // partial unique index from migration 038 keeps the triple unique across
+    // non-GitHub registrations.
     const [row] = await this.sql<{ id: string; active: boolean; unavailable_reason: string | null }[]>`
       select id, active, unavailable_reason from registered_repositories
       where provider = ${provider} and instance_url = ${instanceUrl} and forge_project_id = ${forgeProjectId}
@@ -39,8 +39,8 @@ export class PostgresWebhookDeliveryStore implements WebhookDeliveryStore {
 
   public async applyIssueView(repositoryId: string, githubIssueId: number, issue: GitHubWebhookIssue): Promise<void> {
     // Unknown issues need the fold's opening evidence before they can be inserted.
-    // The body column is deliberately absent (issue 681): the view stops
-    // persisting body text, and a body a row already holds is left as it is.
+    // The body column is deliberately absent: the view stops persisting body
+    // text, and a body a row already holds is left as it is.
     await this.sql`
       update issues
       set state = ${issue.state}, title = ${issue.title}, url = ${issue.url},

@@ -49,10 +49,10 @@ export type PersistGitHubIdentity = (
 
 /**
  * Validates the GitHub profile and returns the identity Overflow persists, or
- * null when the profile cannot be trusted. Moved verbatim from `src/auth.ts`.
- * The profile's avatar field is never read: Overflow stopped collecting the
- * avatar URL (issue 1075), so a profile whose avatar field is missing or
- * malformed validates exactly as one carrying a string.
+ * null when the profile cannot be trusted. Overflow does not collect the
+ * avatar URL, so the profile's avatar field is never read: a profile whose
+ * avatar field is missing or malformed validates exactly as one carrying a
+ * string.
  */
 export function readGitHubIdentity(profile: Profile | undefined): GitHubIdentity | null {
   if (profile === undefined) {

@@ -408,7 +408,7 @@ describe("GitHub webhook route", () => {
       expect(message).toContain("pull_request");
       expect(message).toContain("octo/example");
       expect(message).toContain("GitHub id 42");
-      // The error rides as the encoded token (issue 1042): one bounded line,
+      // The error rides as the encoded token: one bounded line,
       // so no text it picked up can forge journal lines or drive the terminal.
       expect(loggedError).toBe(errorLogToken(rootCause));
     } finally {
@@ -550,7 +550,7 @@ describe("GitHub webhook route", () => {
       expect(message).toContain("delivery-cause-chain");
       // The processor's rethrow reaches the log as the encoded token with the
       // cause chain flattened onto the same line, so a composed failure still
-      // names the layer that actually broke (issue 1042).
+      // names the layer that actually broke.
       expect(loggedError).toBe(
         `${logField("Error")}: ${logField("Webhook processing failed.")}; ${logField("Error")}: ${logField("probe enqueue root cause")}`,
       );
@@ -692,8 +692,8 @@ describe("GitHub webhook route", () => {
   });
 
   // The receiver answers 429 from the token bucket before it reads a header
-  // and before it looks up a credential (issue 852): a burst past capacity
-  // costs the sender one bucket answer and nothing else. The bucket is the
+  // and before it looks up a credential: a burst past capacity costs the
+  // sender one bucket answer and nothing else. The bucket is the
   // real limiter module's, drained through the handler itself; timestamps are
   // explicit — no wall clock, no fake timers.
   it("declines a burst past capacity with 429 before reading a header or a credential", async () => {

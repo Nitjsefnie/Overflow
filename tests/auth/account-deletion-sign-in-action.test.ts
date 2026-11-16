@@ -9,7 +9,7 @@ afterAll(() => { vi.resetModules(); });
 const { signIn } = vi.hoisted(() => ({ signIn: vi.fn() }));
 vi.mock("@/auth", () => ({ signIn }));
 
-// Issue 700: the action opens with the origin guard, so the request headers
+// The action opens with the origin guard, so the request headers
 // must name the trusted origin (useTrustedOrigin sets the app URL).
 vi.mock("next/headers", async () => (await import("../support/trusted-origin")).trustedRequestHeaders());
 

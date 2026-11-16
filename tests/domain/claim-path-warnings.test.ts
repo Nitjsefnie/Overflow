@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { assessClaimPath } from "@/lib/domain/claim-path";
 
-// Issue 673: yaml's parse() forwards every doc warning to process.emitWarning,
+// yaml's parse() forwards every doc warning to process.emitWarning,
 // and those warning messages embed the DECODED contributor bytes (a %TAG
 // directive whose URI carries percent-encoded control bytes yields a warning
 // containing a literal LF, attacker text and ESC). The assessment must parse

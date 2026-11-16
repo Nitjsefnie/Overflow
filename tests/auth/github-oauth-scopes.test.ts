@@ -6,7 +6,7 @@ import {
   parseGrantedScopes,
 } from "@/lib/auth/github-oauth-scopes";
 
-// Issue 599: GitHub reports granted scopes comma-delimited in the token
+// GitHub reports granted scopes comma-delimited in the token
 // response (`scope` claim) and comma-and-space-delimited in the
 // X-OAuth-Scopes header; a request spells them space-delimited.
 describe("parseGrantedScopes", () => {

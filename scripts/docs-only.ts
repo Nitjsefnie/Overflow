@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Docs-only change gate for CI (issue 592): decides whether a change touched
+// Docs-only change gate for CI: decides whether a change touched
 // documentation only, in which case CI skips coverage and the floor check.
 //
 //   node scripts/docs-only.ts <base-revision>
@@ -8,8 +8,8 @@
 // is docs-only, and every commit on the first-parent chain from base to HEAD
 // changes only documentation against its first parent. Merge commits therefore
 // use their first-parent diff. Docs are .md, .txt, .rst, .adoc and LICENSE.
-// Rename detection is off (issue 646), so a code file renamed to a doc still
-// exposes its code source path.
+// Rename detection is off, so a code file renamed to a doc still exposes its
+// code source path.
 //
 // Everything undecidable prints "false" so the change is measured: an empty
 // diff or range, a non-ancestor, missing history, an empty or all-zero base,

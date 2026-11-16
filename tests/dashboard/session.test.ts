@@ -42,7 +42,7 @@ describe("dashboard session authorization", () => {
     expect(redirect).not.toHaveBeenCalled();
   });
 
-  // Issue 599: the registration page reads the webhook-administration hint the
+  // The registration page reads the webhook-administration hint the
   // JWT recorded from the granted scopes; anything but a literal true — an
   // older JWT, a contributor grant — is not capable.
   it.each([

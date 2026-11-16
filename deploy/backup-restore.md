@@ -1,9 +1,7 @@
 # Backing up and restoring the Overflow database
 
 This runbook covers the production `overflow` database on the local
-PostgreSQL cluster. It exists because before the drill of 2026-09-10 the host
-held no backup of that database anywhere, and no restore had ever been
-performed. The `overflow.service` unit and the deployment procedure live in
+PostgreSQL cluster. The `overflow.service` unit and the deployment procedure live in
 [README.md](README.md); this file is only about the database.
 
 Values used throughout: the database is `overflow` (the name in the app's
@@ -145,9 +143,7 @@ are retained at the steady state, and nothing not matching `overflow-*.dump`
 in the directory is ever deleted. The pattern covers the `-1`, `-2` suffixed
 names a same-second extra run takes, so those are retained and pruned on the
 same schedule. The exception: a run's partial, `.overflow-<pid>.dump.incomplete`,
-older than one day is reclaimed by the next run's sweep. The first real backup
-was `overflow-20260910T154923Z.dump` (22.7 MB), taken during the 2026-09-10
-drill; it later aged out under the 14-day retention policy.
+older than one day is reclaimed by the next run's sweep.
 
 The directory is on the same filesystem as the database. That is fine for the
 failure modes this runbook targets — a bad migration, a bad deploy, a dropped
@@ -295,10 +291,10 @@ sudo -u postgres dropdb "$scratch"
 rm /tmp/overflow-drill-dump-staging.dump /tmp/overflow-drill-restore.sh
 ```
 
-The latest drill (2026-09-28) measured `db-backup.sh` at 48.8 s and
+The 2026-09-28 drill measured `db-backup.sh` at 48.8 s and
 `db-restore.sh` at 75.1 s wall clock against a 167.7 MB dump covering 28
-public tables and about 1,342,000 rows. Its full measurements and per-table
-comparison are in the latest entry of `/var/backups/overflow/drill-log.md`.
+public tables and about 1,342,000 rows. Each drill's full measurements and
+per-table comparison are entries in `/var/backups/overflow/drill-log.md`.
 
 ### (e.2) Replacing the live database
 

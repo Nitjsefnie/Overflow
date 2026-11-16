@@ -63,9 +63,9 @@ const otherShellLines = new Set([
   "systemctl daemon-reload",
   "systemctl enable overflow.service",
   "systemctl is-active overflow.service",
-  // Sections 7, 9 and 10 verify through the readiness endpoint (issue 439);
+  // Sections 7, 9 and 10 verify through the readiness endpoint;
   // section 8's old-unit rollback test keeps the landing-page URL on purpose.
-  // Sections 7 and 10 also run the sign-in smoke beside readiness (issue 649).
+  // Sections 7 and 10 also run the sign-in smoke beside readiness.
   "curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1   --retry-connrefused -fsS -o /dev/null -w '%{http_code}\\n' http://127.0.0.1:3000/api/readiness",
   "curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1   --retry-connrefused -fsS -o /dev/null -w '%{http_code}\\n' http://127.0.0.1:3000/api/auth/providers",
   "curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1   --retry-connrefused -fsS -o /dev/null -w '%{http_code}\\n' http://127.0.0.1:3000/",
@@ -279,7 +279,7 @@ const otherShellLines = new Set([
   "rm /etc/systemd/system/overflow-bounce.service",
   "sed -i -e '/^overflow-canary:/d' -e '/^overflow-alert:/d' /etc/aliases",
   "rm -rf /var/lib/overflow-bounce",
-  // Section 14's App private-key rotation (issue 1032): the CI secret
+  // Section 14's App private-key rotation: the CI secret
   // replacement and its listing, the relay probe dispatch with its run
   // lookup and watch, the App check-run readback, and the rollback secret
   // replacement.
@@ -413,7 +413,7 @@ for (const line of [
   'gh workflow run ci.yml --ref main -f base="$base"',
   "gh workflow run actionlint.yml --ref main",
   'gh workflow run ratchet-guard.yml --ref main -f base="$base"',
-  // Section 13's client-address verification steps (issue 1044): the secret
+  // Section 13's client-address verification steps: the secret
   // generation, the root-only include file carrying the proxy secret (the
   // vhost itself stays world-readable), the nginx validation, and the
   // journal check.
@@ -495,10 +495,10 @@ function validateBlock(info: string, body: string): number {
 
 // A real CommonMark tokenizer discovers code regions, so indented code, fenced
 // code and code nested in lists or blockquotes are recognized exactly as a
-// CommonMark renderer sees them, and installs can no longer hide behind
-// structures the hand-rolled line parser did not model (issue 252). Everything
-// else — paragraphs, headings, lists, blockquotes, inline code, raw HTML — is
-// prose and never reaches the shell grammar.
+// CommonMark renderer sees them, and no install can hide behind a structure
+// that a hand-rolled line parser would misread. Everything else — paragraphs,
+// headings, lists, blockquotes, inline code, raw HTML — is prose and never
+// reaches the shell grammar.
 const md = new MarkdownIt("commonmark");
 
 function codeRegions(markdown: string): { info: string; lines: string[] }[] {
@@ -507,8 +507,8 @@ function codeRegions(markdown: string): { info: string; lines: string[] }[] {
     if (token.type === "fence" || token.type === "code_block") {
       // validateBlock's shell test only reads the info prefix, so a shell
       // name followed by arbitrary info would smuggle the install command
-      // past the grammar. The old parser rejected that at the boundary and
-      // the structural front end keeps the rejection.
+      // past the grammar. The structural front end rejects that at the
+      // boundary, before the grammar runs.
       if (token.type === "fence" && mentionsPnpm(token.info)) {
         throw new Error(`Unsupported fence info: ${token.info.trim()}`);
       }
@@ -531,15 +531,14 @@ function codeRegions(markdown: string): { info: string; lines: string[] }[] {
     } else if (token.type === "html_block") {
       // An HTML comment that never closes within its HTML block runs until
       // the end of the container and can swallow a following code fence
-      // without the tokenizer noticing (issue 252, payload three).
+      // without the tokenizer noticing.
       if (token.content.includes("<!--") && !token.content.includes("-->")) {
         throw new Error("Unsupported unclosed HTML comment");
       }
       // CommonMark: an HTML block swallows everything up to its terminator,
       // so a code fence inside one never becomes a fence token and the closed
-      // grammar never sees it (issue 400). A fence-looking line in any HTML
-      // block — comments included — is structure, not prose, and is rejected
-      // by name instead of being silently skipped.
+      // grammar never sees it. A fence-looking line in any HTML block —
+      // comments included — is structure, not prose, and is rejected by name.
       if (/`{3,}|~{3,}/.test(token.content)) {
         throw new Error(`Unsupported code fence inside an HTML block: ${token.content.split("\n")[0].trim()}`);
       }
@@ -662,10 +661,10 @@ it.each([
   expect(() => validateDocument(markdown)).toThrow(error);
 });
 
-// Issue 252's payloads: an install hidden behind a Markdown structure the
-// guard used to misparse. Each is appended, as its own block, to a document
-// that would otherwise hold exactly the three canonical installs — and to the
-// real README's text, which the guard reads without modifying it.
+// Payloads that hide an install behind a Markdown structure the guard has
+// to judge. Each is appended, as its own block, to a document that would
+// otherwise hold exactly the three canonical installs — and to the real
+// README's text, which the guard reads without modifying it.
 it.each([
   ["a processing-instruction boundary", "<?probe?>\n    pnpm install --frozen-lockfile\n", "Unsupported pnpm shape"],
   ["a multiline reference-definition title", '[ref]: /url\n  "title"\n    pnpm install --frozen-lockfile\n', "Unsupported pnpm shape"],
@@ -677,11 +676,12 @@ it.each([
   expect(() => validateDocument(`${readme}\n${payload}`)).toThrow(error);
 });
 
-// Issue 400's payloads: CommonMark swallows everything up to an HTML block's
-// terminator, so a code fence inside one never becomes a fence token and the
-// closed grammar never sees it. Each payload is appended, as its own block, to
-// a document that would otherwise hold exactly the three canonical installs —
-// and to the real README's text, which the guard reads without modifying it.
+// Payloads hiding a code fence in an HTML block: CommonMark swallows
+// everything up to the block's terminator, so a code fence inside one never
+// becomes a fence token and the closed grammar never sees it. Each payload is
+// appended, as its own block, to a document that would otherwise hold exactly
+// the three canonical installs — and to the real README's text, which the
+// guard reads without modifying it.
 it.each([
   ["a <div> HTML block swallowing a non-canonical fenced install", "<div>\n```text\npnpm install\n```\n</div>", "Unsupported code fence inside an HTML block"],
   ["a <script> HTML block swallowing a canonical fenced install", "<script>\n```bash\n" + canonicalInstall + "\n```\n</script>", "Unsupported code fence inside an HTML block"],
@@ -872,8 +872,8 @@ it("rejects a fence whose closing line leaves its blockquote container", () => {
 
 it("rejects a shell-prefixed fence info carrying the install command", () => {
   // The info prefix satisfies validateBlock's shell test, so the pnpm-bearing
-  // junk must be rejected in the structural front end, where the old parser
-  // threw before the grammar ran.
+  // junk must be rejected in the structural front end, before the grammar
+  // runs.
   expect(() => validateDocument("```bash pnpm install --frozen-lockfile\n" + canonicalInstall + "\n```"))
     .toThrow("Unsupported fence info");
 });

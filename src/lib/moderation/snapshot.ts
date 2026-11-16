@@ -2,7 +2,7 @@ import type { CalibrationPair } from "@/lib/calibration/statistics";
 import type { CalibrationCohortSnapshot } from "@/lib/moderation/service";
 
 /**
- * The stored snapshot an audit carries (issue 330), read back from its JSONB
+ * The stored snapshot an audit carries, read back from its JSONB
  * columns: the pairs must be complete calibration pairs and the comparison a
  * complete one, since a credit adjustment is computed from exactly this
  * evidence. Parse failures are a null, which the callers refuse as drift.

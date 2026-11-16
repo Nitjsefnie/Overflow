@@ -60,7 +60,7 @@ describe("requestGitHubPublicIdentity", () => {
 
     // The projection keeps exactly the public identity fields; the display
     // name field is dropped even when it is null, and the avatar URL is
-    // dropped even when GitHub answers with one (issue 1075).
+    // dropped even when GitHub answers with one.
     expect(profile).toEqual({ login: "octocat", id: 4242 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(requestedUrls(fetchMock)).toEqual([GITHUB_USER_URL]);

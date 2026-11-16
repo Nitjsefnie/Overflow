@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { shapesCompatible, type HttpShape } from "./http-surface-derive.ts";
 
 /**
- * The recorded HTTP surface (issue 1056) and how a change to it is classified
+ * The recorded HTTP surface and how a change to it is classified
  * for the version-move rule in API.md "Stability and versioning".
  *
  * A snapshot recorded with `snapshotFormat: 2` pins, beside each documented
@@ -10,9 +10,8 @@ import { shapesCompatible, type HttpShape } from "./http-surface-derive.ts";
  * success status and each route's failure answers ("<status> <CODE>", with
  * " +<key>" per extra envelope field), plus non-envelope status/body shapes
  * derived by failure-handler fixtures. A snapshot without the marker (format
- * 1, what main recorded before issue 1056) pinned routes only, so it has
- * nothing recorded for the additional sections and their first recording
- * is not a change.
+ * 1) pinned routes only, so it has nothing recorded for the additional sections
+ * and their first recording is not a change.
  */
 export type RecordedHttpSurface = {
   snapshotFormat?: 2;
@@ -23,7 +22,7 @@ export type RecordedHttpSurface = {
   nonEnvelopeFailures?: Record<string, Record<string, { status: number; shape: HttpShape }>>;
 };
 
-/** Existing sections are required; legacy callers may omit the newly introduced raw-answer section. */
+/** Existing sections are required; legacy callers may omit the raw-answer section. */
 export type DerivedHttpSurface = Required<Omit<RecordedHttpSurface, "nonEnvelopeFailures">> &
   Pick<RecordedHttpSurface, "nonEnvelopeFailures">;
 

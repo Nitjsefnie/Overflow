@@ -136,7 +136,7 @@ describe("calibration comparison", () => {
 
   // Two landmark regions carrying one accessible name read as one region
   // twice: a screen reader's region list cannot distinguish them (axe's
-  // landmark-unique rule, audit probe D2-12). The names are computed the way
+  // landmark-unique rule). The names are computed the way
   // the role queries compute them and compared as a set, so a rename of any
   // one region stays green while a shared name fails.
   it("gives every landmark region a distinct accessible name", () => {

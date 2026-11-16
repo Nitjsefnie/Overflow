@@ -469,9 +469,9 @@ describe("settlement override decision API", () => {
     expect(response.status).toBe(404);
   });
 
-  // The decision route's private gate folded onto the shared one, so an
-  // authorize-path outage on the cookie path now answers in the shared gate's
-  // words — pinned here because the old local wording differed.
+  // The decision route uses the shared gate, so an authorize-path outage on
+  // the cookie path answers in the shared gate's words — pinned here so it
+  // cannot drift to a route-local wording.
   it.each([
     ["session", "getSession"],
     ["role", "getCurrentRole"],
@@ -544,7 +544,7 @@ describe("settlement override decision API", () => {
   });
 });
 
-// The shared reason cap (issue 690): a value of exactly MAX_REASON_LENGTH
+// The shared reason cap: a value of exactly MAX_REASON_LENGTH
 // characters after trim is accepted and one more is refused with the route's
 // own validation answer, before any service is reached.
 describe("reason length caps", () => {

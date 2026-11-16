@@ -1,6 +1,6 @@
 name: ratchet guard
 
-# THE PULL-REQUEST LEG IS NOT HERE (issue 1090). It is
+# THE PULL-REQUEST LEG IS NOT HERE. It is
 # .github/workflows/pr-gates.yml, job ratchet-guard, whose only trigger is
 # `pull_request_target`, because it fetches a pull request's head ref and a
 # privileged trigger would run that step with the default branch's privileges.
@@ -21,7 +21,7 @@ name: ratchet guard
 # (scripts/deploy-revision.sh) to pass on the tip it lands — the gate checks
 # only the fetched tip of main. Under push the executed script comes from the
 # previous main tip (github.event.before) and the pushed commit is read only as
-# git objects. A dropped push event (issue 796) can leave a main tip with no
+# git objects. A dropped push event can leave a main tip with no
 # runs; workflow_dispatch recovers that tip by comparing it against the last
 # certified main tip, not HEAD^1 or a guessed `before`. The dispatched SHA
 # enters only as git objects. All executed code comes from the checked-out,

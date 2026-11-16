@@ -10,9 +10,8 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes }
  * bound through associated data to the column and the natural key of the row
  * it lives in, so ciphertext copied into another row or column fails to open.
  *
- * `v1.<iv>.<tag>.<ct>` (no key id, no associated data) was the legacy shape; it
- * is no longer read anywhere, so a v1 envelope fails closed like any invalid
- * envelope, and it is never written.
+ * `v1.<iv>.<tag>.<ct>` (no key id, no associated data) is never read or
+ * written: a v1 envelope fails closed like any invalid envelope.
  */
 
 const algorithm = "aes-256-gcm";

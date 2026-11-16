@@ -1,4 +1,4 @@
-# Issue 826: exclude one test file from CodeQL analysis, with reason.
+# Exclude one test file from CodeQL analysis, with reason.
 # tests/db/backup-restore.test.ts forces a hostile umask on its backup
 # script via `sh -c 'umask 022; exec sh "$@"'` — the canonical argv-safe
 # pattern (the uncontrolled absolute path CodeQL reports is the test's own

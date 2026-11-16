@@ -36,9 +36,8 @@ import {
  *
  * `SupplementaryGroups` is here because the script READS that log, and the
  * unit's empty capability bounding set means the group is the whole of the
- * permission. The alert template stopped reading only the journal when the
- * script began following a message id into the mainlog to decide whether the
- * alert left the host; this is the directive that keeps that read possible.
+ * permission. It is the directive that keeps the script's read of the mainlog
+ * possible: the read that decides whether an alert left the host.
  */
 const REVIEWED_ALERT_SERVICE_KEYS: ReadonlySet<string> = new Set([
   "AmbientCapabilities",
@@ -285,10 +284,7 @@ describe("Overflow backup unit failure wiring", () => {
  * `deploy/overflow-alert@.service` as bytes, and the alert script's own suite
  * runs it with a PATH shim and its own scratch log - so a unit that stopped
  * being able to read the log the script now depends on would pass every test
- * here and fail in production, on the one signal the maintainer trusts. The
- * defect that made this necessary was exactly that: the script began reading
- * the exim mainlog, and the unit's empty capability bounding set had quietly
- * stopped allowing it.
+ * here and fail in production, on the one signal the maintainer trusts.
  *
  * The binding is textual because it has to run in CI, where /var/log/exim4 does
  * not exist. What is asserted is the relationship, in three parts that each fail

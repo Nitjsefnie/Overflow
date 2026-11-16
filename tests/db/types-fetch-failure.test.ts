@@ -86,8 +86,8 @@ async function runWithTypesFetchDenied(
  * the connection was opened for. When that fetch fails, the query waiting on the connection must
  * be rejected with the server's error, the connection must close rather than serve queries with no
  * array types (sql.array would then bind as its scalar element type), and the process must keep
- * running: the fetch's own promise must not be left rejected with no handler, which is what
- * terminated the process before (issue 719, upstream porsager/postgres issue 1192).
+ * running: the fetch's own promise must not be left rejected with no handler, which terminates
+ * the process (upstream porsager/postgres issue 1192).
  */
 describe("a new connection whose array-type fetch fails", () => {
   beforeAll(async () => {

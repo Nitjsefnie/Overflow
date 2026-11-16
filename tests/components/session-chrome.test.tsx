@@ -19,12 +19,11 @@ import SessionPage from "@/app/session/page";
 vi.hoisted(() => { vi.resetModules(); });
 afterAll(() => { vi.resetModules(); });
 
-// Issue 281: the recovery route rendered a bare main.landing-page, the same
-// symptom issue 38 described for the landing route. The route now composes the
-// same public shell. The recovery content itself keeps its session-flavored
-// controls (the sign-out form, the member retry link) — those are the page's
-// own content for people mid-recovery, so every session-implying assertion
-// here is scoped to the chrome, never to the document.
+// The recovery route composes the same public shell as the landing route. The
+// recovery content itself keeps its session-flavored controls (the sign-out
+// form, the member retry link) — those are the page's own content for people
+// mid-recovery, so every session-implying assertion here is scoped to the
+// chrome, never to the document.
 describe("session recovery chrome", () => {
   it("renders the site chrome around the recovery content", async () => {
     render(await SessionPage({ searchParams: Promise.resolve({}) }));

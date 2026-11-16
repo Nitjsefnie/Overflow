@@ -43,7 +43,7 @@ describe("shutdown during a pool-scheduled reconnect", () => {
           if (startup) {
             startup = false;
             if (attempt === 1) {
-              // A clean connect-phase death establishes the retry counter, as in issue 224.
+              // A clean connect-phase death establishes the retry counter.
               socket.end();
             } else if (attempt === 2) {
               // Reject the old initial query, then close: the pool dispatches its queued query.

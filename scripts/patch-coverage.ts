@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Patch coverage report (issue 592): measures how many of the lines this
+// Patch coverage report: measures how many of the lines this
 // change adds were executed by the test suite. Informational only — never a
 // gate; the coverage floor remains the merge criterion.
 //

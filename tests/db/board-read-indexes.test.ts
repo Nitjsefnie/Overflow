@@ -22,7 +22,7 @@ import type { DashboardSql } from "@/lib/dashboard/queries";
  *    read issues through issues_board_claimed_open_idx, and the repayment
  *    opening leg (DISTINCT ON the cheapest unclaimed opening of each
  *    underwater sponsor) through issues_board_unclaimed_open_idx — neither
- *    leg seq-scans issues any more. The two legs whose issues-side predicate
+ *    leg seq-scans issues. The two legs whose issues-side predicate
  *    matches most of the table (candidate_sponsors and the main select)
  *    currently keep their sequential scans: no index can beat a scan that
  *    must visit nearly every row.
@@ -201,8 +201,8 @@ async function seedPlanWorld(): Promise<void> {
   await insertUnclaimedIssues(deltaOne, unclaimedPerSponsor);
   await insertUnclaimedIssues(umbraOne, 3);
   // A settled backlog beside every open board, as production repositories and
-  // the benchmark world's repositories alike carry (issue 691's world is 80%
-  // unclaimed-open, 20% settled history). Without it the pre-existing unique
+  // the benchmark world's repositories alike carry (the benchmark world is 80%
+  // unclaimed-open, 20% settled history). Without it the unique
   // (repository_id, issue_number) index and the unclaimed-open partial index
   // estimate nearly the same entries per probe and the smaller tuples win —
   // a table that is almost all unclaimed-open is a table the partial index

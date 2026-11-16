@@ -9,7 +9,7 @@ import { rejectUntrustedRequest } from "@/lib/security/request-origin";
 
 /**
  * The DELETE body is one JSON object carrying a single short confirmation
- * login, so 4 KiB bounds the read with room to spare (issue 661).
+ * login, so 4 KiB bounds the read with room to spare.
  */
 const ACCOUNT_DELETE_BODY_LIMIT_BYTES = 4 * 1024; // 4 KiB
 
@@ -17,7 +17,7 @@ const ACCOUNT_DELETE_BODY_LIMIT_BYTES = 4 * 1024; // 4 KiB
  * The one operator journal line a deletion writes when it leaves the instance
  * without a live moderator. Fixed text on purpose: it names the gap and the
  * operator's recovery path, and carries no personal data — no login, no
- * account id, no GitHub user id, nothing about who deleted (issue 1122).
+ * account id, no GitHub user id, nothing about who deleted.
  */
 const NO_LIVE_MODERATOR_JOURNAL =
   "Account deletion left no live moderator. Recovery: add a GitHub user id to MODERATOR_GITHUB_USER_IDS; the list promotes its holder at their next sign-in.";

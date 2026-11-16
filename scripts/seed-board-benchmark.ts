@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// The issue 691 benchmark seed: fills a disposable PostgreSQL with a board-sized
+// The benchmark seed: fills a disposable PostgreSQL with a board-sized
 // world — repositories, open issues, sponsor settlement history, one bench
 // member with an API token — so the /issues, /api/issues and /members surfaces
-// can be measured before and after the pagination fix on the same data.
+// can be measured on the same data before and after a change.
 //
 // Run against the benchmark container (NOT production):
 //
@@ -17,7 +17,7 @@
 // the same world, ids included.
 //
 // The world is fully deterministic — a fixed PRNG seed, fixed uuids, fixed
-// credential material — so Task 5's after-measurement replays on byte-identical
+// credential material — so repeated measurements replay on byte-identical
 // data. Only one credential ever leaves stdout: the throwaway bench API token,
 // which authenticates nothing but this benchmark database.
 
@@ -268,7 +268,7 @@ export async function mintBenchSessionCookie(secret: string, userId: string, ses
       name: benchMemberLogin(),
       role: "MEMBER",
       canAdministerWebhooks: false,
-      // The absolute lifetime (issue 1043) bounds every session to 30 days
+      // The absolute lifetime bounds every session to 30 days
       // from this instant, so the cookie records the mint time — the fixed
       // 2025-09-01 base the rest of the seed world is laid out on would be
       // born expired.
@@ -535,11 +535,11 @@ export async function seedBoardBenchmark(options: SeedOptions, suppliedSql?: Sql
         )}`;
       }
 
-      // Migration 003 moved the settlement's composite FK onto this link
+      // Migration 003 puts the settlement's composite FK on this link
       // table; the seed fills it beside every pull request, exactly as the
       // materializer does. Chunked like its siblings: unchunked, the insert
       // binds pullRequests × 3 parameters and crosses Postgres's limit past
-      // ~21.8k pull requests (issue 909).
+      // ~21.8k pull requests.
       for (const chunk of chunks(world.pullRequests, 1_000)) {
         await tx`insert into pull_request_issues ${tx(
           chunk.map((pullRequest) => ({

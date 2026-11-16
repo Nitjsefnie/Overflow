@@ -19,7 +19,7 @@ import { reasonText } from "@/lib/validation/reason";
 /**
  * Every moderation body is a small JSON document whose free-text fields
  * reasonText() caps at 2000 characters, so 32 KiB bounds the read with wide
- * margin (issue 661).
+ * margin.
  */
 const MODERATION_BODY_LIMIT_BYTES = 32 * 1024; // 32 KiB
 
@@ -186,9 +186,8 @@ export async function getProductionSession(): Promise<ModerationRouteSession | n
 /**
  * Each helper reads the body through readBodyWithinLimit and parses it with
  * its schema. It returns "tooLarge" when the body crosses the route's limit —
- * the caller answers 413 — and null for an unparsable or schema-invalid body,
- * exactly as request.json()'s rejection did before the bounded reader. A body
- * read that itself fails also keeps the null answer.
+ * the caller answers 413 — and null for an unparsable or schema-invalid body.
+ * A body read that itself fails also keeps the null answer.
  */
 async function parseOpenAccountAuditInput(
   request: Request,

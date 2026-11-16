@@ -189,13 +189,11 @@ describe("a reconciliation whose advisory unlock fails", () => {
     await workSql?.end();
     await unlockAllSql?.end();
     await discardAllSql?.end();
-    // No longer forced by the dependency: patches/postgres@3.4.9.patch clears a connection's
-    // in-flight query when its socket dies (`query = null` in `error()`) — the defect Overflow
-    // issue 150 filed — so an ordinary `end()` settles on this client, and issue 150 is
-    // settled by the patch. The forced shape stays anyway, as a bound that does not lean on
-    // that repair: `end({ timeout: 0 })` arms `destroy()`, which terminates every connection
-    // and rejects queued work outright, because patches/README.md records orderings the patch
-    // does not cover.
+    // patches/postgres@3.4.9.patch clears a connection's in-flight query when its socket dies
+    // (`query = null` in `error()`), so an ordinary `end()` settles on this client. The forced
+    // shape stays anyway, as a bound that does not lean on that repair: `end({ timeout: 0 })`
+    // arms `destroy()`, which terminates every connection and rejects queued work outright,
+    // because patches/README.md records orderings the patch does not cover.
     await terminatingSql?.end({ timeout: 0 });
     await laterCoordinationSql?.end();
     await admin?.end();

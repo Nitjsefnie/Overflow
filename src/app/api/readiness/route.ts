@@ -3,11 +3,11 @@ import { bundledMigrationNames, migrationFilename } from "@/lib/db/migration-man
 import { describeErrorCause } from "@/lib/repositories/register";
 
 /**
- * Deployment readiness probe — issue 439.
+ * Deployment readiness probe.
  *
- * The deploy script used to probe the landing page, which answers 200 even
- * with PostgreSQL unreachable. This endpoint answers from the database
- * instead, and every failure mode means NOT ready:
+ * This endpoint answers from the database, not the landing page: the landing
+ * page answers 200 even with PostgreSQL unreachable. Every failure mode means
+ * NOT ready:
  *
  * - A rejection or a thrown error from the probe answers 503. A timeout is
  *   not ready too: the probe query is raced onto a
@@ -15,7 +15,7 @@ import { describeErrorCause } from "@/lib/repositories/register";
  *   connection and never answers still fails the probe in time.
  * - The probe reads applied names and compatibility flags from `schema_migrations`
  *   and answers 200 only when every migration this build bundles is recorded
- *   applied (issue 692). A schema behind the build — an empty ledger, or one
+ *   applied. A schema behind the build — an empty ledger, or one
  *   missing a migration this build carries — is not ready. An ahead schema
  *   is ready only when no extra migration is flagged for mixed-version review:
  *   a flagged migration may break this older build's reads or writes.
@@ -37,17 +37,15 @@ import { describeErrorCause } from "@/lib/repositories/register";
  * worst case an attacker costs one query every TTL window.
  *
  * Every failure mode maps to a reason string — a rejection renders its
- * redacted cause through
- * `describeErrorCause` (imported from the repositories module, PR 887
- * precedent), a schema behind the build names the migrations it is missing,
+ * redacted cause through `describeErrorCause` (imported from the repositories
+ * module), a schema behind the build names the migrations it is missing,
  * and a probe that outlives the hard cap names the cap — and the reason
  * reaches only the journal, one `console.error` per failed probe at settlement.
- * Issue 1030 reverses issue 910's earlier design of including the reason in
- * the anonymous 503 body: even redacted causes disclose internal hosts, ports
- * or migration names. Callers receive only { status: "unavailable" }.
+ * The reason is kept out of the anonymous 503 body: even redacted causes
+ * disclose internal hosts, ports or migration names. Callers receive only
+ * { status: "unavailable" }.
  * A TTL-cached failure served inside its window does not log again: only a
- * probe settlement logs. Status codes, cache-control,
- * single-flight and TTL semantics are unchanged.
+ * probe settlement logs.
  */
 
 /** How long a single probe query may run before it counts as not ready. */
@@ -67,9 +65,9 @@ export type Readiness = "ready" | "unavailable";
 
 /**
  * What one probe run concluded. `reason` is present exactly when `status` is
- * `"unavailable"` (issue 910): it names the failing dependency and why —
+ * `"unavailable"`: it names the failing dependency and why —
  * every reason this module produces starts "database: …" — and is rendered
- * into the journal line alone, never the anonymous 503 body (issue 1030).
+ * into the journal line alone, never the anonymous 503 body.
  */
 export type ReadinessProbeOutcome = {
   status: Readiness;
@@ -85,8 +83,8 @@ export type ReadinessRouteDependencies = {
  * The real probe: refuse a schema behind this build or past a flagged migration
  * this build does not bundle.
  *
- * The behind-schema check is one-sided (issue 692): every migration the bundled
- * manifest names must be recorded applied. A missing table or a failed query
+ * The behind-schema check is one-sided: every migration the bundled manifest
+ * names must be recorded applied. A missing table or a failed query
  * rejects, landing in the existing error mapping as 503; an empty
  * `schema_migrations` is behind, and answers 503 through the same predicate.
  * Extra applied names are accepted only when their recorded compatibility flag
@@ -131,7 +129,7 @@ async function probeDatabase(): Promise<ReadinessProbeOutcome> {
 
 /**
  * The bundled migrations the applied ledger does not name, in bundled order —
- * the exact list a behind-schema reason renders (issue 910).
+ * the exact list a behind-schema reason renders.
  */
 export function missingMigrations(applied: readonly string[]): readonly string[] {
   const appliedNames = new Set(applied);
@@ -175,12 +173,12 @@ export function createReadinessGetHandler(
    * Runs the probe exactly once per call and settles it through the hard cap.
    * The probe is invoked through Promise.resolve().then so a synchronous throw
    * counts as a failure like any other, and the mapped promise never rejects —
-   * every failure mode arrives as an unavailable outcome carrying its reason
-   * (issue 910): a rejection renders `describeErrorCause`, and the hard cap
-   * renders its own. The race's loser is deliberately not awaited — a query
-   * that loses the race settles late through the client, or not at all — and
-   * `finish` consumes whichever settlement arrives second without resolving
-   * or logging again, so each probe journals exactly once.
+   * every failure mode arrives as an unavailable outcome carrying its reason:
+   * a rejection renders `describeErrorCause`, and the hard cap renders its own.
+   * The race's loser is deliberately not awaited — a query that loses the race
+   * settles late through the client, or not at all — and `finish` consumes
+   * whichever settlement arrives second without resolving or logging again, so
+   * each probe journals exactly once.
    */
   function runProbe(): Promise<ReadinessProbeOutcome> {
     const settled = Promise.resolve()

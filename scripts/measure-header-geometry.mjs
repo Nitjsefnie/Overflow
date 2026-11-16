@@ -3,10 +3,10 @@
  * Measure the real header's geometry across viewport widths, in headless
  * Chromium, against the real stylesheet and the real header markup.
  *
- * Why this exists: issue 40 — at tablet widths the member navigation wraps
- * inside the middle grid column of the three-column header and the wordmark,
- * navigation and member stamp end up on three different vertical centres, so
- * the header roughly doubles in height. The header wrap breakpoint in
+ * Why this exists: at tablet widths the member navigation can wrap inside the
+ * middle grid column of the three-column header, leaving the wordmark,
+ * navigation and member stamp on three different vertical centres, so the
+ * header roughly doubles in height. The header wrap breakpoint in
  * src/app/globals.css is chosen from this measurement, not guessed, and any
  * change to it is re-measured here:
  *

@@ -1,10 +1,10 @@
 /**
- * The authoritative reading of what a stored GitHub token may do (issue
- * 599): the scopes GitHub itself reports in the `X-OAuth-Scopes` header of an
- * authenticated response. Repository registration asks this before it builds
- * the flow that would create a webhook, for a cookie session and a bearer
- * caller alike, so a token that granted only public identity is refused with
- * a stable code and a remedy instead of a webhook request GitHub 404s.
+ * The authoritative reading of what a stored GitHub token may do: the scopes
+ * GitHub itself reports in the `X-OAuth-Scopes` header of an authenticated
+ * response. Repository registration asks this before it builds the flow that
+ * would create a webhook, for a cookie session and a bearer caller alike, so a
+ * token that granted only public identity is refused with a stable code and a
+ * remedy instead of a webhook request GitHub 404s.
  *
  * The probe is the smallest authenticated request there is — `GET /user`,
  * the same endpoint sign-in reads — and it reads only the header. Neither

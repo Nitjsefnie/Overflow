@@ -588,11 +588,11 @@ async function reconcileRepositoryAfterRepositoryRead(
     // of this log and every logger that prints the rethrown cause chain.
     const reportedError = redactPostgresError(error);
     // The console sink renders an error object through its stack, whose first
-    // line carries the message raw — and a member-chosen GitLab instance
-    // supplied text that rode into that message. The token is one bounded
-    // single line instead, so no instance can forge a journal line or drive
-    // the operator's terminal (issue 1042). redactPostgresError stays ahead:
-    // its redaction is about stored product data, orthogonal to the encoding.
+    // line carries the message raw — and a member-chosen GitLab instance can
+    // supply text that reaches that message. The token is one bounded single line
+    // instead, so no instance can forge a journal line or drive the operator's
+    // terminal. redactPostgresError stays ahead: its redaction is about stored
+    // product data, orthogonal to the encoding.
     console.error(`Reconciliation of repository ${repositoryId} failed.`, errorLogToken(reportedError));
     await dependencies.store.failRun(
       runId,

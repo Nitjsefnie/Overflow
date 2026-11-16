@@ -256,7 +256,7 @@ export class PostgresFoldMaterializationStore {
         throw new Error(cost === undefined ? "Reconciliation publication requires a pending run."
           : "Reconciliation cost publication requires a pending run.");
       }
-      // Data-subject suppressions check the import write itself (issue 1071):
+      // Data-subject suppressions check the import write itself:
       // inside the publication transaction, before any derived row or evidence
       // fact is written, so a pass that commits after a removal can never
       // re-write a suppressed person's identifiers.
@@ -266,9 +266,9 @@ export class PostgresFoldMaterializationStore {
           this.options.reconciliationFactByteLimit ?? DEFAULT_RECONCILIATION_FACT_BYTE_LIMIT);
       }
       // A stale snapshot must not replay a pre-claim state over rows an
-      // identity claim has since written (issue 446), so resolve the fold's
-      // unclaimed GitHub identities inside this publication transaction before
-      // any materialization applies fold state.
+      // identity claim has since written, so resolve the fold's unclaimed GitHub
+      // identities inside this publication transaction before any materialization
+      // applies fold state.
       const resolved = await reResolveIdentityClaims(transaction, scrubbed.fold);
       const publication = { ...scrubbed, fold: resolved };
       // One snapshot of the granted corrections for the whole run: settlements

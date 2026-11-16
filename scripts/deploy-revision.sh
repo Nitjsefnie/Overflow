@@ -14,7 +14,7 @@
 # incrementally, and the fast-forward below rewrites this file mid-run, so
 # the tail after `git merge --ff-only` would otherwise execute from the
 # pre-merge copy: a verification step the deployed commit adds would not run
-# in its own deploy (issue 747). Phase 1 is everything through the
+# in its own deploy. Phase 1 is everything through the
 # fast-forward, ending in
 #   exec env OVERFLOW_DEPLOY_HANDOFF_SHA="$full_sha" OVERFLOW_DEPLOY_HANDOFF_SERVING="$expected_serving" bash "$tree/scripts/deploy-revision.sh"
 # - the merged tree's own copy, with the deploy lock's fd 9 inherited across
@@ -88,7 +88,7 @@ map_refusal_prefix='Could not read a valid .github/required-checks.json at %s (a
 # that copy fails on the map (and jq itself is present) the gate re-parses
 # with the target SHA's own copy of the same file, which travels with every
 # commit exactly as the map does, so a manifest-shape change cannot deadlock
-# a tree whose parser predates it (issue 1104); neither copy reading the map
+# a tree whose parser predates it; neither copy reading the map
 # refuses fail-closed. Per context, a
 # check-run posted by the ledger App (OVERFLOW_DEPLOY_LEDGER_APP_ID, default
 # 5118623) attributes the context, and the NEWEST App check-run for it
@@ -218,9 +218,8 @@ required_checks_gate() {
     exit 1
   fi
   # The pin map as `check<TAB>workflow path` lines, one line per path: a check
-  # may be pinned to several workflow files (issue 1090 splits the workflows
-  # that read pull-request data, leaving one required context produced by a
-  # pull_request_target file and a push file), and every path it names is a
+  # may be pinned to several workflow files (one required context is produced by
+  # a pull_request_target file and a push file), and every path it names is a
   # workflow whose main-event job for that check counts. A missing file, invalid JSON,
   # anything but exactly one object of .github/workflows/*.yml paths or
   # non-empty lists of them, or an absent jq all fail here. The jq program is
@@ -236,8 +235,8 @@ required_checks_gate() {
   fi
   # The parse itself (jq present but the shape rejected, the file unreadable)
   # is recoverable in a way a missing binary is not: the tree's copy predates
-  # the map's shape exactly until the fast-forward this gate otherwise refuses
-  # (issue 1104's deadlock), and the target SHA carries its own copy of the
+  # the map's shape exactly until the fast-forward this gate otherwise refuses,
+  # and the target SHA carries its own copy of the
   # same tracked file, so re-parse with that one before giving up. A read of
   # the MAP that fails is not recoverable this way — there is nothing to
   # re-parse — and refuses above without any fallback read. jq exiting 127
@@ -393,10 +392,10 @@ required_checks_gate() {
       # non-success replaces a success, so a tie can only hold the deploy back.
       #
       # The pins are read ONCE per check, before the job loop: a check's pin
-      # set does not vary by row, and resolving it per row cost a command
+      # set does not vary by row, and resolving it per row costs a command
       # substitution per row — 40x the loop's time at 9000 rows, charged
       # against OVERFLOW_DEPLOY_CI_TIMEOUT in full because the deadline is only
-      # checked after this loop (issue 1090 review, finding 2).
+      # checked after this loop.
       check_pins=$(pins_for "$check")
       producer_ids=$'\n' decided_run=0 decided_attempt=0 status='' conclusion=''
       while IFS=$'\t' read -r job_run job_path job_id job_name job_attempt job_status job_conclusion; do
@@ -459,10 +458,9 @@ required_checks_gate() {
 
 # Every workflow path the gate's parsed pin map ($pins) gives a check, one per
 # line; nothing when the check has no pin. A check pinned to several workflow
-# files (issue 1090's split) yields all of them, so a producer job in ANY of
-# them counts as that check's producer — pinning only the first would leave the
-# others' check-runs unattributed and the deploy waiting on a context that had
-# in fact been judged.
+# files yields all of them, so a producer job in ANY of them counts as that
+# check's producer — pinning only the first would leave the others' check-runs
+# unattributed and the deploy waiting on a context that had in fact been judged.
 pins_for() {
   local key value
   while IFS=$'\t' read -r key value; do
@@ -542,7 +540,7 @@ else
   # fast-forward - and immediately the re-exec, because bash reads a script
   # incrementally and the fast-forward rewrites this file mid-run: the tail
   # would otherwise execute from the pre-merge copy, so a verification step
-  # the deployed commit adds would not run in its own deploy (issue 747).
+  # the deployed commit adds would not run in its own deploy.
   # The exec replaces this process with the merged tree's own copy, handing
   # over the resolved SHA and the pre-fetch anchor; fd 9 travels with it, so
   # the deploy lock is held across the handoff. Phase 2 holds no second exec,
@@ -560,11 +558,10 @@ else
   # main to it (a single-branch or custom-refspec clone may not). Resolved once;
   # the gates and the fast-forward all use this one value.
   full_sha=$(git rev-parse --verify 'FETCH_HEAD^{commit}')
-  # The refusal pull --ff-only used to make: HEAD must fast-forward to the
-  # fetched commit. A tree ahead of or diverged from main is refused here,
-  # before either gate. merge-base answers "no" with exit 1; any other nonzero
-  # status is git failing to answer, refused as undetermined rather than
-  # reported as a verdict about the tree's history.
+  # HEAD must fast-forward to the fetched commit. A tree ahead of or diverged
+  # from main is refused here, before either gate. merge-base answers "no"
+  # with exit 1; any other nonzero status is git failing to answer, refused as
+  # undetermined rather than reported as a verdict about the tree's history.
   ancestry_status=0
   git merge-base --is-ancestor HEAD "$full_sha" || ancestry_status=$?
   if [ "$ancestry_status" -eq 1 ]; then
@@ -635,7 +632,7 @@ fi
 # this source. A match also means
 # the migrations for HEAD are applied: the run that built this release ran
 # pnpm db:migrate at the same commit, immediately before building it. A
-# missing or unreadable REVISION (fresh host, pre-484 release) skips nothing.
+# missing or unreadable REVISION (fresh host, a release built before REVISION was recorded) skips nothing.
 # The fresh read is deliberate: the pre-fetch anchor can be repointed by an
 # off-procedure actor mid-deploy, so the skip compares against what serves now.
 serving_release=$(readlink -f "$tree/.next" || printf absent)
@@ -716,7 +713,7 @@ elif [ "$skip_value" = 1 ]; then
 fi
 curl --connect-timeout 5 --max-time 30 --retry 30 --retry-delay 1 \
   --retry-connrefused -fsS -o /dev/null -w '%{http_code}\n' "$url"
-# Sign-in smoke (issue 649): readiness certifies the database and the bundled
+# Sign-in smoke: readiness certifies the database and the bundled
 # schema but cannot see Auth.js trust configuration, so a deployment whose
 # documented environment cannot sign in passed the check above. GET
 # /api/auth/providers runs the Auth.js configuration and answers 500
@@ -754,7 +751,7 @@ previous_release_name="${previous_release##*/}"
 # Capture-then-match, not a printf|head|grep pipeline: grep -q exits after its
 # first match, so on a long listing the consumers can exit while printf is
 # still writing, the producer dies by SIGPIPE (status 141) and pipefail turns
-# the guard false — silently skipping the prune (issue 624). The herestring's
+# the guard false — silently skipping the prune. The herestring's
 # producer has already finished before head reads it.
 newest_three=$(head -n 3 <<<"$retained")
 if grep -Fxq -- "$previous_release_name" <<<"$newest_three"; then

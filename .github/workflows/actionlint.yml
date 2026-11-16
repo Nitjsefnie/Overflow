@@ -4,7 +4,7 @@ name: actionlint
 # correctness; zizmor independently checks workflow security and supply-chain
 # posture. Both are pinned, and actionlint's archive is checksum-verified.
 #
-# THE PULL-REQUEST LEG IS NOT HERE (issue 1090). It is
+# THE PULL-REQUEST LEG IS NOT HERE. It is
 # .github/workflows/pr-gates.yml, job actionlint, whose only trigger is
 # `pull_request_target`, because it fetches a pull request's head ref and a
 # privileged trigger would run that step with the default branch's privileges.
@@ -32,8 +32,8 @@ concurrency:
   # Every leg here keys on its own SHA, so no push to main and no dispatch
   # shares a group: GitHub keeps one PENDING run per group and cancels the
   # superseded one even with cancel-in-progress false, and a cancelled
-  # conclusion on a merged SHA makes the deploy gate refuse immediately
-  # (issue 474). The pull-request leg runs in pr-gates.yml, with a group
+  # conclusion on a merged SHA makes the deploy gate refuse immediately.
+  # The pull-request leg runs in pr-gates.yml, with a group
   # per pull request: pr-gates-${{ github.event.pull_request.number }}.
   #
   # cancel-in-progress is false so no in-flight run is destroyed; on a

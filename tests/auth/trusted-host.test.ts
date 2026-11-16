@@ -23,7 +23,7 @@ function env(overrides: Record<string, string | undefined>): NodeJS.ProcessEnv {
 
 describe("authTrustHost", () => {
   it("trusts a production deployment configured from only the documented settings", () => {
-    // The issue 649 case: OVERFLOW_APP_URL present and parsable, no operator variable.
+    // OVERFLOW_APP_URL present and parsable, no operator variable.
     expect(
       authTrustHost(env({ NODE_ENV: "production", OVERFLOW_APP_URL: "http://127.0.0.1:3111" })),
     ).toBe(true);

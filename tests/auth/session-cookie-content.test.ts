@@ -7,11 +7,11 @@ import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql } from "@/lib/db/client";
 
 /**
- * The session cookie's content, end to end against the installed @auth/core
- * (issue 678): the /account-data notice promises that sign-in reads only the
+ * The session cookie's content, end to end against the installed @auth/core:
+ * the /account-data notice promises that sign-in reads only the
  * public GitHub identity — the numeric user id and the login — so the cookie
  * minted by the real OAuth handshake must hold exactly that, with no display
- * name, no e-mail claim, and no avatar (issue 1075). The same notice describes
+ * name, no e-mail claim, and no avatar. The same notice describes
  * the cookie as encrypted, which the decoded payload only fits if the real
  * `encode` produced it.
  *
@@ -162,7 +162,7 @@ beforeEach(() => {
 
 // Workers are reused across files (isolate: false): the pinned clock and any global
 // stub belong to this file alone — a stub left installed would leak into every later
-// file this worker runs (issue 753).
+// file this worker runs.
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -275,7 +275,7 @@ describe("the session cookie the real sign-in handshake mints", () => {
 
     // The public identity only: the login is the name, never the display
     // name; the e-mail claim is gone entirely, not merely empty, and the
-    // avatar the /user body carries never enters the cookie (issue 1075).
+    // avatar the /user body carries never enters the cookie.
     expect(payload.name).toBe(login);
     expect(payload.name).not.toBe("Display Name");
     expect(Object.hasOwn(payload, "email")).toBe(false);
@@ -306,7 +306,7 @@ describe("the session cookie the real sign-in handshake mints", () => {
     expect(session.user.role).toBe("MEMBER");
 
     // The storage path ran inside the same handshake, against an avatar-bearing
-    // /user body: the account row's avatar column reads null (issue 1075).
+    // /user body: the account row's avatar column reads null.
     const [row] = await sql!<({ avatar_url: string | null }[])>`
       select avatar_url from users where id = ${userId}
     `;
@@ -316,8 +316,8 @@ describe("the session cookie the real sign-in handshake mints", () => {
 
 describe("a session cookie minted before the epoch existed, refreshed", () => {
   it("loses the display name and the e-mail at the next session read, and the stripped token is what persists", async () => {
-    // A token minted after the issue-678 projection but before the issue-1043
-    // epoch: the profile's display name as the name, the e-mail claim
+    // A token in the shape an earlier build minted, which a browser may still
+    // hold: the profile's display name as the name, the e-mail claim
     // present, and the epoch claim stamped at its sign-in. (An epoch-less
     // token dies at this refresh instead — tests/auth/session-revocation.test.ts
     // pins that leg.) The sub is a UUID literal because that is what

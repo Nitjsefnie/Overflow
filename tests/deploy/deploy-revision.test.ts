@@ -305,7 +305,7 @@ exit 0
     // repeat count must stay small enough that the script's own stdout (it
     // prints the whole listing for the deploy record) stays under
     // spawnSync's 1 MiB default maxBuffer, or Node kills the script before
-    // the guard is reached (observed: SIGTERM/ENOBUFS at 200000 lines).
+    // the guard is reached (200000 lines ends in SIGTERM/ENOBUFS).
     const result = await runDeploy(fixture, {
       FIND_SHIM_LISTING_REPEAT: "6000",
       FIND_SHIM_LISTING_REPEAT_NAME: previous,
@@ -399,10 +399,10 @@ exit 0
   });
 
   it("aborts on a failed sign-in smoke after readiness passed, before the webhook upgrade and the prune", async () => {
-    // Issue 649: readiness certifies the database, not Auth.js trust, so the
-    // smoke check that follows it must refuse the deploy on its own. The
-    // providers URL is the only one that fails here, proving readiness ran
-    // first and the failure is the smoke's.
+    // Readiness certifies the database, not Auth.js trust, so the smoke check
+    // that follows it must refuse the deploy on its own. The providers URL is
+    // the only one that fails here, proving readiness ran first and the failure
+    // is the smoke's.
     const fixture = await makeFixture();
     const result = await runDeploy(fixture, { CURL_FAIL_MATCH: "/api/auth/providers" });
 
@@ -1024,7 +1024,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
   });
 
   it("counts a producer job at a context's SECOND pinned path as that context's producer", async () => {
-    // Issue 1090. The split leaves one required context produced by two
+    // One required context can be produced by two
     // workflow files, and the gate resolves each required check through its
     // pin. Reading only the first path would leave the second file's check-run
     // unattributed: the gate would report `verify (unattributed check-run N)`
@@ -1154,8 +1154,8 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
   });
 
   /**
-   * The parser-skew shape (issue 1104): the tree's parser copy predates the
-   * map's shape, so the tree's parse fails and only the target SHA's own copy
+   * The parser-skew shape: the tree's parser copy predates the map's
+   * shape, so the tree's parse fails and only the target SHA's own copy
    * of scripts/required-checks-parse.jq can read the map. The strict parser
    * below rejects EVERY map, standing in for a copy one shape behind.
    */
@@ -1751,8 +1751,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     const result = await runDeploy(fixture);
 
     // No skip: the install started. The run then refuses at the pre-existing
-    // test -d on the dangling anchor's cache, as it already did before this
-    // gate existed.
+    // test -d on the dangling anchor's cache.
     expect(result.status, result.stdout).toBe(1);
     expect(result.stdout).not.toContain("Already serving");
     const entries = await readLog(fixture.shimLog);
@@ -2067,8 +2066,8 @@ async function makeGitFixture(): Promise<{ fixture: Fixture; behind: string; tip
   // The post-fast-forward half executes the merged tree's own copy of the
   // deploy script, so the origin base commit carries the repository's current
   // bytes at that path: the exec target must exist in the fixture tree. The
-  // gate parses the pin map with the tree's own copy of the parser beside it
-  // (issue 1104), so that path is carried the same way.
+  // gate parses the pin map with the tree's own copy of the parser beside it,
+  // so that path is carried the same way.
   await mkdir(path.join(origin, "scripts"));
   await writeFile(path.join(origin, "scripts", "deploy-revision.sh"), await readFile(script, "utf8"));
   await writeFile(path.join(origin, "scripts", "required-checks-parse.jq"), await readFile(parser, "utf8"));
@@ -2198,11 +2197,11 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
   });
 
   it("executes the merged tree's own copy for the post-merge half, so a verification step the deployed commit adds runs in its own deploy", async () => {
-    // Issue 747: bash reads a script incrementally and the fast-forward
+    // bash reads a script incrementally and the fast-forward
     // rewrites the script file mid-run, so without the re-exec the tail after
     // `git merge --ff-only` runs from the pre-merge copy and a step commit B
     // appends never runs in B's own deploy. The tree's own copy is what
-    // starts this run, so the case is the issue's.
+    // starts this run.
     const { fixture, tip, git } = await makeGitFixture();
     const originGit = (...args: string[]): string => {
       const result = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], {
@@ -2332,18 +2331,18 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
   });
 
   it("deploys a tree carrying its own .claude/ session machinery, and refuses that same tree from a script whose allowlist never learned it", async () => {
-    // Why this case exists separately: the positive direction was pinned only
-    // by OPERATIONAL_IGNORED in the shared fixture. Deleting ".claude/" from
-    // that one line left every other case in this file green, because each
-    // behavioural assertion read its expectation back out of it -- and it is
-    // also the only OPERATIONAL_IGNORED entry with no real directory behind
-    // it. Nothing here reads either constant: the tree is planted for real, the
-    // listing is real git's, and the refusal comes from the script itself with
-    // .claude/ taken out of its allowlist. So the case dies whichever half is
-    // mutated, and it is the only one that does.
+    // Why this case exists separately: otherwise the positive direction is
+    // pinned only by OPERATIONAL_IGNORED in the shared fixture. Deleting
+    // ".claude/" from that one line leaves every other case in this file green,
+    // because each behavioural assertion reads its expectation back out of it
+    // -- and it is also the only OPERATIONAL_IGNORED entry with no real
+    // directory behind it. Nothing here reads either constant: the tree is
+    // planted for real, the listing is real git's, and the refusal comes from
+    // the script itself with .claude/ taken out of its allowlist. So the case
+    // dies whichever half is mutated, and it is the only one that does.
     const { fixture, behind, tip, git } = await makeGitFixture();
     await denyByDefault(fixture.tree, git);
-    // The incident's shape: the autoloaded working rules and the priority
+    // The shape to guard: the autoloaded working rules and the priority
     // board, nested, so git yields the directory entry and not its contents.
     await mkdir(path.join(fixture.tree, ".claude", "rules"), { recursive: true });
     await writeFile(path.join(fixture.tree, ".claude", "rules", "overflow-session.md"), "rules\n");
@@ -2356,8 +2355,8 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
       git("ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "--no-empty-directory"),
     ).toContain(".claude/");
 
-    // The script as it stood before .claude/ was admitted. The alternative is
-    // located inside the allowlist assignment and nowhere else, and stripped
+    // The script with .claude/ not admitted. The alternative is located
+    // inside the allowlist assignment and nowhere else, and stripped
     // wherever in the alternation it sits: an allowlist gets reordered and
     // rewrapped constantly, and a mutation coupled to that shape dies on a
     // script that is still correct. The optional leading bar is what makes the
@@ -2394,9 +2393,9 @@ describe("scripts/deploy-revision.sh against a real git tree", () => {
     expect(afterRefusal.some((entry) => entry.cmd === "pnpm"), "nothing after the gates ran").toBe(false);
     await expect(readFile(path.join(fixture.tree, ".claude", "rules", "overflow-session.md"), "utf8")).resolves.toBe("rules\n");
 
-    // The same tree, the script as committed: the deploy the issue's operator
-    // could not make. It follows the refusal because that refusal leaves the
-    // tree and HEAD exactly as they were, .claude/ included.
+    // The same tree, the script as committed: the deploy an operator makes.
+    // It follows the refusal because that refusal leaves the tree and HEAD
+    // exactly as they were, .claude/ included.
     const result = await runDeploy(fixture, HERMETIC_GIT_ENV, realGit);
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);

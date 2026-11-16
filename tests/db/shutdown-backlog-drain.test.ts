@@ -66,8 +66,7 @@ async function startSilentListener(): Promise<{ port: number; close(): Promise<v
 }
 
 /**
- * Work the pool accepted but never handed to a connection, when the client is ended. Overflow
- * issue 223.
+ * Work the pool accepted but never handed to a connection, when the client is ended.
  *
  * `handler()` queues a query whenever every connection is busy, and `end()` settles connections
  * rather than that queue. What stock then does with the backlog depends on something the caller
@@ -76,18 +75,18 @@ async function startSilentListener(): Promise<{ port: number; close(): Promise<v
  * socket close that follows reaches `onclose` with the backlog still in the queue and RESURRECTS
  * that connection to serve it, after `sql.end()` has already resolved. Where the server is
  * unreachable instead, the resurrected connection never completes and the same work is never
- * settled at all. Both were observed on the build before this patch: this file's first case was
- * served by a resurrected connection, and its second timed out.
+ * settled at all. Both are observed on stock: this file's first case is served by a resurrected
+ * connection, and its second times out.
  *
  * `destroy()` — the path `sql.end({ timeout })` reaches when the timer wins — already disposes of
  * the same queue with `CONNECTION_DESTROYED`. The patch gives the ordinary path the same
  * disposition, before the connections are told to end, so the two agree and the queue is empty by
  * the time any `onclose` could read it.
  *
- * The visible change is that a shutdown of a perfectly healthy client now rejects queued work
- * that it used to run behind the caller's back. That is the point: a caller can tell the
- * difference between "your query ran" and "your query never will", and gets neither answer from a
- * promise that settles whenever a resurrected connection happens to reach the server.
+ * A shutdown of a perfectly healthy client rejects queued work rather than running it behind the
+ * caller's back. That is the point: a caller can tell the difference between "your query ran" and
+ * "your query never will", and gets neither answer from a promise that settles whenever a
+ * resurrected connection happens to reach the server.
  *
  * `closeSql()` is awaited by `scripts/migrate.ts`, `scripts/reconcile.ts` and this suite; the
  * service has no shutdown handler that reaches it, and nothing here should be read as covering
@@ -235,11 +234,11 @@ describe("ending a client that still has queued work", () => {
     // the pool's `ending` flag.
     await expect(sql`select 2 as value`).rejects.toMatchObject({ code: "CONNECTION_ENDED" });
 
-    // `reserve()` pushes into the same queue without going through `handler()`, so before the
-    // patch it was served: against a reachable server by opening a fresh socket after the
-    // shutdown had resolved, and against an unreachable one by waiting for a connection that
-    // never comes -- a promise nothing settles, since the drain has already run and runs once.
-    // It now answers exactly as the query above does.
+    // `reserve()` pushes into the same queue without going through `handler()`, so stock serves
+    // it: against a reachable server by opening a fresh socket after the shutdown has resolved,
+    // and against an unreachable one by waiting for a connection that never comes -- a promise
+    // nothing settles, since the drain has already run and runs once. With the patch it answers
+    // exactly as the query above does.
     await expect(sql.reserve()).rejects.toMatchObject({ code: "CONNECTION_ENDED" });
   }, 120_000);
 });

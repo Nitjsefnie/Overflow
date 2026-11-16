@@ -8,7 +8,7 @@ import { getSql } from "@/lib/db/client";
 import type { UnwritableClosure } from "@/lib/fold/repository-fold";
 import type { ReconciliationJobState } from "@/lib/fold/reconciliation-jobs";
 
-/** A deliberately small SQL boundary that keeps dashboard projections easy to exercise without a database; `unsafe` is the unnamed-statement escape hatch the board read serves through (issue 838). */
+/** A deliberately small SQL boundary that keeps dashboard projections easy to exercise without a database; `unsafe` is the unnamed-statement escape hatch the board read serves through. */
 export type DashboardSql = {
   <T extends readonly unknown[] = readonly unknown[]>(strings: TemplateStringsArray, ...values: unknown[]): Promise<T>;
   unsafe<T extends readonly unknown[] = readonly unknown[]>(text: string, values?: unknown[]): Promise<T>;
@@ -263,8 +263,8 @@ export type ModerationRepositoryProjection = {
 /**
  * A scope that runs a whole projection's reads against one database snapshot.
  * `getDashboard` hands its callback every read the projection makes, so a commit
- * landing mid-projection cannot show the callback two different committed states
- * (issue 443). Tests supply their own to observe or replace the transaction boundary
+ * landing mid-projection cannot show the callback two different committed states.
+ * Tests supply their own to observe or replace the transaction boundary
  * without a database.
  */
 export type DashboardBegin = <T>(run: (sql: DashboardSql) => Promise<T>) => Promise<T>;
@@ -502,7 +502,7 @@ type ModerationRepositoryRow = {
  * negative headroom. The six reads below all describe the same committed instant. Each
  * is its own autocommit statement, so without a shared snapshot a commit landing after
  * the first read splits the projection across two states of the ledger — a balance from
- * before it beside a settlement history from after it (issue 443).
+ * before it beside a settlement history from after it.
  */
 export async function getDashboard(
   accountId: string,
@@ -947,8 +947,8 @@ export async function listSelfWorkCalibrations(
  * own calibrated closures, and the outsider settlements the account owes on. One
  * selection per request — the projections are pure derivations of this result, so a
  * caller cannot project without loading, and a reconciliation commit landing between
- * two independent selections can no longer make the breakdown stop being a partition
- * of the pooled comparison (issue 435). `repository_name` is carried for the grouping
+ * two independent selections cannot make the breakdown stop being a partition
+ * of the pooled comparison. `repository_name` is carried for the grouping
  * reader; the pooled one ignores it.
  */
 export type CalibrationCohorts = {
@@ -963,7 +963,7 @@ export type CalibrationCohorts = {
  * landing between them cannot split the cohort pair across two committed states — at
  * READ COMMITTED each statement takes its own snapshot, so the pair could straddle one.
  * The projections are pure derivations of the pair, so the breakdown stays a
- * partition of the pooled comparison (issue 499).
+ * partition of the pooled comparison.
  */
 export async function loadCalibrationCohorts(
   accountId: string,
@@ -1362,8 +1362,7 @@ const SNAPSHOT_SCOPE_OPTIONS = "read only isolation level repeatable read";
  *
  * The real postgres client carries a `begin`, so the projection's reads run
  * inside one read-only repeatable-read transaction on it. An injected seam
- * without a `begin` — the unit-test fakes — keeps its current behavior and
- * reads autocommit, unchanged.
+ * without a `begin` — the unit-test fakes — reads autocommit.
  */
 function defaultSnapshotScope(sql: DashboardSql): DashboardBegin {
   // Held in a const so the typeof narrowing survives into the returned closure;

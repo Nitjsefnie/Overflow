@@ -66,7 +66,7 @@ describe("the dashboard projection reads one database snapshot", () => {
   });
 
   it("keeps settledBalance and recentSettlements on one side of a commit landing mid-projection", async () => {
-    // Issue 443's deterministic interleaving: the settlement is deleted before
+    // A deterministic interleaving: the settlement is deleted before
     // the projection starts, and a second session commits its restoration after
     // the projection's first read. Autocommit reads tear here — the balance
     // query answers from before the commit and the settlement query from after
@@ -128,7 +128,7 @@ describe("the dashboard projection reads one database snapshot", () => {
 
       // Single-instant consistency: both figures describe the settlement, or
       // neither does. The torn answer — a balance from before the commit beside
-      // a settlement history from after it — is issue 443's defect.
+      // a settlement history from after it — is the defect to rule out.
       const balanceIncludesSettlement = dashboard.settledBalance === BALANCE_WITH_SETTLEMENT;
       const historyIncludesSettlement = dashboard.recentSettlements.some(
         (settlement) => settlement.credits === SETTLEMENT_CREDITS,
