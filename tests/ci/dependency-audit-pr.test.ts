@@ -47,9 +47,8 @@ const REFUSALS = {
     "::error::could not fetch the pull request's base commit; refusing to audit a tree this event is not about",
   conflict: "does not merge cleanly into its base",
   mergeTree: "::error::git merge-tree could not produce a merge tree for this pull request (exit",
-  sanitizedExists:
-    "already exists; refusing to write the pull request's manifests into a directory this run did not create",
-  manifestEntry: "must be exactly one mode-100644 blob entry in the merge tree; refusing",
+  sanitizedExists: "already exists; refusing to write manifests into a directory this run did not create",
+  manifestEntry: "must be exactly one mode-100644 blob entry in the ${3:?}; refusing",
 };
 
 /** Planted in pull-request-controlled content; must never reach the step's output. */
@@ -169,8 +168,10 @@ describe("pr-gates.yml's shape", () => {
     // The ls-tree single-blob discipline, per manifest, into a fresh
     // sanitized directory, and the audit reads from it.
     expect(run).toContain('git ls-tree "${1:?}" -- "${2:?}"');
-    expect(run).toContain('git cat-file blob "${blob}" > "${sanitized}/${manifest}"');
+    expect(run).toContain('git cat-file blob "${blob}" > "${2}/${manifest}"');
     expect(run).toContain("for manifest in package.json pnpm-lock.yaml");
+    expect(run).toContain('materialize "${merged_tree}" "${sanitized}" "merge tree"');
+    expect(run).toContain('materialize "${OVERFLOW_BASE_SHA}" "${base_manifests}" "base commit\'s tree"');
     expect(run).toContain("${RUNNER_TEMP}/audit-manifests");
     expect(run).toContain('cd -- "${sanitized}"');
   });
@@ -188,145 +189,133 @@ describe("pr-gates.yml's shape", () => {
     }
   });
 
-  it("audits with the push leg's own audit step, byte-identical", () => {
-    // Extracted comparison, never a hand-copied expectation: the audit half
-    // (classifier, verdict dispatch, transient retry) of both files is sliced
-    // from the parsed run text and required equal, so the two legs cannot
-    // drift and a hand-edit to one fails this equality immediately.
-    const portionOf = (source: Workflow, jobKey: string, stepName: string): string => {
-      const step = source.jobs?.[jobKey]?.steps?.find((entry) => entry.name === stepName);
-      const run = step?.run ?? "";
-      const idx = run.indexOf("set -uo pipefail");
-      expect(idx, `${stepName} must carry the audit portion`).toBeGreaterThan(-1);
-      return run.slice(idx);
-    };
-    const push = portionOf(pushWorkflow, JOB_NAME, "Audit lockfile advisories");
-    const pr = portionOf(workflow, JOB_NAME, AUDIT_STEP_NAME);
-    expect(pr).toBe(push);
+  it("classifies with the push leg's own five-verdict classifier, byte-identical", () => {
+    // Extracted, never hand-copied: the classifier script is the part the two
+    // legs still share (the PR leg's retry and verdict dispatch differ, since
+    // its advisories verdict goes on to audit the base), so it is sliced out
+    // of both parsed run texts and required equal.
+    const classifierOf = (run: string | undefined): string[] =>
+      [...(run ?? "").matchAll(/result=\$\(AUDIT_EXIT="\$code" node -e '\n([\s\S]*?)\n'\)/g)].map((match) => match[1]!);
+    const push = classifierOf(pushWorkflow.jobs?.[JOB_NAME]?.steps?.find((step) => step.name === "Audit lockfile advisories")?.run);
+    expect(push).toHaveLength(1);
+    expect(push[0]).toContain('"clean|no known vulnerabilities found"');
+    expect(classifierOf(auditStep.run)).toEqual(push);
   });
 });
 
 describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
   let root = "";
   let cases = 0;
+  let shared: Fixture;
 
   beforeAll(async () => {
     root = await tempDirectories.createAsync(join(tmpdir(), "dependency-audit-pr-"));
+    shared = await fixture({ "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE }, { "README.md": "docs only\n" });
   });
 
   afterAll(async () => {
     await tempDirectories.disposeAsync(root);
   });
 
+  type Fixture = { workspace: string; baseSha: string; headSha: string };
+  /** One served answer of the `pnpm` stub. */
+  type Outcome = { code: number; stdout: string; stderr?: string };
+  /** The stub's whole model: `<head|base> <argv>` to the answers it serves in order; any other call exits 97. */
+  type Calls = Record<string, Outcome[]>;
+
   const BASE_PACKAGE = `${JSON.stringify({ name: "scratch", version: "1.0.0", private: true }, null, 2)}\n`;
   const BASE_LOCKFILE = "lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies: {}\n";
-  /** The stub replays these captured-SHAPES; no registry, no real advisory. */
-  const CLEAN = {
-    code: 0,
-    stdout: `${JSON.stringify({ advisories: {}, metadata: { vulnerabilities: {} } })}\n`,
-    stderr: "",
+  const H = "head audit --json";
+  const B = "base audit --json";
+  const headWhy = (...selectors: string[]): string => `head why --json ${selectors.join(" ")}`;
+  const baseWhy = (...selectors: string[]): string => `base why --json ${selectors.join(" ")}`;
+  const G1 = "GHSA-2222-3333-4444";
+  const G2 = "GHSA-5555-6666-7777";
+  const X = "x@1.0.0";
+  /** The stub replays these captured SHAPES; no registry, no real advisory. */
+  const audit = (...found: Array<[string | undefined, string, string?]>): Outcome[] => [{ code: found.length > 0 ? 1 : 0, stdout: `${JSON.stringify({
+    advisories: Object.fromEntries(found.map(([id, spec, path], index) => [String(1106913 + index), {
+      module_name: spec.split("@")[0], severity: "high", title: "synthetic advisory for the fixture only", vulnerable_versions: "<1.3.1",
+      patched_versions: ">=1.3.1", github_advisory_id: id, findings: [{ version: spec.split("@")[1], paths: [path ?? `.>${spec.split("@")[0]}`] }],
+    }])),
+    metadata: { vulnerabilities: { high: found.length } },
+  })}\n` }];
+  const IMPORTER = { name: "scratch", version: "1.0.0", depField: "dependencies" };
+  /** A `pnpm why --json` node for name@version, expanded with its dependents. */
+  const node = (spec: string, ...dependents: object[]): object => ({ name: spec.split("@")[0], version: spec.split("@")[1], dependents });
+  const marked = (spec: string, mark: "deduped" | "circular"): object => ({ name: spec.split("@")[0], version: spec.split("@")[1], [mark]: true });
+  const why = (...roots: object[]): Outcome[] => [{ code: 0, stdout: JSON.stringify(roots) }];
+  /** x@1.0.0 under `depth` levels of two dependents each, every level's pair depending on the next: 2^depth paths, each node expanded once. */
+  const lattice = (depth: number): object => {
+    let pair = [node("a1@1.0.0", IMPORTER), node("b1@1.0.0", IMPORTER)];
+    for (let level = 2; level <= depth; level += 1) {
+      pair = [node(`a${level}@1.0.0`, ...pair), node(`b${level}@1.0.0`, marked(`a${level - 1}@1.0.0`, "deduped"), marked(`b${level - 1}@1.0.0`, "deduped"))];
+    }
+    return node(X, ...pair);
   };
-  const ADVISORIES = {
-    code: 1,
-    stdout:
-      `${JSON.stringify({
-        advisories: {
-          "1106913": {
-            module_name: "scratch-left-pad",
-            severity: "high",
-            title: "synthetic advisory for the fixture only",
-            vulnerable_versions: "<1.3.1",
-            patched_versions: ">=1.3.1",
-          },
-        },
-        metadata: { vulnerabilities: { high: 1 } },
-      })}\n`,
-    stderr: "",
-  };
-  const SERVER_5XX = {
-    code: 1,
-    stdout: `${JSON.stringify({
-      error: {
-        code: "ERR_PNPM_AUDIT_BAD_RESPONSE",
-        message:
-          "The audit endpoint (at http://127.0.0.1:40857/-/npm/v1/security/audits/quick) responded with 503: {\"error\":\"service unavailable\"}. The audit endpoint (at http://127.0.0.1:40857/-/npm/v1/security/audits) responded with 503: {\"error\":\"service unavailable\"}",
-      },
-    })}\n`,
-    stderr: "",
-  };
+  const SERVER_5XX: Outcome = { code: 1, stdout: `${JSON.stringify({ error: { code: "ERR_PNPM_AUDIT_BAD_RESPONSE", message:
+    "The audit endpoint (at http://127.0.0.1:40857/-/npm/v1/security/audits/quick) responded with 503: {\"error\":\"service unavailable\"}. The audit endpoint (at http://127.0.0.1:40857/-/npm/v1/security/audits) responded with 503: {\"error\":\"service unavailable\"}" } })}\n` };
+  const NOT_FOUND: Outcome = { code: 1, stdout: `${JSON.stringify({ error: { code: "ERR_PNPM_AUDIT_BAD_RESPONSE", message: "The audit endpoint (at https://registry.npmjs.org/-/npm/v1/security/audits/quick) responded with 404: not found" } })}\n` };
+  const UNPARSEABLE = "::error::the audit report or pnpm why output in the merge tree is not in the shape this step reads; refusing";
+  const pre = (id: string, spec = X): string => `::warning::${id} in ${spec} is pre-existing on the base`;
 
   /** Head entry for a path the pull request DELETES from the base tree. */
   const DELETED = Symbol("deleted");
 
+  const GIT_ENV: Record<string, string> = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "scratch repository",
+    GIT_AUTHOR_EMAIL: "scratch@example.invalid", GIT_COMMITTER_NAME: "scratch repository", GIT_COMMITTER_EMAIL: "scratch@example.invalid" };
+  const g = (repo: string, ...args: string[]): string => {
+    const result = spawnSync("git", args, { cwd: repo, encoding: "utf8", env: { ...process.env, ...GIT_ENV } });
+    if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
+    return result.stdout.trim();
+  };
+
   /**
-   * A scratch origin whose `main` carries `base` at OVERFLOW_BASE_SHA, plus `head`
-   * built on it — the two commits the step is handed as this event's head
-   * and base — and a workspace (a full clone, the step's cwd, the state
-   * actions/checkout's fetch-depth: 0 leaves on a pull_request_target event).
+   * A scratch origin: `stage` writes a blob and stages it at a path, and
+   * `publish` points main at the base and `feature` at the head and clones a
+   * workspace (the step's cwd, the state actions/checkout's fetch-depth: 0
+   * leaves on a pull_request_target event). main stays at the base, so the
+   * clone carries both commits and their shared history in one fetch, and
+   * merge-tree finds their true merge base.
    */
-  async function fixture(
-    base: Record<string, string>,
-    head: Record<string, string | { mode: string; content: string } | typeof DELETED>,
-  ): Promise<{ workspace: string; baseSha: string; headSha: string }> {
-    cases += 1;
-    const origin = join(root, `origin-${cases}`);
-    const workspace = join(root, `workspace-${cases}`);
-    await mkdir(origin, { recursive: true });
-    const gitEnv: Record<string, string> = {
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_AUTHOR_NAME: "scratch repository",
-      GIT_AUTHOR_EMAIL: "scratch@example.invalid",
-      GIT_COMMITTER_NAME: "scratch repository",
-      GIT_COMMITTER_EMAIL: "scratch@example.invalid",
-    };
-    const g = (repo: string, ...args: string[]): string => {
-      const result = spawnSync("git", args, { cwd: repo, encoding: "utf8", env: { ...process.env, ...gitEnv } });
-      if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
-      return result.stdout.trim();
-    };
-    let blobCount = 0;
-    const writeBlob = async (repo: string, content: string): Promise<string> => {
-      const file = join(root, `blob-${cases}-${(blobCount += 1)}`);
+  async function scratchOrigin(): Promise<{ dir: string; stage: (path: string, content: string, mode?: string) => Promise<void>; publish: (baseSha: string, headSha: string) => Fixture }> {
+    const dir = join(root, `origin-${(cases += 1)}`);
+    await mkdir(dir, { recursive: true });
+    g(dir, "init", "--quiet", "--initial-branch=main");
+    g(dir, "config", "uploadpack.allowAnySHA1InWant", "true");
+    let blobs = 0;
+    const stage = async (path: string, content: string, mode = "100644"): Promise<void> => {
+      const file = join(root, `blob-${cases}-${(blobs += 1)}`);
       await writeFile(file, content);
-      return g(repo, "hash-object", "-w", file);
+      g(dir, "update-index", "--add", "--cacheinfo", `${mode},${g(dir, "hash-object", "-w", file)},${path}`);
     };
+    const publish = (baseSha: string, headSha: string): Fixture => {
+      g(dir, "update-ref", "refs/heads/main", baseSha);
+      g(dir, "update-ref", "refs/heads/feature", headSha);
+      g(root, "clone", "--quiet", `file://${dir}`, `${dir}-workspace`);
+      return { workspace: `${dir}-workspace`, baseSha, headSha };
+    };
+    return { dir, stage, publish };
+  }
 
-    g(origin, "init", "--quiet", "--initial-branch=main");
-    g(origin, "config", "uploadpack.allowAnySHA1InWant", "true");
-    for (const [path, content] of Object.entries(base)) {
-      const id = await writeBlob(origin, content);
-      g(origin, "update-index", "--add", "--cacheinfo", `100644,${id},${path}`);
-    }
-    g(origin, "commit", "--quiet", "-m", "base");
-    const baseSha = g(origin, "rev-parse", "HEAD");
-
+  /** `base` committed at OVERFLOW_BASE_SHA, and `head` built on it: the two commits the step is handed. */
+  async function fixture(base: Record<string, string>, head: Record<string, string | { mode: string; content: string } | typeof DELETED>): Promise<Fixture> {
+    const origin = await scratchOrigin();
+    for (const [path, content] of Object.entries(base)) await origin.stage(path, content);
+    g(origin.dir, "commit", "--quiet", "-m", "base");
+    const baseSha = g(origin.dir, "rev-parse", "HEAD");
     for (const [path, entry] of Object.entries(head)) {
       if (entry === DELETED) {
         // The base's entry is still in the index after its commit; a deleted
         // path must leave it explicitly, or write-tree rebuilds the base's
         // file and nothing is deleted.
-        g(origin, "update-index", "--force-remove", path);
+        g(origin.dir, "update-index", "--force-remove", path);
         continue;
       }
       const spec = typeof entry === "string" ? { mode: "100644", content: entry } : entry;
-      const id = await writeBlob(origin, spec.content);
-      g(origin, "update-index", "--add", "--cacheinfo", `${spec.mode},${id},${path}`);
+      await origin.stage(path, spec.content, spec.mode);
     }
-    const tree = g(origin, "write-tree");
-    const headSha = g(origin, "commit-tree", tree, "-p", baseSha, "-m", "head");
-    // main stays at the base, so the clone carries both commits and their
-    // shared history in one fetch, and merge-tree below finds their true
-    // merge base.
-    g(origin, "update-ref", "refs/heads/main", baseSha);
-    g(origin, "update-ref", "refs/heads/feature", headSha);
-
-    const clone = spawnSync("git", ["clone", "--quiet", `file://${origin}`, workspace], {
-      encoding: "utf8",
-      env: { ...process.env, ...gitEnv },
-    });
-    if (clone.status !== 0) throw new Error(`clone failed: ${clone.stderr}`);
-    return { workspace, baseSha, headSha };
+    return origin.publish(baseSha, g(origin.dir, "commit-tree", g(origin.dir, "write-tree"), "-p", baseSha, "-m", "head"));
   }
 
   interface CaseResult {
@@ -334,36 +323,36 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
     stdout: string;
     stderr: string;
     sanitized: string;
-    /** The stub's record: one `cwd<TAB>argv` line per invocation. */
+    baseManifests: string;
+    /** The stub's record: one `<head|base|cwd> <argv>` line per invocation. */
     invocations: string[];
     sleeps: string[];
   }
 
-  async function runStep(
-    fx: { workspace: string; baseSha: string; headSha: string },
-    outcomes: Array<{ code: number; stdout: string; stderr: string }>,
-  ): Promise<CaseResult> {
+  async function runStep(fx: Fixture, calls: Calls): Promise<CaseResult> {
     const home = join(root, `run-${(cases += 1)}`);
     mkdirSync(join(home, "bin"), { recursive: true });
     const stubDir = join(home, "stub");
     mkdirSync(stubDir, { recursive: true });
-    writeFileSync(join(stubDir, "outcomes.json"), JSON.stringify(outcomes));
+    writeFileSync(join(stubDir, "calls.json"), JSON.stringify(calls));
     writeFileSync(join(stubDir, "invocations"), "");
     writeFileSync(join(stubDir, "sleeps"), "");
-    writeFileSync(join(stubDir, "counter"), "0");
     writeFileSync(
       join(home, "bin", "pnpm"),
       [
         "#!/usr/bin/env node",
         'const fs = require("node:fs");',
         'const dir = process.env.AUDIT_STUB_DIR;',
-        'fs.appendFileSync(dir + "/invocations", process.cwd() + "\\t" + process.argv.slice(2).join(" ") + "\\n");',
-        'const n = Number(fs.readFileSync(dir + "/counter", "utf8").trim());',
-        'fs.writeFileSync(dir + "/counter", String(n + 1));',
-        'const outcomes = JSON.parse(fs.readFileSync(dir + "/outcomes.json", "utf8"));',
-        "const outcome = outcomes[Math.min(n, outcomes.length - 1)];",
+        'const temp = process.env.RUNNER_TEMP;',
+        'const where = { [temp + "/audit-manifests"]: "head", [temp + "/audit-manifests-base"]: "base" }[process.cwd()] ?? process.cwd();',
+        'const call = where + " " + process.argv.slice(2).join(" ");',
+        'fs.appendFileSync(dir + "/invocations", call + "\\n");',
+        'const served = fs.readFileSync(dir + "/invocations", "utf8").split("\\n").filter((line) => line === call).length;',
+        'const outcomes = JSON.parse(fs.readFileSync(dir + "/calls.json", "utf8"))[call];',
+        'if (!outcomes) { process.stderr.write("unmodeled pnpm call: " + call + "\\n"); process.exit(97); }',
+        "const outcome = outcomes[Math.min(served, outcomes.length) - 1];",
         "process.stdout.write(outcome.stdout);",
-        "process.stderr.write(outcome.stderr);",
+        'process.stderr.write(outcome.stderr ?? "");',
         "process.exit(outcome.code);",
         "",
       ].join("\n"),
@@ -403,80 +392,99 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
       stdout: result.stdout,
       stderr: result.stderr,
       sanitized: join(runnerTemp, "audit-manifests"),
+      baseManifests: join(runnerTemp, "audit-manifests-base"),
       invocations: (await readFile(join(stubDir, "invocations"), "utf8")).split("\n").filter((line) => line !== ""),
       sleeps: (await readFile(join(stubDir, "sleeps"), "utf8")).split("\n").filter((line) => line !== ""),
     };
   }
 
-  it("fails a manifest-touching pull request whose merge-tree lockfile carries an advisory", async () => {
-    // The red half of the both-ways proof: the pull request changes
-    // pnpm-lock.yaml, the merge tree carries the changed bytes, the audit
-    // runs on THOSE bytes, and the classifier's advisories verdict exits
-    // nonzero — the red the relay mirrors onto a failing check-run.
+  /** Every modeled answer served exactly once, in the order modeled: no unmodeled call, no skipped one. */
+  const served = (calls: Calls): string[] => Object.entries(calls).flatMap(([call, outcomes]) => outcomes.map(() => call));
+
+  it("fails a manifest-touching pull request whose merge-tree lockfile adds a vulnerable package", async () => {
+    // The pull request changes pnpm-lock.yaml, the merge tree carries the
+    // changed bytes, the audit runs on THOSE bytes, the base is materialized
+    // from OVERFLOW_BASE_SHA and audited clean, and the finding is the
+    // pull request's own: a red the relay mirrors onto a failing check-run.
     const headLockfile = `${BASE_LOCKFILE}# ${MARKER}\n`;
-    const fx = await fixture(
-      { "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE },
-      { "pnpm-lock.yaml": headLockfile },
-    );
-    const outcome = await runStep(fx, [ADVISORIES]);
+    const fx = await fixture({ "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE }, { "pnpm-lock.yaml": headLockfile });
+    const calls = { [H]: audit([G1, "scratch-left-pad@1.3.0"]), [B]: audit(), [headWhy("scratch-left-pad@1.3.0")]: why(node("scratch-left-pad@1.3.0", IMPORTER)) };
+    const outcome = await runStep(fx, calls);
     expect(outcome.status).toBe(1);
-    // The audit ran exactly once, in the sanitized directory, with the
-    // merge-tree bytes on disk.
-    expect(outcome.invocations).toHaveLength(1);
-    const invocationParts = outcome.invocations[0]!.split("\t");
-    expect(invocationParts[0]).toBe(outcome.sanitized);
-    expect(invocationParts[1]).toBe("audit --json");
+    expect(outcome.invocations).toEqual(served(calls));
     expect(readFileSync(join(outcome.sanitized, "pnpm-lock.yaml"), "utf8")).toBe(headLockfile);
     expect(readFileSync(join(outcome.sanitized, "package.json"), "utf8")).toBe(BASE_PACKAGE);
-    // The verdict detail and the advisory listing reached the log — the
-    // step echoes the attempt line with the classifier's verdict and detail,
-    // then the detail, then the per-advisory listing.
+    expect(readFileSync(join(outcome.baseManifests, "pnpm-lock.yaml"), "utf8")).toBe(BASE_LOCKFILE);
+    expect(readFileSync(join(outcome.baseManifests, "package.json"), "utf8")).toBe(BASE_PACKAGE);
+    // The attempt line with the classifier's verdict and detail, the
+    // per-advisory listing, then the introduced triple.
     expect(outcome.stdout).toContain("exited 1: advisories — 1 advisories (1 high)");
     expect(outcome.stdout).toContain("scratch-left-pad high: synthetic advisory for the fixture only");
+    expect(outcome.stdout).toContain(`::error::the pull request introduces ${G1} in scratch-left-pad@1.3.0 along .>scratch-left-pad, which its base does not carry`);
     expect(outcome.sleeps).toEqual([]);
+  });
+
+  // [name, the stub's model, exit status, output that must appear, output that must not]
+  const rows: Array<[string, Calls, number, string[], string[]?]> = [
+    ["fails a pull request adding a new vulnerable package@version", { [H]: audit([G1, X]), [B]: audit([G2, "y@1.0.0"]), [headWhy(X)]: why(node(X, IMPORTER)), [baseWhy("y@1.0.0")]: why(node("y@1.0.0", IMPORTER)) },
+      1, [`::error::the pull request introduces ${G1} in ${X} along .>x, which its base does not carry`]],
+    // Both audits report the one identical path .>a>x: only the full enumeration sees .>b>x.
+    ["fails a new dependent of a vulnerable version the base already carries", { [H]: audit([G1, X, ".>a>x"]), [B]: audit([G1, X, ".>a>x"]),
+      [headWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER), node("b@1.0.0", IMPORTER))), [baseWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER))) },
+      1, [`::error::the pull request introduces ${G1} in ${X} along .>b>x,`, pre(G1)], ["along .>a>x"]],
+    ["passes a head whose findings and paths are the base's, warning on each", { [H]: audit([G1, X], [G2, X]), [B]: audit([G1, X], [G2, X]),
+      [headWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER), node("c@1.0.0", marked("a@1.0.0", "deduped")))),
+      [baseWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER), node("c@1.0.0", marked("a@1.0.0", "deduped")))) }, 0, [pre(G1), pre(G2)], ["::error::"]],
+    ["passes a head that removes a finding", { [H]: audit([G1, X]), [B]: audit([G1, X], [G2, "y@1.0.0"]), [headWhy(X)]: why(node(X, IMPORTER)),
+      [baseWhy(X, "y@1.0.0")]: why(node(X, IMPORTER), node("y@1.0.0", IMPORTER)) }, 0, [pre(G1)], ["::error::", G2]],
+    ["passes a head that only changes a parent's version along an existing path", { [H]: audit([G1, X, ".>a>x"]), [B]: audit([G1, X, ".>a>x"]),
+      [headWhy(X)]: why(node(X, node("a@2.0.0", IMPORTER))), [baseWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER))) }, 0, [pre(G1)], ["::error::"]],
+    ["fails closed when the base's audit stays transient", { [H]: audit([G1, X]), [B]: [SERVER_5XX, SERVER_5XX, SERVER_5XX] }, 1, ["still unavailable after 3 attempts"], ["::warning::"]],
+    ["fails closed when the base's audit is unreachable", { [H]: audit([G1, X]), [B]: [NOT_FOUND] }, 1, ["exited 1: unreachable", "was NOT audited"], ["::warning::"]],
+    ["fails closed when the base's audit is unreadable", { [H]: audit([G1, X]), [B]: [{ code: 1, stdout: "" }] }, 1, ["exited 1: unreadable", "was NOT audited"], ["::warning::"]],
+    ["fails closed when pnpm why exits nonzero", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: [{ code: 1, stdout: "[]" }] },
+      1, ["::error::pnpm why exited nonzero in the merge tree; refusing to judge findings it could not place"]],
+    ["fails closed when pnpm why prints unparseable output", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: [{ code: 0, stdout: "[{" }] }, 1, [UNPARSEABLE]],
+    ["fails closed on a finding pnpm why places on no path", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why() },
+      1, [`::error::${X} has a finding in the merge tree but pnpm why places it on no path from the root; refusing`]],
+    ["fails closed on a finding lacking github_advisory_id", { [H]: audit([undefined, X]), [B]: audit() }, 1, [`::error::a finding on ${X} in the merge tree carries no github_advisory_id; refusing to key it`]],
+    ["fails closed on a cycle in the dependents tree", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER, node("b@1.0.0", marked("a@1.0.0", "circular"))))) },
+      1, [`::error::pnpm why reports a dependency cycle above ${X} in the merge tree, which hides paths; refusing`]],
+    ["fails closed past the path-enumeration cap", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(lattice(17)) },
+      1, ["::error::the paths in the merge tree need more than 100000 steps to enumerate; refusing"]],
+    ["passes paths that stay inside the cap", { [H]: audit([G1, X]), [B]: audit([G1, X]), [headWhy(X)]: why(lattice(15)), [baseWhy(X)]: why(lattice(15)) }, 0, [pre(G1)], ["::error::"]],
+    ["refuses a dependent named outside the npm alphabet", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(node(X, node("a>b@1.0.0", IMPORTER))) },
+      1, ["::error::a package name or version in the merge tree is outside the npm alphabet; refusing to print or key it"], [".>a>b"]],
+    ["refuses a reported package outside the npm alphabet", { [H]: audit([G1, "x%0A@1.0.0"]), [B]: audit() },
+      1, ["::error::a package name or version in the merge tree is outside the npm alphabet; refusing to print or key it"]],
+    ["refuses an advisory listing no findings", { [H]: [{ code: 1, stdout: audit([G1, X])[0]!.stdout.replace(/"findings":\[\{.*?\}\]/, '"findings":[]') }], [B]: audit() }, 1, [UNPARSEABLE]],
+    ["refuses a node pnpm why expands twice", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER), node("b@1.0.0", node("a@1.0.0", IMPORTER)))) }, 1, [UNPARSEABLE]],
+    ["refuses a dependent with neither dependents nor a mark", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(node(X, { name: "a", version: "1.0.0" })) }, 1, [UNPARSEABLE]],
+    ["refuses a deduped node pnpm why never expanded", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(node(X, marked("a@1.0.0", "deduped"))) }, 1, [UNPARSEABLE]],
+  ];
+
+  it.each(rows)("%s", async (_name, calls, status, present, absent = []) => {
+    const outcome = await runStep(shared, calls);
+    expect(outcome.status).toBe(status);
+    expect(outcome.invocations).toEqual(served(calls));
+    for (const text of present) expect(outcome.stdout + outcome.stderr).toContain(text);
+    for (const text of absent) expect(outcome.stdout + outcome.stderr).not.toContain(text);
   });
 
   it("passes a no-manifest pull request on the base's unchanged bytes", async () => {
     // The green half: the pull request touches no manifest, the merge tree
     // carries the base's blobs unchanged, and the context reports the same
     // verdict any clean run reports — never a missing check.
-    const fx = await fixture(
-      { "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE },
-      { "README.md": "docs only\n" },
-    );
-    const outcome = await runStep(fx, [CLEAN]);
+    const outcome = await runStep(shared, { [H]: audit() });
     expect(outcome.status).toBe(0);
-    expect(outcome.invocations).toHaveLength(1);
-    expect(outcome.invocations[0]!.split("\t")[1]).toBe("audit --json");
+    expect(outcome.invocations).toEqual([H]);
     expect(readFileSync(join(outcome.sanitized, "pnpm-lock.yaml"), "utf8")).toBe(BASE_LOCKFILE);
     expect(readFileSync(join(outcome.sanitized, "package.json"), "utf8")).toBe(BASE_PACKAGE);
     expect(outcome.stdout).toContain("clean — no known vulnerabilities found");
   });
 
   it("audits the merge tree's bytes, not the head's, when main has advanced past the branch point", async () => {
-    cases += 1;
-    const origin = join(root, `origin-advance-${cases}`);
-    const workspace = join(root, `workspace-advance-${cases}`);
-    await mkdir(origin, { recursive: true });
-    const gitEnv: Record<string, string> = {
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_AUTHOR_NAME: "scratch repository",
-      GIT_AUTHOR_EMAIL: "scratch@example.invalid",
-      GIT_COMMITTER_NAME: "scratch repository",
-      GIT_COMMITTER_EMAIL: "scratch@example.invalid",
-    };
-    const g = (repo: string, ...args: string[]): string => {
-      const result = spawnSync("git", args, { cwd: repo, encoding: "utf8", env: { ...process.env, ...gitEnv } });
-      if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
-      return result.stdout.trim();
-    };
-    let blobCount = 0;
-    const write = async (content: string): Promise<string> => {
-      const file = join(root, `advance-blob-${cases}-${(blobCount += 1)}`);
-      await writeFile(file, content);
-      return g(origin, "hash-object", "-w", file);
-    };
+    const origin = await scratchOrigin();
     const baseLock = "lockfileVersion: '9.0'\n";
     const lockAtMain = `# main-side prepended\n${baseLock}`;
     const lockAtHead = `${baseLock}# head-side appended\n`;
@@ -486,37 +494,21 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
     // a head read, and the assertion below would hold for the wrong reason.
     expect(mergedLock).not.toBe(lockAtHead);
     expect(mergedLock).not.toBe(lockAtMain);
-
-    g(origin, "init", "--quiet", "--initial-branch=main");
-    g(origin, "config", "uploadpack.allowAnySHA1InWant", "true");
     // Branch point: the shared manifests.
-    const idPkg = await write(BASE_PACKAGE);
-    const id0 = await write(baseLock);
-    g(origin, "update-index", "--add", "--cacheinfo", `100644,${idPkg},package.json`);
-    g(origin, "update-index", "--add", "--cacheinfo", `100644,${id0},pnpm-lock.yaml`);
-    g(origin, "commit", "--quiet", "-m", "branch point");
-    const branchPoint = g(origin, "rev-parse", "HEAD");
+    await origin.stage("package.json", BASE_PACKAGE);
+    await origin.stage("pnpm-lock.yaml", baseLock);
+    g(origin.dir, "commit", "--quiet", "-m", "branch point");
+    const branchPoint = g(origin.dir, "rev-parse", "HEAD");
     // main advances: the lockfile gains a line at the top.
-    const idMain = await write(lockAtMain);
-    g(origin, "update-index", "--add", "--cacheinfo", `100644,${idMain},pnpm-lock.yaml`);
-    g(origin, "commit", "--quiet", "-m", "main advances the lockfile");
-    const baseSha = g(origin, "rev-parse", "HEAD");
+    await origin.stage("pnpm-lock.yaml", lockAtMain);
+    g(origin.dir, "commit", "--quiet", "-m", "main advances the lockfile");
+    const baseSha = g(origin.dir, "rev-parse", "HEAD");
     // The pull request's head, from the branch point: the lockfile gains a
     // line at the bottom, and nothing else changes.
-    g(origin, "update-index", "--add", "--cacheinfo", `100644,${id0},pnpm-lock.yaml`);
-    const idHead = await write(lockAtHead);
-    g(origin, "update-index", "--add", "--cacheinfo", `100644,${idHead},pnpm-lock.yaml`);
-    const headTree = g(origin, "write-tree");
-    const headSha = g(origin, "commit-tree", headTree, "-p", branchPoint, "-m", "head advances the lockfile");
-    g(origin, "update-ref", "refs/heads/main", baseSha);
-    g(origin, "update-ref", "refs/heads/feature", headSha);
-    const clone = spawnSync("git", ["clone", "--quiet", `file://${origin}`, workspace], {
-      encoding: "utf8",
-      env: { ...process.env, ...gitEnv },
-    });
-    if (clone.status !== 0) throw new Error(`clone failed: ${clone.stderr}`);
+    await origin.stage("pnpm-lock.yaml", lockAtHead);
+    const headSha = g(origin.dir, "commit-tree", g(origin.dir, "write-tree"), "-p", branchPoint, "-m", "head advances the lockfile");
 
-    const outcome = await runStep({ workspace, baseSha, headSha }, [CLEAN]);
+    const outcome = await runStep(origin.publish(baseSha, headSha), { [H]: audit() });
     expect(outcome.status).toBe(0);
     // The bytes the audit actually read are the MERGE tree's lockfile — both
     // sides' lines — not the head's and not the advanced base's.
@@ -525,24 +517,17 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
   });
 
   it("refuses a pull request that deletes a manifest, with the fixed constant", async () => {
-    const fx = await fixture(
-      { "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE },
-      { "package.json": DELETED },
-    );
-    const outcome = await runStep(fx, [CLEAN]);
+    const fx = await fixture({ "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE }, { "package.json": DELETED });
+    const outcome = await runStep(fx, { [H]: audit() });
     expect(outcome.status).toBe(1);
-    expect(outcome.stderr).toContain("package.json must be exactly one mode-100644 blob entry");
-    expect(outcome.stderr).toContain(REFUSALS.manifestEntry);
+    expect(outcome.stderr).toContain("::error::package.json must be exactly one mode-100644 blob entry in the merge tree; refusing");
     // The audit never ran.
     expect(outcome.invocations).toEqual([]);
   });
 
   it("refuses a symlinked manifest without leaking its target", async () => {
-    const fx = await fixture(
-      { "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE },
-      { "pnpm-lock.yaml": { mode: "120000", content: "/etc/ATTACKER-SYMLINK-TARGET" } },
-    );
-    const outcome = await runStep(fx, [CLEAN]);
+    const fx = await fixture({ "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE }, { "pnpm-lock.yaml": { mode: "120000", content: "/etc/ATTACKER-SYMLINK-TARGET" } });
+    const outcome = await runStep(fx, { [H]: audit() });
     expect(outcome.status).toBe(1);
     expect(outcome.stderr).toContain("pnpm-lock.yaml must be exactly one mode-100644 blob entry");
     expect(outcome.stdout + outcome.stderr).not.toContain("ATTACKER-SYMLINK-TARGET");
@@ -552,54 +537,19 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
   it("refuses a pull request that does not merge cleanly, and sends the reader to rebase", async () => {
     // Both sides edit the same line after the branch point: merge-tree exits
     // 1, and the refusal is the conflict constant, not the tool-failure one.
-    cases += 1;
-    const origin = join(root, `origin-conflict-${cases}`);
-    const workspace = join(root, `workspace-conflict-${cases}`);
-    await mkdir(origin, { recursive: true });
-    const gitEnv: Record<string, string> = {
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_AUTHOR_NAME: "scratch repository",
-      GIT_AUTHOR_EMAIL: "scratch@example.invalid",
-      GIT_COMMITTER_NAME: "scratch repository",
-      GIT_COMMITTER_EMAIL: "scratch@example.invalid",
-    };
-    const g = (repo: string, ...args: string[]): string => {
-      const result = spawnSync("git", args, { cwd: repo, encoding: "utf8", env: { ...process.env, ...gitEnv } });
-      if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
-      return result.stdout.trim();
-    };
-    let blobCount = 0;
-    const write = async (content: string): Promise<string> => {
-      const file = join(root, `conflict-blob-${cases}-${(blobCount += 1)}`);
-      await writeFile(file, content);
-      return g(origin, "hash-object", "-w", file);
-    };
-    g(origin, "init", "--quiet", "--initial-branch=main");
-    g(origin, "config", "uploadpack.allowAnySHA1InWant", "true");
-    const id0 = await write('{"name": "scratch", "shared": "line"}\n');
-    g(origin, "update-index", "--add", "--cacheinfo", `100644,${id0},package.json`);
-    g(origin, "commit", "--quiet", "-m", "branch point");
-    const branchPoint = g(origin, "rev-parse", "HEAD");
+    const origin = await scratchOrigin();
+    await origin.stage("package.json", '{"name": "scratch", "shared": "line"}\n');
+    g(origin.dir, "commit", "--quiet", "-m", "branch point");
+    const branchPoint = g(origin.dir, "rev-parse", "HEAD");
     // main moves the line one way; the pull request's head, from the same
     // branch point, moves it another. Same path, same region: conflict.
-    const idMain = await write('{"name": "scratch", "shared": "main side"}\n');
-    g(origin, "update-index", "--add", "--cacheinfo", `100644,${idMain},package.json`);
-    g(origin, "commit", "--quiet", "-m", "main moves the line");
-    const baseSha = g(origin, "rev-parse", "HEAD");
-    g(origin, "update-ref", "refs/heads/main", baseSha);
-    const idHead = await write('{"name": "scratch", "shared": "head side"}\n');
-    g(origin, "update-index", "--add", "--cacheinfo", `100644,${idHead},package.json`);
-    const conflictTree = g(origin, "write-tree");
-    const headSha = g(origin, "commit-tree", conflictTree, "-p", branchPoint, "-m", "head side");
-    g(origin, "update-ref", "refs/heads/feature", headSha);
-    const clone = spawnSync("git", ["clone", "--quiet", `file://${origin}`, workspace], {
-      encoding: "utf8",
-      env: { ...process.env, ...gitEnv },
-    });
-    if (clone.status !== 0) throw new Error(`clone failed: ${clone.stderr}`);
+    await origin.stage("package.json", '{"name": "scratch", "shared": "main side"}\n');
+    g(origin.dir, "commit", "--quiet", "-m", "main moves the line");
+    const baseSha = g(origin.dir, "rev-parse", "HEAD");
+    await origin.stage("package.json", '{"name": "scratch", "shared": "head side"}\n');
+    const headSha = g(origin.dir, "commit-tree", g(origin.dir, "write-tree"), "-p", branchPoint, "-m", "head side");
 
-    const outcome = await runStep({ workspace, baseSha, headSha }, [CLEAN]);
+    const outcome = await runStep(origin.publish(baseSha, headSha), { [H]: audit() });
     expect(outcome.status).toBe(1);
     expect(outcome.stderr + outcome.stdout).toContain(REFUSALS.conflict);
     expect(outcome.stderr + outcome.stdout).toContain("rebase the branch onto the base and push again");
@@ -608,27 +558,20 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
   });
 
   it("spends exactly its retry budget on a registry outage and then fails closed", async () => {
-    const fx = await fixture(
-      { "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE },
-      { "README.md": "docs only\n" },
-    );
-    const outcome = await runStep(fx, [SERVER_5XX]);
+    const outcome = await runStep(shared, { [H]: [SERVER_5XX, SERVER_5XX, SERVER_5XX] });
     expect(outcome.status).toBe(1);
-    expect(outcome.invocations).toHaveLength(3);
+    expect(outcome.invocations).toEqual([H, H, H]);
     expect(outcome.sleeps).toEqual(["7", "7"]);
     expect(outcome.stdout).toContain("transient");
     expect(outcome.stdout).toContain("still unavailable after 3 attempts");
   });
 
   it("carries no pull-request byte through any output on the advisory path", async () => {
-
     const headPackage = `${BASE_PACKAGE}/* ${MARKER} */\n`;
-    const fx = await fixture(
-      { "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE },
-      { "package.json": headPackage },
-    );
-    const outcome = await runStep(fx, [ADVISORIES]);
-    expect(outcome.status).toBe(1);
+    const fx = await fixture({ "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE }, { "package.json": headPackage });
+    const outcome = await runStep(fx, { [H]: audit([G1, X]), [B]: audit([G1, X]), [headWhy(X)]: why(node(X, IMPORTER)), [baseWhy(X)]: why(node(X, IMPORTER)) });
+    expect(outcome.status).toBe(0);
+    expect(outcome.stdout).toContain(pre(G1));
     expect(outcome.stdout + outcome.stderr).not.toContain(MARKER);
     expect(readFileSync(join(outcome.sanitized, "package.json"), "utf8")).toBe(headPackage);
   });
