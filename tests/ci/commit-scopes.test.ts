@@ -176,7 +176,7 @@ describe("scripts/commit_scopes.py", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual([
       "Actions event policy",
-      "actionlint",
+      "actionlint", "advisory tracking",
       "ci", "ci pull request",
       "claim", "code scanning", "comment share", "coverage comment",
       "dependency audit",
