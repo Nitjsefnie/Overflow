@@ -1,0 +1,158 @@
+name: advisory tracking
+
+# Keeps one comment on the standing tracking issue listing every advisory
+# pnpm audit reports against main's lockfile. pnpm already drops the
+# ignoreGhsas entries, so each one listed has no disposition yet. A listing
+# equal to the latest one is not posted again; a failed audit posts nothing.
+
+on:
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: advisory-tracking
+  cancel-in-progress: false
+
+jobs:
+  advisory-tracking:
+    permissions:
+      contents: read
+      issues: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # dependency-audit.yml's five pins: the same audit under the same rules.
+    env:
+      COREPACK_ENABLE_PROJECT_SPEC: "0"
+      npm_config_registry: "https://registry.npmjs.org/"
+      npm_config_strict_ssl: "true"
+      npm_config_cafile: "/etc/ssl/certs/ca-certificates.crt"
+      npm_config_audit_level: "low"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.17.0"
+
+      - name: Enable the pinned package manager
+        run: |
+          corepack enable
+          corepack install --global pnpm@10.33.0
+          pnpm --version
+
+      # dependency-audit.yml's classifier and retry, byte for byte but the
+      # clean and advisories arms; this step holds no token.
+      - name: List the advisories without a disposition
+        run: |
+          set -uo pipefail
+          attempts=3
+          delay="${DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS:-30}"
+          for attempt in $(seq 1 "$attempts"); do
+            code=0
+            pnpm audit --json > audit.json 2> audit.err || code=$?
+            result=$(AUDIT_EXIT="$code" node -e '
+          const fs = require("node:fs");
+          let report;
+          try {
+            report = JSON.parse(fs.readFileSync("audit.json", "utf8"));
+          } catch {
+            console.log("unreadable|the audit produced no JSON report");
+            process.exit(0);
+          }
+          if (report && report.error) {
+            const statuses = [...String(report.error.message ?? "").matchAll(/responded with (\d{3})/g)]
+              .map((match) => Number(match[1]));
+            const transient = statuses.length > 0
+              && statuses.every((status) => status === 429 || (status >= 500 && status < 600));
+            const first = (message) => String(message).split("\n")[0];
+            const reported = first(report.error.message ?? "the advisory endpoint did not answer");
+            console.log(String(report.error.code ?? "") === "ERR_PNPM_AUDIT_NO_LOCKFILE"
+              ? "unreadable|" + reported
+              : transient
+                ? "transient|" + first("the advisory endpoint answered " + statuses.join(" and "))
+                : "unreachable|" + reported);
+            process.exit(0);
+          }
+          const advisories = report && report.advisories ? Object.keys(report.advisories).length : -1;
+          if (advisories > 0) {
+            const counts = report.metadata?.vulnerabilities ?? {};
+            const summary = ["critical", "high", "moderate", "low", "info"]
+              .map((severity) => (counts[severity] ?? 0) + " " + severity)
+              .filter((entry) => !entry.startsWith("0 "))
+              .join(", ");
+            console.log("advisories|" + advisories + " advisories (" + (summary || "severities unreported") + ")");
+            process.exit(0);
+          }
+          console.log(advisories === 0
+            ? process.env.AUDIT_EXIT === "0"
+              ? "clean|no known vulnerabilities found"
+              : "unreadable|the audit report carried an empty advisories map and exited " + process.env.AUDIT_EXIT
+            : "unreadable|the audit report carried no advisories field and exited " + process.env.AUDIT_EXIT);
+          ')
+            verdict="${result%%|*}"
+            detail="${result#*|}"
+            echo "attempt $attempt of $attempts, pnpm audit --json exited $code: $verdict — $detail"
+            case "$verdict" in
+              clean|advisories)
+                echo "$detail"
+                break
+                ;;
+              transient)
+                cat audit.err
+                if [ "$attempt" -lt "$attempts" ]; then
+                  echo "$detail — a registry outage, not a finding; retrying"
+                  sleep "$delay"
+                  continue
+                fi
+                echo "$detail — the advisory endpoint was still unavailable after $attempts attempts"
+                exit 1
+                ;;
+              *)
+                cat audit.err
+                echo "$detail — the lockfile was NOT audited, so this run reports nothing about it"
+                exit 1
+                ;;
+            esac
+          done
+          node -e '
+          const report = JSON.parse(require("node:fs").readFileSync("audit.json", "utf8"));
+          const advisories = Object.values(report.advisories ?? {})
+            .sort((left, right) => String(left.github_advisory_id).localeCompare(String(right.github_advisory_id)));
+          console.log(advisories.length === 0 ? "No advisory against main\x27s lockfile lacks a disposition." : [
+            "These advisories against main\x27s lockfile have no disposition yet:",
+            "",
+            ...advisories.map((advisory) => "- " + advisory.github_advisory_id + ": " + advisory.module_name + " " + advisory.vulnerable_versions
+              + ", " + advisory.severity + ": " + advisory.title + " (patched " + advisory.patched_versions + ")"),
+            "",
+            "Each needs a disposition: an upgrade, an override, a removal, or a \x60pnpm.auditConfig.ignoreGhsas\x60 entry"
+              + " whose reason tests/ci/audit-acceptance.test.ts records.",
+          ].join("\n"));
+          ' > "${RUNNER_TEMP}/advisory-tracking.md"
+
+      # Posts only when the body differs from the latest comment by
+      # github-actions[bot], compared with trailing newlines dropped.
+      - name: Update the tracking issue's comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OVERFLOW_ADVISORY_TRACKING_ISSUE: "1714"
+        run: |
+          comments="repos/${GITHUB_REPOSITORY}/issues/${OVERFLOW_ADVISORY_TRACKING_ISSUE:?}/comments"
+          gh api --paginate --slurp "${comments}" > "${RUNNER_TEMP}/tracking-comments.json"
+          latest=$(node -e '
+          const pages = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+          const listings = pages.flat().filter((comment) => comment.user?.login === "github-actions[bot]");
+          process.stdout.write(listings.length === 0 ? "" : String(listings[listings.length - 1].body ?? ""));
+          ' "${RUNNER_TEMP}/tracking-comments.json")
+          if [ "${latest}" = "$(cat "${RUNNER_TEMP}/advisory-tracking.md")" ]; then
+            echo "the latest listing on the tracking issue is current; nothing posted"
+            exit 0
+          fi
+          gh api --method POST "${comments}" -F body=@"${RUNNER_TEMP}/advisory-tracking.md" --silent

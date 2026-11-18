@@ -214,6 +214,9 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
     "cancel-in-progress": false,
     queue: undefined,
   }],
+  ["advisory-tracking.yml", {
+    reason: "Schedule and dispatch only. The one literal group runs one listing at a time, so two runs cannot both read the tracking issue before either posts and leave it two identical comments; a cancelled run loses nothing, since the next daily run re-audits main and re-reads the issue.",
+    group: "advisory-tracking", "cancel-in-progress": false, queue: undefined }],
   [
     "code-scanning.yml",
     {
@@ -486,6 +489,7 @@ const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
   // check-run name is what branch protection and .github/required-checks.json
   // match.
   "actionlint.yml": ["actionlint"],
+  "advisory-tracking.yml": ["advisory-tracking"],
   "ci-pr.yml": ["verify"],
   "ci.yml": ["calibrate", "postgres-image", "push-recalibration", "shellcheck", "verify"],
   "claim.yml": ["claim"],
