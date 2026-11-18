@@ -255,6 +255,7 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
   };
   /** a and b depend on x and on each other (a's dependent b, b's circular mark back to a); c depends on a; b and c are direct. */
   const CYCLIC = node(X, node("a@1.0.0", node("b@1.0.0", marked("a@1.0.0", "circular"), IMPORTER), node("c@1.0.0", IMPORTER)), marked("b@1.0.0", "deduped"));
+  const SIBLING = node(X, { ...node("a@1.0.0", IMPORTER), peersSuffixHash: "p1" }, node("b@1.0.0", { ...node("a@1.0.0", node("c@1.0.0", IMPORTER, marked("a@1.0.0", "circular"))), peersSuffixHash: "p2" }));
   const SERVER_5XX: Outcome = { code: 1, stdout: `${JSON.stringify({ error: { code: "ERR_PNPM_AUDIT_BAD_RESPONSE", message:
     "The audit endpoint (at http://127.0.0.1:40857/-/npm/v1/security/audits/quick) responded with 503: {\"error\":\"service unavailable\"}. The audit endpoint (at http://127.0.0.1:40857/-/npm/v1/security/audits) responded with 503: {\"error\":\"service unavailable\"}" } })}\n` };
   const NOT_FOUND: Outcome = { code: 1, stdout: `${JSON.stringify({ error: { code: "ERR_PNPM_AUDIT_BAD_RESPONSE", message: "The audit endpoint (at https://registry.npmjs.org/-/npm/v1/security/audits/quick) responded with 404: not found" } })}\n` };
@@ -457,6 +458,8 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
       [baseWhy(X)]: why(node(X, node("a@1.0.0", node("b@1.0.0", IMPORTER), node("c@1.0.0", IMPORTER)), marked("b@1.0.0", "deduped"))) },
       1, [`::error::the pull request introduces ${G1} in ${X} along .>c>a>b>x,`, pre(G1)], ["along .>b>a>x,", "along .>c>a>x,", "along .>b>x,"]],
     ["passes a head identical to a base whose graph has a cycle", { [H]: audit([G1, X]), [B]: audit([G1, X]), [headWhy(X)]: why(CYCLIC), [baseWhy(X)]: why(CYCLIC) }, 0, [pre(G1)], ["::error::"]],
+    // An a@1.0.0 of another peer suffix was printed (and left) before the chain the mark sits on: only the one above counts.
+    ["passes a cycle mark whose name an earlier sibling shares", { [H]: audit([G1, X]), [B]: audit([G1, X]), [headWhy(X)]: why(SIBLING), [baseWhy(X)]: why(SIBLING) }, 0, [pre(G1)], ["::error::"]],
     ["refuses a cycle mark naming no node above it", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER, marked("q@1.0.0", "circular")))) }, 1, [UNPARSEABLE]],
     ["refuses a cycle mark naming two nodes above it", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(node(X, { ...node("a@1.0.0", { ...node("a@1.0.0", IMPORTER,
       marked("a@1.0.0", "circular")), peersSuffixHash: "p2" }), peersSuffixHash: "p1" })) }, 1, [UNPARSEABLE]],
