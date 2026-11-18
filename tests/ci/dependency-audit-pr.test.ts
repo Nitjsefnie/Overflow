@@ -197,7 +197,7 @@ describe("pr-gates.yml's shape", () => {
     // so each is sliced out of both parsed run texts and required equal.
     const pushRun = pushWorkflow.jobs?.[JOB_NAME]?.steps?.find((step) => step.name === "Audit lockfile advisories")?.run ?? "";
     // advisory-tracking.yml's listing step shares the classifier and the whole retry loop but its clean and advisories arms.
-    const tracking = (parse(readFileSync(resolve(".github/workflows/advisory-tracking.yml"), "utf8")) as Workflow).jobs?.["advisory-tracking"]?.steps?.find((step) => step.name === "List the advisories without a disposition")?.run ?? "";
+    const tracking = (parse(readFileSync(resolve(".github/workflows/advisory-tracking.yml"), "utf8")) as Workflow).jobs?.["advisory-audit"]?.steps?.find((step) => step.name === "List the advisories without a disposition")?.run ?? "";
     const classifier = /result=\$\(AUDIT_EXIT="\$code" node -e '\n([\s\S]*?)\n'\)/g;
     for (const [shared, copies] of [[classifier, [auditStep.run ?? "", tracking]], [/echo "advisory ids and patched versions:"\n\s*node -e '\n([\s\S]*?)\n\s*'\n/g, [auditStep.run ?? ""]],
       [/(set -uo pipefail\nattempts=3\n[\s\S]*?\n {2}case "\$verdict" in\n)/g, [tracking]], [/(\n {4}transient\)\n[\s\S]*?\n {2}esac\ndone\n)/g, [tracking]]] as Array<[RegExp, string[]]>) {
