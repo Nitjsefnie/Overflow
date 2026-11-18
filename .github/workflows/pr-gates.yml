@@ -645,7 +645,8 @@ jobs:
                 const node = stack.pop();
                 if (node.depField !== undefined || node.deduped === true) continue;
                 if (node.circular === true) refuse("pnpm why reports a dependency cycle above " + root.name + "@" + root.version + " in " + label + ", which hides paths; refusing");
-                if (!Array.isArray(node.dependents) || expanded.has(key(node))) throw new Error("not a dependents tree");
+                // A node listed without dependents or a mark throws at the spread.
+                if (expanded.has(key(node))) throw new Error("expanded twice");
                 expanded.set(key(node), node.dependents);
                 stack.push(...node.dependents);
               }

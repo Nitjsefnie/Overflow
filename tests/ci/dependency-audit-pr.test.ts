@@ -427,7 +427,7 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
   // [name, the stub's model, exit status, output that must appear, output that must not]
   const rows: Array<[string, Calls, number, string[], string[]?]> = [
     ["fails a pull request adding a new vulnerable package@version", { [H]: audit([G1, X]), [B]: audit([G2, "y@1.0.0"]), [headWhy(X)]: why(node(X, IMPORTER)), [baseWhy("y@1.0.0")]: why(node("y@1.0.0", IMPORTER)) },
-      1, [`::error::the pull request introduces ${G1} in ${X} along .>x, which its base does not carry`]],
+      1, [`::error::the pull request introduces ${G1} in ${X} along .>x, which its base does not carry`], ["::warning::"]],
     // Both audits report the one identical path .>a>x: only the full enumeration sees .>b>x.
     ["fails a new dependent of a vulnerable version the base already carries", { [H]: audit([G1, X, ".>a>x"]), [B]: audit([G1, X, ".>a>x"]),
       [headWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER), node("b@1.0.0", IMPORTER))), [baseWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER))) },
@@ -444,6 +444,8 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
     ["fails closed when the base's audit is unreadable", { [H]: audit([G1, X]), [B]: [{ code: 1, stdout: "" }] }, 1, ["exited 1: unreadable", "was NOT audited"], ["::warning::"]],
     ["fails closed when pnpm why exits nonzero", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: [{ code: 1, stdout: "[]" }] },
       1, ["::error::pnpm why exited nonzero in the merge tree; refusing to judge findings it could not place"]],
+    ["fails closed when the base's pnpm why exits nonzero", { [H]: audit([G1, X]), [B]: audit([G1, X]), [headWhy(X)]: why(node(X, IMPORTER)), [baseWhy(X)]: [{ code: 1, stdout: "[]" }] },
+      1, ["::error::pnpm why exited nonzero in the base; refusing"], ["::warning::"]],
     ["fails closed when pnpm why prints unparseable output", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: [{ code: 0, stdout: "[{" }] }, 1, [UNPARSEABLE]],
     ["fails closed on a finding pnpm why places on no path", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why() },
       1, [`::error::${X} has a finding in the merge tree but pnpm why places it on no path from the root; refusing`]],
