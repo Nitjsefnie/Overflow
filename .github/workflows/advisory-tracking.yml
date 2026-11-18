@@ -18,13 +18,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  advisory-tracking:
-    permissions:
-      contents: read
-      issues: write
+  # Runs pnpm under the workflow's read-only token and hands the comment body
+  # to advisory-comment as an output, the way ci.yml's calibrate does.
+  advisory-audit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # dependency-audit.yml's five pins: the same audit under the same rules.
+    outputs:
+      body: ${{ steps.listing.outputs.body }}
+    # dependency-audit.yml's five pins.
     env:
       COREPACK_ENABLE_PROJECT_SPEC: "0"
       npm_config_registry: "https://registry.npmjs.org/"
@@ -49,8 +50,11 @@ jobs:
           pnpm --version
 
       # dependency-audit.yml's classifier and retry, byte for byte but the
-      # clean and advisories arms; this step holds no token.
+      # clean and advisories arms. Every advisory field goes in a code span
+      # (whitespace collapsed, fence longer than its backtick runs), so no
+      # mention or reference fires and no body line can equal the delimiter.
       - name: List the advisories without a disposition
+        id: listing
         run: |
           set -uo pipefail
           attempts=3
@@ -124,35 +128,53 @@ jobs:
           done
           node -e '
           const report = JSON.parse(require("node:fs").readFileSync("audit.json", "utf8"));
+          const span = (value) => {
+            const text = String(value).replace(/\s+/g, " ");
+            const fence = "\x60".repeat(Math.max(0, ...(text.match(/\x60+/g) ?? []).map((run) => run.length)) + 1);
+            return fence + " " + text + " " + fence;
+          };
           const advisories = Object.values(report.advisories ?? {})
             .sort((left, right) => String(left.github_advisory_id).localeCompare(String(right.github_advisory_id)));
-          console.log(advisories.length === 0 ? "No advisory against main\x27s lockfile lacks a disposition." : [
+          console.log(["<!-- overflow:advisory-tracking -->", "", ...(advisories.length === 0 ? ["No advisory against main\x27s lockfile lacks a disposition."] : [
             "These advisories against main\x27s lockfile have no disposition yet:",
             "",
-            ...advisories.map((advisory) => "- " + advisory.github_advisory_id + ": " + advisory.module_name + " " + advisory.vulnerable_versions
-              + ", " + advisory.severity + ": " + advisory.title + " (patched " + advisory.patched_versions + ")"),
+            ...advisories.map((advisory) => "- " + span(advisory.github_advisory_id) + ": " + span(advisory.module_name) + " " + span(advisory.vulnerable_versions)
+              + ", " + span(advisory.severity) + ": " + span(advisory.title) + " (patched " + span(advisory.patched_versions) + ")"),
             "",
             "Each needs a disposition: an upgrade, an override, a removal, or a \x60pnpm.auditConfig.ignoreGhsas\x60 entry"
               + " whose reason tests/ci/audit-acceptance.test.ts records.",
-          ].join("\n"));
+          ])].join("\n"));
           ' > "${RUNNER_TEMP}/advisory-tracking.md"
+          {
+            echo 'body<<ADVISORY_TRACKING_BODY_END'
+            cat "${RUNNER_TEMP}/advisory-tracking.md"
+            echo 'ADVISORY_TRACKING_BODY_END'
+          } >> "$GITHUB_OUTPUT"
 
-      # Posts only when the body differs from the latest comment by
-      # github-actions[bot], compared with trailing newlines dropped.
+  # The only job holding issues: write: no checkout, no pnpm, no node.
+  advisory-comment:
+    needs: advisory-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      # The previous listing is the latest comment github-actions[bot] wrote
+      # carrying the marker, as in coverage-comment.yml; a body equal to it,
+      # trailing newlines dropped on both sides, is not posted again.
       - name: Update the tracking issue's comment
         env:
           GH_TOKEN: ${{ github.token }}
           OVERFLOW_ADVISORY_TRACKING_ISSUE: "1714"
+          OVERFLOW_ADVISORY_BODY: ${{ needs.advisory-audit.outputs.body }}
         run: |
           comments="repos/${GITHUB_REPOSITORY}/issues/${OVERFLOW_ADVISORY_TRACKING_ISSUE:?}/comments"
-          gh api --paginate --slurp "${comments}" > "${RUNNER_TEMP}/tracking-comments.json"
-          latest=$(node -e '
-          const pages = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
-          const listings = pages.flat().filter((comment) => comment.user?.login === "github-actions[bot]");
-          process.stdout.write(listings.length === 0 ? "" : String(listings[listings.length - 1].body ?? ""));
-          ' "${RUNNER_TEMP}/tracking-comments.json")
-          if [ "${latest}" = "$(cat "${RUNNER_TEMP}/advisory-tracking.md")" ]; then
+          body=$(printf '%s\n' "${OVERFLOW_ADVISORY_BODY:?}")
+          listings=$(gh api --paginate "${comments}" --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- overflow:advisory-tracking -->"))) | .body | @json')
+          latest=$(printf '%s' "${listings##*$'\n'}" | jq -r '.')
+          if [ "${latest}" = "${body}" ]; then
             echo "the latest listing on the tracking issue is current; nothing posted"
             exit 0
           fi
+          printf '%s\n' "${body}" > "${RUNNER_TEMP}/advisory-tracking.md"
           gh api --method POST "${comments}" -F body=@"${RUNNER_TEMP}/advisory-tracking.md" --silent
