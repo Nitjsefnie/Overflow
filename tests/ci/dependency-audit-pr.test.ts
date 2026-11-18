@@ -49,6 +49,7 @@ const REFUSALS = {
   mergeTree: "::error::git merge-tree could not produce a merge tree for this pull request (exit",
   sanitizedExists: "already exists; refusing to write manifests into a directory this run did not create",
   manifestEntry: "must be exactly one mode-100644 blob entry in the ${3:?}; refusing",
+  prototypeKey: "an importer name that collides with an object prototype key; refusing",
 };
 
 /** Planted in pull-request-controlled content; must never reach the step's output. */
@@ -372,14 +373,7 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
         "",
       ].join("\n"),
     );
-    writeFileSync(
-      join(home, "bin", "sleep"),
-      [
-        "#!/usr/bin/env node",
-        'require("node:fs").appendFileSync(process.env.AUDIT_STUB_DIR + "/sleeps", process.argv.slice(2).join(" ") + "\\n");',
-        "",
-      ].join("\n"),
-    );
+    writeFileSync(join(home, "bin", "sleep"), ["#!/usr/bin/env node", 'require("node:fs").appendFileSync(process.env.AUDIT_STUB_DIR + "/sleeps", process.argv.slice(2).join(" ") + "\\n");', ""].join("\n"));
     for (const stub of ["pnpm", "sleep"]) chmodSync(join(home, "bin", stub), 0o755);
 
     const runnerTemp = join(home, "runner-temp");
@@ -391,14 +385,8 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
       cwd: fx.workspace,
       encoding: "utf8",
       env: {
-        ...process.env,
-        GIT_CONFIG_GLOBAL: "/dev/null",
-        GIT_CONFIG_NOSYSTEM: "1",
-        OVERFLOW_HEAD_SHA: fx.headSha,
-        OVERFLOW_BASE_SHA: fx.baseSha,
-        RUNNER_TEMP: runnerTemp,
-        AUDIT_STUB_DIR: stubDir,
-        DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS: "7",
+        ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", OVERFLOW_HEAD_SHA: fx.headSha, OVERFLOW_BASE_SHA: fx.baseSha,
+        RUNNER_TEMP: runnerTemp, AUDIT_STUB_DIR: stubDir, DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS: "7",
         PATH: `${join(home, "bin")}:${dirname(process.execPath)}:${process.env.PATH ?? ""}`,
       },
     });
@@ -560,6 +548,17 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
     // The audit never ran.
     expect(outcome.invocations).toEqual([]);
   });
+
+  // The audit request drops an importer named __proto__, so that side's audit reads clean and a hidden edge would pass: each spelling, on either side, refuses first.
+  const hidden = (key: string): string => `${BASE_LOCKFILE}\n${key}\n    dependencies:\n      x:\n        specifier: 1.0.0\n        version: 1.0.0\n`;
+  it.each([[BASE_LOCKFILE, hidden("  __proto__:"), "merge tree", audit(), []], [BASE_LOCKFILE, hidden('  "\\x5f_proto__":'), "merge tree", audit(), []],
+    [hidden("  __proto__:"), `${BASE_LOCKFILE}# head\n`, "base commit's tree", audit([G1, X]), [H]]] as Array<[string, string, string, Outcome[], string[]]>)(
+    "refuses a lockfile importer colliding with an object prototype key (pair %#)", async (base, head, side, headAudit, invoked) => {
+      const outcome = await runStep(await fixture({ "package.json": BASE_PACKAGE, "pnpm-lock.yaml": base }, { "pnpm-lock.yaml": head }), { [H]: headAudit });
+      expect(outcome.status).toBe(1);
+      expect(outcome.stdout + outcome.stderr).toContain(`::error::pnpm-lock.yaml in the ${side} spells, or could escape-spell, ${REFUSALS.prototypeKey}`);
+      expect(outcome.invocations).toEqual(invoked);
+    });
 
   it("refuses a symlinked manifest without leaking its target", async () => {
     const fx = await fixture({ "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE }, { "pnpm-lock.yaml": { mode: "120000", content: "/etc/ATTACKER-SYMLINK-TARGET" } });
