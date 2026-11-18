@@ -5,7 +5,7 @@ import { expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 
-it("records exactly the accepted advisory ids in pnpm's audit config", async () => {
-  const pkg = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
-  expect(pkg.pnpm?.auditConfig?.ignoreGhsas ?? []).toStrictEqual([]);
+it("records exactly the accepted advisory ids, scoped to the audited picomatch", async () => {
+  const [pkg, lock] = await Promise.all(["package.json", "pnpm-lock.yaml"].map((file) => readFile(resolve(root, file), "utf8")));
+  expect([JSON.parse(pkg).pnpm?.auditConfig?.ignoreGhsas, new Set(lock.match(/picomatch@\d+\.\d+\.\d+/g))]).toStrictEqual([["GHSA-fc5q-39xc-vjpf"], new Set(["picomatch@4.0.7"])]);
 });
