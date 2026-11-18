@@ -189,17 +189,18 @@ describe("pr-gates.yml's shape", () => {
     }
   });
 
-  it("classifies with the push leg's own five-verdict classifier, byte-identical", () => {
-    // Extracted, never hand-copied: the classifier script is the part the two
-    // legs still share (the PR leg's retry and verdict dispatch differ, since
-    // its advisories verdict goes on to audit the base), so it is sliced out
-    // of both parsed run texts and required equal.
-    const classifierOf = (run: string | undefined): string[] =>
-      [...(run ?? "").matchAll(/result=\$\(AUDIT_EXIT="\$code" node -e '\n([\s\S]*?)\n'\)/g)].map((match) => match[1]!);
-    const push = classifierOf(pushWorkflow.jobs?.[JOB_NAME]?.steps?.find((step) => step.name === "Audit lockfile advisories")?.run);
-    expect(push).toHaveLength(1);
-    expect(push[0]).toContain('"clean|no known vulnerabilities found"');
-    expect(classifierOf(auditStep.run)).toEqual(push);
+  it("classifies and lists with the push leg's own scripts, byte-identical", () => {
+    // Extracted, never hand-copied: the classifier and the advisory listing are
+    // the parts the two legs still share (the PR leg's retry and verdict
+    // dispatch differ, since its advisories verdict goes on to audit the base),
+    // so each is sliced out of both parsed run texts and required equal.
+    const pushRun = pushWorkflow.jobs?.[JOB_NAME]?.steps?.find((step) => step.name === "Audit lockfile advisories")?.run ?? "";
+    for (const shared of [/result=\$\(AUDIT_EXIT="\$code" node -e '\n([\s\S]*?)\n'\)/g, /echo "advisory ids and patched versions:"\n\s*node -e '\n([\s\S]*?)\n\s*'\n/g]) {
+      const push = [...pushRun.matchAll(shared)].map((match) => match[1]!);
+      expect(push).toHaveLength(1);
+      expect([...(auditStep.run ?? "").matchAll(shared)].map((match) => match[1]!)).toEqual(push);
+    }
+    expect(pushRun).toContain('"clean|no known vulnerabilities found"');
   });
 });
 
@@ -219,7 +220,7 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
 
   type Fixture = { workspace: string; baseSha: string; headSha: string };
   /** One served answer of the `pnpm` stub. */
-  type Outcome = { code: number; stdout: string; stderr?: string };
+  type Outcome = { code: number; stdout: string; stderr?: string; post?: object };
   /** The stub's whole model: `<head|base> <argv>` to the answers it serves in order; any other call exits 97. */
   type Calls = Record<string, Outcome[]>;
 
@@ -227,6 +228,10 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
   const BASE_LOCKFILE = "lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies: {}\n";
   const H = "head audit --json";
   const B = "base audit --json";
+  /** The local audit request that names the importers pnpm walks; `walked` POSTs one listing `ids` (the root alone by default). */
+  const HC = "head audit --json --registry http://127.0.0.1:PORT/";
+  const BC = "base audit --json --registry http://127.0.0.1:PORT/";
+  const walked = (...ids: string[]): Outcome[] => [{ code: 0, stdout: "", post: { dependencies: Object.fromEntries((ids.length > 0 ? ids : ["."]).map((id) => [id, {}])) } }];
   const headWhy = (...selectors: string[]): string => `head why --json ${selectors.join(" ")}`;
   const baseWhy = (...selectors: string[]): string => `base why --json ${selectors.join(" ")}`;
   const G1 = "GHSA-2222-3333-4444";
@@ -241,20 +246,23 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
     metadata: { vulnerabilities: { high: found.length } },
   })}\n` }];
   const IMPORTER = { name: "scratch", version: "1.0.0", depField: "dependencies" };
+  const DEV_IMPORTER = { ...IMPORTER, depField: "devDependencies" };
   /** A `pnpm why --json` node for name@version, expanded with its dependents. */
   const node = (spec: string, ...dependents: object[]): object => ({ name: spec.split("@")[0], version: spec.split("@")[1], dependents });
   const marked = (spec: string, mark: "deduped" | "circular"): object => ({ name: spec.split("@")[0], version: spec.split("@")[1], [mark]: true });
   const why = (...roots: object[]): Outcome[] => [{ code: 0, stdout: JSON.stringify(roots) }];
   /** x@1.0.0 under `depth` levels of two dependents each, every level's pair depending on the next: 2^depth paths, each node expanded once; `back` joins a1's dependents. */
-  const lattice = (depth: number, ...back: object[]): object => {
+  const lattice = (depth: number, root = X, ...back: object[]): object => {
     let pair = [node("a1@1.0.0", IMPORTER, ...back), node("b1@1.0.0", IMPORTER)];
     for (let level = 2; level <= depth; level += 1) {
       pair = [node(`a${level}@1.0.0`, ...pair), node(`b${level}@1.0.0`, marked(`a${level - 1}@1.0.0`, "deduped"), marked(`b${level - 1}@1.0.0`, "deduped"))];
     }
-    return node(X, ...pair);
+    return node(root, ...pair);
   };
   /** a and b depend on x and on each other (a's dependent b, b's circular mark back to a); c depends on a; b and c are direct. */
-  const CYCLIC = node(X, node("a@1.0.0", node("b@1.0.0", marked("a@1.0.0", "circular"), IMPORTER), node("c@1.0.0", IMPORTER)), marked("b@1.0.0", "deduped"));
+  const CYCLIC = node(X, node("a@1.0.0", node("b@1.0.0", marked("a@1.0.0", "circular"), IMPORTER), node("c@1.0.0", DEV_IMPORTER)), marked("b@1.0.0", "deduped"));
+  /** a@1.0.0 and a@2.0.0 on one chain; b's circular mark names a@1.0.0 by version too. */
+  const TWO_A = node(X, node("a@1.0.0", DEV_IMPORTER, node("a@2.0.0", node("b@1.0.0", IMPORTER, marked("a@1.0.0", "circular")))));
   const SIBLING = node(X, { ...node("a@1.0.0", IMPORTER), peersSuffixHash: "p1" }, node("b@1.0.0", { ...node("a@1.0.0", node("c@1.0.0", IMPORTER, marked("a@1.0.0", "circular"))), peersSuffixHash: "p2" }));
   const SERVER_5XX: Outcome = { code: 1, stdout: `${JSON.stringify({ error: { code: "ERR_PNPM_AUDIT_BAD_RESPONSE", message:
     "The audit endpoint (at http://127.0.0.1:40857/-/npm/v1/security/audits/quick) responded with 503: {\"error\":\"service unavailable\"}. The audit endpoint (at http://127.0.0.1:40857/-/npm/v1/security/audits) responded with 503: {\"error\":\"service unavailable\"}" } })}\n` };
@@ -348,15 +356,15 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
         'const dir = process.env.AUDIT_STUB_DIR;',
         'const temp = process.env.RUNNER_TEMP;',
         'const where = { [temp + "/audit-manifests"]: "head", [temp + "/audit-manifests-base"]: "base" }[process.cwd()] ?? process.cwd();',
-        'const call = where + " " + process.argv.slice(2).join(" ");',
+        'const registry = process.argv.find((arg) => arg.startsWith("http://127.0.0.1:"));',
+        'const call = where + " " + process.argv.slice(2).join(" ").replace(/127\\.0\\.0\\.1:\\d+/, "127.0.0.1:PORT");',
         'fs.appendFileSync(dir + "/invocations", call + "\\n");',
         'const served = fs.readFileSync(dir + "/invocations", "utf8").split("\\n").filter((line) => line === call).length;',
         'const outcomes = JSON.parse(fs.readFileSync(dir + "/calls.json", "utf8"))[call];',
         'if (!outcomes) { process.stderr.write("unmodeled pnpm call: " + call + "\\n"); process.exit(97); }',
         "const outcome = outcomes[Math.min(served, outcomes.length) - 1];",
-        "process.stdout.write(outcome.stdout);",
-        'process.stderr.write(outcome.stderr ?? "");',
-        "process.exit(outcome.code);",
+        'const posted = outcome.post === undefined ? Promise.resolve() : fetch(registry + "-/npm/v1/security/audits/quick", { method: "POST", body: JSON.stringify(outcome.post) }).then((response) => response.text());',
+        'posted.then(() => { process.stdout.write(outcome.stdout); process.stderr.write(outcome.stderr ?? ""); process.exit(outcome.code); });',
         "",
       ].join("\n"),
     );
@@ -411,7 +419,7 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
     // pull request's own: a red the relay mirrors onto a failing check-run.
     const headLockfile = `${BASE_LOCKFILE}# ${MARKER}\n`;
     const fx = await fixture({ "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE }, { "pnpm-lock.yaml": headLockfile });
-    const calls = { [H]: audit([G1, "scratch-left-pad@1.3.0"]), [B]: audit(), [headWhy("scratch-left-pad@1.3.0")]: why(node("scratch-left-pad@1.3.0", IMPORTER)) };
+    const calls = { [H]: audit([G1, "scratch-left-pad@1.3.0"]), [B]: audit(), [HC]: walked(), [headWhy("scratch-left-pad@1.3.0")]: why(node("scratch-left-pad@1.3.0", IMPORTER)) };
     const outcome = await runStep(fx, calls);
     expect(outcome.status).toBe(1);
     expect(outcome.invocations).toEqual(served(calls));
@@ -429,53 +437,62 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
 
   // [name, the stub's model, exit status, output that must appear, output that must not]
   const rows: Array<[string, Calls, number, string[], string[]?]> = [
-    ["fails a pull request adding a new vulnerable package@version", { [H]: audit([G1, X]), [B]: audit([G2, "y@1.0.0"]), [headWhy(X)]: why(node(X, IMPORTER)), [baseWhy("y@1.0.0")]: why(node("y@1.0.0", IMPORTER)) },
+    ["fails a pull request adding a new vulnerable package@version", { [H]: audit([G1, X]), [B]: audit([G2, "y@1.0.0"]), [HC]: walked(), [headWhy(X)]: why(node(X, IMPORTER)), [BC]: walked(), [baseWhy("y@1.0.0")]: why(node("y@1.0.0", IMPORTER)) },
       1, [`::error::the pull request introduces ${G1} in ${X} along .>x, which its base does not carry`], ["::warning::"]],
     // Both audits report the one identical path .>a>x: only the full enumeration sees .>b>x.
     ["fails a new dependent of a vulnerable version the base already carries", { [H]: audit([G1, X, ".>a>x"]), [B]: audit([G1, X, ".>a>x"]),
-      [headWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER), node("b@1.0.0", IMPORTER))), [baseWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER))) },
+      [HC]: walked(), [headWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER), node("b@1.0.0", IMPORTER))), [BC]: walked(), [baseWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER))) },
       1, [`::error::the pull request introduces ${G1} in ${X} along .>b>x,`, pre(G1)], ["along .>a>x"]],
     ["passes a head whose findings and paths are the base's, warning on each", { [H]: audit([G1, X], [G2, X]), [B]: audit([G1, X], [G2, X]),
-      [headWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER), node("c@1.0.0", marked("a@1.0.0", "deduped")))),
-      [baseWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER), node("c@1.0.0", marked("a@1.0.0", "deduped")))) }, 0, [pre(G1), pre(G2)], ["::error::"]],
-    ["passes a head that removes a finding", { [H]: audit([G1, X]), [B]: audit([G1, X], [G2, "y@1.0.0"]), [headWhy(X)]: why(node(X, IMPORTER)),
-      [baseWhy(X, "y@1.0.0")]: why(node(X, IMPORTER), node("y@1.0.0", IMPORTER)) }, 0, [pre(G1)], ["::error::", G2]],
+      [HC]: walked(), [headWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER), node("c@1.0.0", marked("a@1.0.0", "deduped")))),
+      [BC]: walked(), [baseWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER), node("c@1.0.0", marked("a@1.0.0", "deduped")))) }, 0, [pre(G1), pre(G2)], ["::error::"]],
+    ["passes a head that removes a finding", { [H]: audit([G1, X]), [B]: audit([G1, X], [G2, "y@1.0.0"]), [HC]: walked(), [headWhy(X)]: why(node(X, IMPORTER)),
+      [BC]: walked(), [baseWhy(X, "y@1.0.0")]: why(node(X, IMPORTER), node("y@1.0.0", IMPORTER)) }, 0, [pre(G1)], ["::error::", G2]],
     ["passes a head that only changes a parent's version along an existing path", { [H]: audit([G1, X, ".>a>x"]), [B]: audit([G1, X, ".>a>x"]),
-      [headWhy(X)]: why(node(X, node("a@2.0.0", IMPORTER))), [baseWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER))) }, 0, [pre(G1)], ["::error::"]],
+      [HC]: walked(), [headWhy(X)]: why(node(X, node("a@2.0.0", IMPORTER))), [BC]: walked(), [baseWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER))) }, 0, [pre(G1)], ["::error::"]],
     ["fails closed when the base's audit stays transient", { [H]: audit([G1, X]), [B]: [SERVER_5XX, SERVER_5XX, SERVER_5XX] }, 1, ["still unavailable after 3 attempts"], ["::warning::"]],
     ["fails closed when the base's audit is unreachable", { [H]: audit([G1, X]), [B]: [NOT_FOUND] }, 1, ["exited 1: unreachable", "was NOT audited"], ["::warning::"]],
     ["fails closed when the base's audit is unreadable", { [H]: audit([G1, X]), [B]: [{ code: 1, stdout: "" }] }, 1, ["exited 1: unreadable", "was NOT audited"], ["::warning::"]],
-    ["fails closed when pnpm why exits nonzero", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: [{ code: 1, stdout: "[]" }] },
+    ["fails closed when pnpm why exits nonzero", { [H]: audit([G1, X]), [B]: audit(), [HC]: walked(), [headWhy(X)]: [{ code: 1, stdout: "[]" }] },
       1, ["::error::pnpm why exited nonzero in the merge tree; refusing to judge findings it could not place"]],
-    ["fails closed when the base's pnpm why exits nonzero", { [H]: audit([G1, X]), [B]: audit([G1, X]), [headWhy(X)]: why(node(X, IMPORTER)), [baseWhy(X)]: [{ code: 1, stdout: "[]" }] },
+    ["fails closed when the base's pnpm why exits nonzero", { [H]: audit([G1, X]), [B]: audit([G1, X]), [HC]: walked(), [headWhy(X)]: why(node(X, IMPORTER)), [BC]: walked(), [baseWhy(X)]: [{ code: 1, stdout: "[]" }] },
       1, ["::error::pnpm why exited nonzero in the base; refusing"], ["::warning::"]],
-    ["fails closed when pnpm why prints unparseable output", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: [{ code: 0, stdout: "[{" }] }, 1, [UNPARSEABLE]],
-    ["fails closed on a finding pnpm why places on no path", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why() },
+    ["fails closed when pnpm why prints unparseable output", { [H]: audit([G1, X]), [B]: audit(), [HC]: walked(), [headWhy(X)]: [{ code: 0, stdout: "[{" }] }, 1, [UNPARSEABLE]],
+    ["fails closed on a finding pnpm why places on no path", { [H]: audit([G1, X]), [B]: audit(), [HC]: walked(), [headWhy(X)]: why() },
       1, [`::error::${X} has a finding in the merge tree but pnpm why places it on no path from the root; refusing`]],
     ["fails closed on a finding lacking github_advisory_id", { [H]: audit([undefined, X]), [B]: audit() }, 1, [`::error::a finding on ${X} in the merge tree carries no github_advisory_id; refusing to key it`]],
     // a now depends on b, closing a cycle pnpm prints as b's circular mark; .>c>a>b>x exists only through that edge.
-    ["fails a new dependent reaching the vulnerable version only through a cycle", { [H]: audit([G1, X]), [B]: audit([G1, X]), [headWhy(X)]: why(CYCLIC),
-      [baseWhy(X)]: why(node(X, node("a@1.0.0", node("b@1.0.0", IMPORTER), node("c@1.0.0", IMPORTER)), marked("b@1.0.0", "deduped"))) },
+    ["fails a new dependent reaching the vulnerable version only through a cycle", { [H]: audit([G1, X]), [B]: audit([G1, X]), [HC]: walked(), [headWhy(X)]: why(CYCLIC),
+      [BC]: walked(), [baseWhy(X)]: why(node(X, node("a@1.0.0", node("b@1.0.0", IMPORTER), node("c@1.0.0", IMPORTER)), marked("b@1.0.0", "deduped"))) },
       1, [`::error::the pull request introduces ${G1} in ${X} along .>c>a>b>x,`, pre(G1)], ["along .>b>a>x,", "along .>c>a>x,", "along .>b>x,"]],
-    ["passes a head identical to a base whose graph has a cycle", { [H]: audit([G1, X]), [B]: audit([G1, X]), [headWhy(X)]: why(CYCLIC), [baseWhy(X)]: why(CYCLIC) }, 0, [pre(G1)], ["::error::"]],
+    ["passes a head identical to a base whose graph has a cycle", { [H]: audit([G1, X]), [B]: audit([G1, X]), [HC]: walked(), [headWhy(X)]: why(CYCLIC), [BC]: walked(), [baseWhy(X)]: why(CYCLIC) }, 0, [pre(G1)], ["::error::"]],
     // An a@1.0.0 of another peer suffix was printed (and left) before the chain the mark sits on: only the one above counts.
-    ["passes a cycle mark whose name an earlier sibling shares", { [H]: audit([G1, X]), [B]: audit([G1, X]), [headWhy(X)]: why(SIBLING), [baseWhy(X)]: why(SIBLING) }, 0, [pre(G1)], ["::error::"]],
-    ["refuses a cycle mark naming no node above it", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER, marked("q@1.0.0", "circular")))) }, 1, [UNPARSEABLE]],
-    ["refuses a cycle mark naming two nodes above it", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(node(X, { ...node("a@1.0.0", { ...node("a@1.0.0", IMPORTER,
+    ["passes a cycle mark whose name an earlier sibling shares", { [H]: audit([G1, X]), [B]: audit([G1, X]), [HC]: walked(), [headWhy(X)]: why(SIBLING), [BC]: walked(), [baseWhy(X)]: why(SIBLING) }, 0, [pre(G1)], ["::error::"]],
+    ["passes a cycle mark that names its node by version as well as name", { [H]: audit([G1, X]), [B]: audit([G1, X]), [HC]: walked(), [headWhy(X)]: why(TWO_A), [BC]: walked(), [baseWhy(X)]: why(TWO_A) }, 0, [pre(G1)], ["::error::"]],
+    // pnpm why places paths from the root project alone, while pnpm audit walks every lockfile importer.
+    ["fails a second lockfile importer adding an edge onto a version the base already carries", { [H]: audit([G1, X]), [B]: audit([G1, X]), [HC]: walked(".", "sub") },
+      1, ["::error::the lockfile in the merge tree names an importer other than the root project, whose paths this step cannot place; refusing"], ["::warning::"]],
+    ["fails closed on a base lockfile whose one importer is not the root", { [H]: audit([G1, X]), [B]: audit([G1, X]), [HC]: walked(), [headWhy(X)]: why(node(X, IMPORTER)), [BC]: walked("sub") },
+      1, ["::error::the lockfile in the base names an importer other than the root project"]],
+    ["fails closed when the local audit request never arrives", { [H]: audit([G1, X]), [B]: audit(), [HC]: [{ code: 1, stdout: "" }] }, 1, [UNPARSEABLE]],
+    ["fails closed past the cap counted across a directory's roots", { [H]: audit([G1, X], [G1, "y@1.0.0"]), [B]: audit(), [HC]: walked(), [headWhy(X, "y@1.0.0")]: why(lattice(15), lattice(15, "y@1.0.0")) },
+      1, ["::error::the paths in the merge tree need more than 100000 steps to enumerate; refusing"]],
+    ["refuses a cycle mark naming no node above it", { [H]: audit([G1, X]), [B]: audit(), [HC]: walked(), [headWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER, marked("q@1.0.0", "circular")))) }, 1, [UNPARSEABLE]],
+    ["refuses a cycle mark naming two nodes above it", { [H]: audit([G1, X]), [B]: audit(), [HC]: walked(), [headWhy(X)]: why(node(X, { ...node("a@1.0.0", { ...node("a@1.0.0", IMPORTER,
       marked("a@1.0.0", "circular")), peersSuffixHash: "p2" }), peersSuffixHash: "p1" })) }, 1, [UNPARSEABLE]],
-    ["fails closed past the path-enumeration cap", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(lattice(16)) },
+    ["fails closed past the path-enumeration cap", { [H]: audit([G1, X]), [B]: audit(), [HC]: walked(), [headWhy(X)]: why(lattice(16)) },
       1, ["::error::the paths in the merge tree need more than 100000 steps to enumerate; refusing"]],
-    ["fails closed past the cap on a graph with a cycle", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(lattice(16, marked("a16@1.0.0", "circular"))) },
+    ["fails closed past the cap on a graph with a cycle", { [H]: audit([G1, X]), [B]: audit(), [HC]: walked(), [headWhy(X)]: why(lattice(16, X, marked("a16@1.0.0", "circular"))) },
       1, ["::error::the paths in the merge tree need more than 100000 steps to enumerate; refusing"]],
-    ["passes paths that stay inside the cap", { [H]: audit([G1, X]), [B]: audit([G1, X]), [headWhy(X)]: why(lattice(15)), [baseWhy(X)]: why(lattice(15)) }, 0, [pre(G1)], ["::error::"]],
-    ["refuses a dependent named outside the npm alphabet", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(node(X, node("a>b@1.0.0", IMPORTER))) },
+    ["passes paths that stay inside the cap", { [H]: audit([G1, X]), [B]: audit([G1, X]), [HC]: walked(), [headWhy(X)]: why(lattice(15)), [BC]: walked(), [baseWhy(X)]: why(lattice(15)) }, 0, [pre(G1)], ["::error::"]],
+    ["refuses a dependent named outside the npm alphabet", { [H]: audit([G1, X]), [B]: audit(), [HC]: walked(), [headWhy(X)]: why(node(X, node("a>b@1.0.0", IMPORTER))) },
       1, ["::error::a package name or version in the merge tree is outside the npm alphabet; refusing to print or key it"], [".>a>b"]],
     ["refuses a reported package outside the npm alphabet", { [H]: audit([G1, "x%0A@1.0.0"]), [B]: audit() },
       1, ["::error::a package name or version in the merge tree is outside the npm alphabet; refusing to print or key it"]],
     ["refuses an advisory listing no findings", { [H]: [{ code: 1, stdout: audit([G1, X])[0]!.stdout.replace(/"findings":\[\{.*?\}\]/, '"findings":[]') }], [B]: audit() }, 1, [UNPARSEABLE]],
-    ["refuses a node pnpm why expands twice", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER), node("b@1.0.0", node("a@1.0.0", IMPORTER)))) }, 1, [UNPARSEABLE]],
-    ["refuses a dependent with neither dependents nor a mark", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(node(X, { name: "a", version: "1.0.0" })) }, 1, [UNPARSEABLE]],
-    ["refuses a deduped node pnpm why never expanded", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(node(X, marked("a@1.0.0", "deduped"))) }, 1, [UNPARSEABLE]],
+    ["refuses a node pnpm why expands twice", { [H]: audit([G1, X]), [B]: audit(), [HC]: walked(), [headWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER), node("b@1.0.0", node("a@1.0.0", IMPORTER)))) }, 1, [UNPARSEABLE]],
+    ["refuses a dependent with neither dependents nor a mark", { [H]: audit([G1, X]), [B]: audit(), [HC]: walked(), [headWhy(X)]: why(node(X, { name: "a", version: "1.0.0" })) }, 1, [UNPARSEABLE]],
+    ["refuses a deduped node pnpm why never expanded", { [H]: audit([G1, X]), [B]: audit(), [HC]: walked(), [headWhy(X)]: why(node(X, marked("a@1.0.0", "deduped"))) }, 1, [UNPARSEABLE]],
   ];
 
   it.each(rows)("%s", async (_name, calls, status, present, absent = []) => {
@@ -584,7 +601,7 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
   it("carries no pull-request byte through any output on the advisory path", async () => {
     const headPackage = `${BASE_PACKAGE}/* ${MARKER} */\n`;
     const fx = await fixture({ "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE }, { "package.json": headPackage });
-    const outcome = await runStep(fx, { [H]: audit([G1, X]), [B]: audit([G1, X]), [headWhy(X)]: why(node(X, IMPORTER)), [baseWhy(X)]: why(node(X, IMPORTER)) });
+    const outcome = await runStep(fx, { [H]: audit([G1, X]), [B]: audit([G1, X]), [HC]: walked(), [headWhy(X)]: why(node(X, IMPORTER)), [BC]: walked(), [baseWhy(X)]: why(node(X, IMPORTER)) });
     expect(outcome.status).toBe(0);
     expect(outcome.stdout).toContain(pre(G1));
     expect(outcome.stdout + outcome.stderr).not.toContain(MARKER);

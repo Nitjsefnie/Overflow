@@ -597,7 +597,8 @@ jobs:
           audit_here
           node -e '
           const fs = require("node:fs");
-          const { execFileSync } = require("node:child_process");
+          const http = require("node:http");
+          const { execFile, execFileSync } = require("node:child_process");
           // Every name and version this step prints or keys is held to this
           // alphabet: no lockfile byte can carry a newline, a percent sign or
           // a colon (a workflow command) or the path separator into the log.
@@ -614,7 +615,32 @@ jobs:
             console.log("::error::" + message);
             process.exit(1);
           };
-          const triples = (dir) => {
+          // pnpm audit walks every importer the lockfile names; pnpm why places
+          // paths from the root project alone. The importer set is read from
+          // the request pnpm audit builds, sent here to a local endpoint, since
+          // pnpm parses YAML the step cannot reproduce by reading the text.
+          const importersOf = (dir) => new Promise((resolve, reject) => {
+            const server = http.createServer((request, response) => {
+              const chunks = [];
+              request.on("data", (chunk) => chunks.push(chunk));
+              request.on("end", () => {
+                response.end(JSON.stringify({ advisories: {}, metadata: { vulnerabilities: {} } }));
+                try {
+                  resolve(Object.keys(JSON.parse(Buffer.concat(chunks).toString("utf8")).dependencies));
+                } catch (error) {
+                  reject(error);
+                }
+              });
+            });
+            server.listen(0, "127.0.0.1", () => {
+              const registry = "http://127.0.0.1:" + server.address().port + "/";
+              execFile("pnpm", ["audit", "--json", "--registry", registry], { cwd: dir, maxBuffer: 1 << 26 }, () => {
+                server.close();
+                reject(new Error("pnpm audit sent no request"));
+              });
+            });
+          });
+          const triples = async (dir) => {
             const findings = [];
             for (const advisory of Object.values(JSON.parse(fs.readFileSync(dir + "/audit.json", "utf8")).advisories)) {
               if (advisory.findings.length === 0) throw new Error("an advisory without findings");
@@ -629,6 +655,8 @@ jobs:
             const paths = new Map(selectors.map((pkg) => [pkg, new Set()]));
             let out = "[]";
             if (selectors.length > 0) {
+              const importers = await importersOf(dir);
+              if (importers.length !== 1 || importers[0] !== ".") refuse("the lockfile in " + label + " names an importer other than the root project, whose paths this step cannot place; refusing");
               try {
                 out = execFileSync("pnpm", ["why", "--json", ...selectors], { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 26 });
               } catch {
@@ -691,16 +719,16 @@ jobs:
             }
             return keyed;
           };
-          try {
-            const head = triples(process.argv[1]);
+          (async () => {
+            const head = await triples(process.argv[1]);
             label = "the base";
-            const base = triples(process.argv[2]);
+            const base = await triples(process.argv[2]);
             const introduced = [...head].filter(([key]) => !base.has(key)).map(([, triple]) => triple);
             for (const [id, pkg, path] of introduced) console.log("::error::the pull request introduces " + id + " in " + pkg + " along " + path + ", which its base does not carry");
             const kept = new Set([...head].filter(([key]) => base.has(key)).map(([, [id, pkg]]) => id + " in " + pkg));
-            for (const finding of kept) console.log("::warning::" + finding + " is pre-existing on the base, so this pull request does not fail on it");
+            for (const finding of kept) console.log("::warning::" + finding + " is pre-existing on the base along at least one path the base already carries");
             process.exit(introduced.length > 0 ? 1 : 0);
-          } catch {
+          })().catch(() => {
             refuse("the audit report or pnpm why output in " + label + " is not in the shape this step reads; refusing");
-          }
+          });
           ' "${sanitized}" "${base_manifests}"
