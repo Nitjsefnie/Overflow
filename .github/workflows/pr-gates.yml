@@ -388,10 +388,11 @@ jobs:
           pnpm --version
 
       # ONE step, end to end: resolve this event's two SHAs, build the merge
-      # tree, materialize the two manifests as data, then audit them — the
-      # audit half is dependency-audit.yml's own audit step, verbatim, so the
-      # two files cannot drift (tests/ci/dependency-audit-pr.test.ts extracts
-      # both and requires byte equality).
+      # tree, materialize the two manifests as data, then audit them with
+      # dependency-audit.yml's own five-verdict classifier, verbatim
+      # (tests/ci/dependency-audit-pr.test.ts extracts both and requires byte
+      # equality). Main's push and schedule legs fail on any advisory; this
+      # leg fails only on a finding the pull request introduces.
       - name: Audit the pull request's merge-tree manifests
         env:
           # The head this event is about — the commit the pull request carries
@@ -444,21 +445,15 @@ jobs:
             fi
             exit 1
           fi
-          # The two manifests are materialized AS DATA into a sanitized
-          # RUNNER_TEMP directory: each must be exactly one mode-100644 blob
-          # entry at its path in the merge tree, or the run refuses — a
-          # symlink leaf, a wrong mode, a non-blob type and an absent file are
-          # all refusals, because what the audit reads from disk must be the
-          # bytes the tree names and nothing else (the 1035 ls-tree
-          # discipline). A manifest the pull request did not touch carries the
-          # base's blob here, so the audit runs on the base's bytes exactly
-          # when the pull request changed nothing.
-          sanitized="${RUNNER_TEMP}/audit-manifests"
-          if [ -e "${sanitized}" ] || [ -L "${sanitized}" ]; then
-            echo "::error::${sanitized} already exists; refusing to write the pull request's manifests into a directory this run did not create"
-            exit 1
-          fi
-          mkdir -- "${sanitized}"
+          # The manifests are materialized AS DATA into sanitized RUNNER_TEMP
+          # directories this run creates: each must be exactly one mode-100644
+          # blob entry at its path in the tree it is read from, or the run
+          # refuses — a symlink leaf, a wrong mode, a non-blob type and an
+          # absent file are all refusals, because what the audit reads from
+          # disk must be the bytes the tree names and nothing else (the 1035
+          # ls-tree discipline). A manifest the pull request did not touch
+          # carries the base's blob in the merge tree, so the audit runs on the
+          # base's bytes exactly when the pull request changed nothing.
           manifest_blob_of() {
             entries=$(git ls-tree "${1:?}" -- "${2:?}")
             count=0
@@ -474,29 +469,43 @@ jobs:
               entry_blob=${rest#* }
             done <<< "${entries}"
             if [ "${count}" -ne 1 ] || [ "${entry_mode}" != "100644" ] || [ "${entry_type}" != "blob" ]; then
-              echo "::error::${2} must be exactly one mode-100644 blob entry in the merge tree; refusing. The manifests are read from git objects, never from the filesystem — a symlink leaf, a wrong mode, a non-blob type and an absent file are all refused." >&2
+              echo "::error::${2} must be exactly one mode-100644 blob entry in the ${3:?}; refusing. The manifests are read from git objects, never from the filesystem — a symlink leaf, a wrong mode, a non-blob type and an absent file are all refused." >&2
               exit 1
             fi
             printf '%s\n' "${entry_blob}"
           }
-          for manifest in package.json pnpm-lock.yaml; do
-            blob=$(manifest_blob_of "${merged_tree}" "${manifest}")
-            git cat-file blob "${blob}" > "${sanitized}/${manifest}"
-          done
-          # The audit half is byte-identical to dependency-audit.yml's audit
-          # step (extracted, never hand-copied; equality pinned by
-          # tests/ci/dependency-audit-pr.test.ts): same five-verdict
-          # classifier, same narrow transient retry. audit.json and audit.err
-          # are written relative to the working directory, which the cd above
-          # puts inside the sanitized directory.
+          # materialize TREE DIRECTORY LABEL, from the checkout's repository.
+          materialize() {
+            if [ -e "${2:?}" ] || [ -L "${2}" ]; then
+              echo "::error::${2} already exists; refusing to write manifests into a directory this run did not create"
+              exit 1
+            fi
+            mkdir -- "${2}"
+            for manifest in package.json pnpm-lock.yaml; do
+              blob=$(manifest_blob_of "${1:?}" "${manifest}" "${3:?}")
+              git cat-file blob "${blob}" > "${2}/${manifest}"
+            done
+          }
+          workspace="${PWD}"
+          sanitized="${RUNNER_TEMP}/audit-manifests"
+          base_manifests="${RUNNER_TEMP}/audit-manifests-base"
+          materialize "${merged_tree}" "${sanitized}" "merge tree"
+          # pnpm and the classifier read and write audit.json and audit.err
+          # relative to the working directory: each audit runs inside the
+          # directory it judges.
           cd -- "${sanitized}"
           set -uo pipefail
           attempts=3
           delay="${DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS:-30}"
-          for attempt in $(seq 1 "$attempts"); do
-            code=0
-            pnpm audit --json > audit.json 2> audit.err || code=$?
-            result=$(AUDIT_EXIT="$code" node -e '
+          # Audits the working directory with the narrow transient retry. It
+          # returns with $verdict set only on clean and advisories; every other
+          # verdict ends the run red, so an unaudited tree never reads as
+          # either.
+          audit_here() {
+            for attempt in $(seq 1 "$attempts"); do
+              code=0
+              pnpm audit --json > audit.json 2> audit.err || code=$?
+              result=$(AUDIT_EXIT="$code" node -e '
           const fs = require("node:fs");
           let report;
           try {
@@ -535,41 +544,142 @@ jobs:
               : "unreadable|the audit report carried an empty advisories map and exited " + process.env.AUDIT_EXIT
             : "unreadable|the audit report carried no advisories field and exited " + process.env.AUDIT_EXIT);
           ')
-            verdict="${result%%|*}"
-            detail="${result#*|}"
-            echo "attempt $attempt of $attempts, pnpm audit --json exited $code: $verdict — $detail"
-            case "$verdict" in
-              clean)
-                echo "$detail"
-                exit 0
-                ;;
-              advisories)
-                echo "$detail"
-                echo "advisory ids and patched versions:"
-                node -e '
+              verdict="${result%%|*}"
+              detail="${result#*|}"
+              echo "attempt $attempt of $attempts, pnpm audit --json exited $code: $verdict — $detail"
+              case "$verdict" in
+                clean|advisories)
+                  echo "$detail"
+                  return 0
+                  ;;
+                transient)
+                  cat audit.err
+                  if [ "$attempt" -lt "$attempts" ]; then
+                    echo "$detail — a registry outage, not a finding; retrying"
+                    sleep "$delay"
+                    continue
+                  fi
+                  echo "$detail — the advisory endpoint was still unavailable after $attempts attempts"
+                  exit 1
+                  ;;
+                *)
+                  cat audit.err
+                  echo "$detail — the lockfile was NOT audited, so this run reports nothing about it"
+                  exit 1
+                  ;;
+              esac
+            done
+            exit 1
+          }
+          audit_here
+          if [ "$verdict" = clean ]; then
+            exit 0
+          fi
+          echo "advisory ids and patched versions:"
+          node -e '
           const report = JSON.parse(require("node:fs").readFileSync("audit.json", "utf8"));
           for (const advisory of Object.values(report.advisories ?? {})) {
             console.log("  " + advisory.module_name + " " + advisory.severity + ": " + advisory.title
               + " (vulnerable " + advisory.vulnerable_versions + ", patched " + advisory.patched_versions + ")");
           }
           '
-                exit 1
-                ;;
-              transient)
-                cat audit.err
-                if [ "$attempt" -lt "$attempts" ]; then
-                  echo "$detail — a registry outage, not a finding; retrying"
-                  sleep "$delay"
-                  continue
-                fi
-                echo "$detail — the advisory endpoint was still unavailable after $attempts attempts"
-                exit 1
-                ;;
-              *)
-                cat audit.err
-                echo "$detail — the lockfile was NOT audited, so this run reports nothing about it"
-                exit 1
-                ;;
-            esac
-          done
-          exit 1
+          # Main can carry these findings already (its own push and schedule
+          # legs report those), so the base's manifests are audited the same
+          # way and each finding is keyed as (GHSA, package@version, path) on
+          # both sides. pnpm audit names ONE path per finding however many
+          # dependents the package has, so the paths are enumerated from
+          # `pnpm why`: a pull request adding a new dependent to a version main
+          # already carries adds a path, and fails here.
+          echo "auditing the base ${OVERFLOW_BASE_SHA} to tell the findings this pull request introduces from those main already carries"
+          cd -- "${workspace}"
+          materialize "${OVERFLOW_BASE_SHA}" "${base_manifests}" "base commit's tree"
+          cd -- "${base_manifests}"
+          audit_here
+          node -e '
+          const fs = require("node:fs");
+          const { execFileSync } = require("node:child_process");
+          // Every name and version this step prints or keys is held to this
+          // alphabet: no lockfile byte can carry a newline, a percent sign or
+          // a colon (a workflow command) or the path separator into the log.
+          const SAFE = /^[A-Za-z0-9@\/._~+-]+$/;
+          const GHSA = /^GHSA(-[23456789cfghjmpqrvwx]{4}){3}$/;
+          // The lockfile chooses the walk: a few dependents per level multiply
+          // into exponentially many paths. The largest real state measured
+          // (the lockfile at 1e6ac1e0, 14 vulnerable packages) needs under a
+          // thousand steps, so this bound keeps two orders of magnitude of
+          // headroom and still ends in well under a second.
+          const LIMIT = 100000;
+          let label = "the merge tree";
+          const refuse = (message) => {
+            console.log("::error::" + message);
+            process.exit(1);
+          };
+          const triples = (dir) => {
+            const findings = [];
+            for (const advisory of Object.values(JSON.parse(fs.readFileSync(dir + "/audit.json", "utf8")).advisories)) {
+              if (advisory.findings.length === 0) throw new Error("an advisory without findings");
+              for (const finding of advisory.findings) {
+                const pkg = advisory.module_name + "@" + finding.version;
+                if (!SAFE.test(pkg)) refuse("a package name or version in " + label + " is outside the npm alphabet; refusing to print or key it");
+                if (!GHSA.test(advisory.github_advisory_id)) refuse("a finding on " + pkg + " in " + label + " carries no github_advisory_id; refusing to key it");
+                findings.push([advisory.github_advisory_id, pkg]);
+              }
+            }
+            const selectors = [...new Set(findings.map(([, pkg]) => pkg))];
+            const paths = new Map(selectors.map((pkg) => [pkg, new Set()]));
+            let out = "[]";
+            if (selectors.length > 0) {
+              try {
+                out = execFileSync("pnpm", ["why", "--json", ...selectors], { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 26 });
+              } catch {
+                refuse("pnpm why exited nonzero in " + label + "; refusing to judge findings it could not place");
+              }
+            }
+            let steps = 0;
+            for (const root of JSON.parse(out)) {
+              // A deduped node is listed without dependents: they hang off its
+              // one expanded occurrence elsewhere in the same root tree.
+              const key = (node) => JSON.stringify([node.name, node.version, node.peersSuffixHash]);
+              const expanded = new Map();
+              for (const stack = [root]; stack.length > 0; ) {
+                const node = stack.pop();
+                if (node.depField !== undefined || node.deduped === true) continue;
+                if (node.circular === true) refuse("pnpm why reports a dependency cycle above " + root.name + "@" + root.version + " in " + label + ", which hides paths; refusing");
+                if (!Array.isArray(node.dependents) || expanded.has(key(node))) throw new Error("not a dependents tree");
+                expanded.set(key(node), node.dependents);
+                stack.push(...node.dependents);
+              }
+              const found = paths.get(root.name + "@" + root.version);
+              // Each entry is a node and the path below it, in pnpm audit spelling.
+              for (const walk = [[root, ""]]; walk.length > 0; ) {
+                const [node, below] = walk.pop();
+                if (++steps > LIMIT) refuse("the paths in " + label + " need more than " + LIMIT + " steps to enumerate; refusing");
+                if (node.depField !== undefined) {
+                  found.add("." + below);
+                  continue;
+                }
+                if (!SAFE.test(node.name)) refuse("a package name or version in " + label + " is outside the npm alphabet; refusing to print or key it");
+                const dependents = node.deduped === true ? expanded.get(key(node)) : node.dependents;
+                for (const dependent of dependents) walk.push([dependent, ">" + node.name + below]);
+              }
+            }
+            const keyed = new Map();
+            for (const [id, pkg] of findings) {
+              if (paths.get(pkg).size === 0) refuse(pkg + " has a finding in " + label + " but pnpm why places it on no path from the root; refusing");
+              for (const path of paths.get(pkg)) keyed.set(JSON.stringify([id, pkg, path]), [id, pkg, path]);
+            }
+            return keyed;
+          };
+          try {
+            const head = triples(process.argv[1]);
+            label = "the base";
+            const base = triples(process.argv[2]);
+            const introduced = [...head].filter(([key]) => !base.has(key)).map(([, triple]) => triple);
+            for (const [id, pkg, path] of introduced) console.log("::error::the pull request introduces " + id + " in " + pkg + " along " + path + ", which its base does not carry");
+            const kept = new Set([...head].filter(([key]) => base.has(key)).map(([, [id, pkg]]) => id + " in " + pkg));
+            for (const finding of kept) console.log("::warning::" + finding + " is pre-existing on the base, so this pull request does not fail on it");
+            process.exit(introduced.length > 0 ? 1 : 0);
+          } catch {
+            refuse("the audit report or pnpm why output in " + label + " is not in the shape this step reads; refusing");
+          }
+          ' "${sanitized}" "${base_manifests}"
