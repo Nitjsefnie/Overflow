@@ -68,24 +68,13 @@ type Workflow = {
 // explicitly classified and checked per head SHA below.
 const BOUNDED: Record<string, { group: string; "cancel-in-progress": false; queue: "max" }> = {
   "comment-share.yml": {
-    group: "comment-share-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-    "cancel-in-progress": false,
-    queue: "max",
-  },
+    group: "comment-share-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}", "cancel-in-progress": false, queue: "max" },
   "size-baseline.yml": {
-    group: "size-baseline-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-    "cancel-in-progress": false,
-    queue: "max",
-  },
+    group: "size-baseline-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}", "cancel-in-progress": false, queue: "max" },
 };
 
 /** Required PR gates cancel only an older run of the same pull request. */
-const PER_PR_REQUIRED = {
-  "pr-gates.yml": {
-    group: "pr-gates-${{ github.event.pull_request.number }}",
-    "cancel-in-progress": true,
-  },
-};
+const PER_PR_REQUIRED = { "pr-gates.yml": { group: "pr-gates-${{ github.event.pull_request.number }}", "cancel-in-progress": true } };
 
 /**
  * Every workflow that is deliberately NOT repository-bounded: why keeping it
