@@ -245,14 +245,16 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
   const node = (spec: string, ...dependents: object[]): object => ({ name: spec.split("@")[0], version: spec.split("@")[1], dependents });
   const marked = (spec: string, mark: "deduped" | "circular"): object => ({ name: spec.split("@")[0], version: spec.split("@")[1], [mark]: true });
   const why = (...roots: object[]): Outcome[] => [{ code: 0, stdout: JSON.stringify(roots) }];
-  /** x@1.0.0 under `depth` levels of two dependents each, every level's pair depending on the next: 2^depth paths, each node expanded once. */
-  const lattice = (depth: number): object => {
-    let pair = [node("a1@1.0.0", IMPORTER), node("b1@1.0.0", IMPORTER)];
+  /** x@1.0.0 under `depth` levels of two dependents each, every level's pair depending on the next: 2^depth paths, each node expanded once; `back` joins a1's dependents. */
+  const lattice = (depth: number, ...back: object[]): object => {
+    let pair = [node("a1@1.0.0", IMPORTER, ...back), node("b1@1.0.0", IMPORTER)];
     for (let level = 2; level <= depth; level += 1) {
       pair = [node(`a${level}@1.0.0`, ...pair), node(`b${level}@1.0.0`, marked(`a${level - 1}@1.0.0`, "deduped"), marked(`b${level - 1}@1.0.0`, "deduped"))];
     }
     return node(X, ...pair);
   };
+  /** a and b depend on x and on each other (a's dependent b, b's circular mark back to a); c depends on a; b and c are direct. */
+  const CYCLIC = node(X, node("a@1.0.0", node("b@1.0.0", marked("a@1.0.0", "circular"), IMPORTER), node("c@1.0.0", IMPORTER)), marked("b@1.0.0", "deduped"));
   const SERVER_5XX: Outcome = { code: 1, stdout: `${JSON.stringify({ error: { code: "ERR_PNPM_AUDIT_BAD_RESPONSE", message:
     "The audit endpoint (at http://127.0.0.1:40857/-/npm/v1/security/audits/quick) responded with 503: {\"error\":\"service unavailable\"}. The audit endpoint (at http://127.0.0.1:40857/-/npm/v1/security/audits) responded with 503: {\"error\":\"service unavailable\"}" } })}\n` };
   const NOT_FOUND: Outcome = { code: 1, stdout: `${JSON.stringify({ error: { code: "ERR_PNPM_AUDIT_BAD_RESPONSE", message: "The audit endpoint (at https://registry.npmjs.org/-/npm/v1/security/audits/quick) responded with 404: not found" } })}\n` };
@@ -450,9 +452,17 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
     ["fails closed on a finding pnpm why places on no path", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why() },
       1, [`::error::${X} has a finding in the merge tree but pnpm why places it on no path from the root; refusing`]],
     ["fails closed on a finding lacking github_advisory_id", { [H]: audit([undefined, X]), [B]: audit() }, 1, [`::error::a finding on ${X} in the merge tree carries no github_advisory_id; refusing to key it`]],
-    ["fails closed on a cycle in the dependents tree", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER, node("b@1.0.0", marked("a@1.0.0", "circular"))))) },
-      1, [`::error::pnpm why reports a dependency cycle above ${X} in the merge tree, which hides paths; refusing`]],
-    ["fails closed past the path-enumeration cap", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(lattice(17)) },
+    // a now depends on b, closing a cycle pnpm prints as b's circular mark; .>c>a>b>x exists only through that edge.
+    ["fails a new dependent reaching the vulnerable version only through a cycle", { [H]: audit([G1, X]), [B]: audit([G1, X]), [headWhy(X)]: why(CYCLIC),
+      [baseWhy(X)]: why(node(X, node("a@1.0.0", node("b@1.0.0", IMPORTER), node("c@1.0.0", IMPORTER)), marked("b@1.0.0", "deduped"))) },
+      1, [`::error::the pull request introduces ${G1} in ${X} along .>c>a>b>x,`, pre(G1)], ["along .>b>a>x,", "along .>c>a>x,", "along .>b>x,"]],
+    ["passes a head identical to a base whose graph has a cycle", { [H]: audit([G1, X]), [B]: audit([G1, X]), [headWhy(X)]: why(CYCLIC), [baseWhy(X)]: why(CYCLIC) }, 0, [pre(G1)], ["::error::"]],
+    ["refuses a cycle mark naming no node above it", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER, marked("q@1.0.0", "circular")))) }, 1, [UNPARSEABLE]],
+    ["refuses a cycle mark naming two nodes above it", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(node(X, { ...node("a@1.0.0", { ...node("a@1.0.0", IMPORTER,
+      marked("a@1.0.0", "circular")), peersSuffixHash: "p2" }), peersSuffixHash: "p1" })) }, 1, [UNPARSEABLE]],
+    ["fails closed past the path-enumeration cap", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(lattice(16)) },
+      1, ["::error::the paths in the merge tree need more than 100000 steps to enumerate; refusing"]],
+    ["fails closed past the cap on a graph with a cycle", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(lattice(16, marked("a16@1.0.0", "circular"))) },
       1, ["::error::the paths in the merge tree need more than 100000 steps to enumerate; refusing"]],
     ["passes paths that stay inside the cap", { [H]: audit([G1, X]), [B]: audit([G1, X]), [headWhy(X)]: why(lattice(15)), [baseWhy(X)]: why(lattice(15)) }, 0, [pre(G1)], ["::error::"]],
     ["refuses a dependent named outside the npm alphabet", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(node(X, node("a>b@1.0.0", IMPORTER))) },

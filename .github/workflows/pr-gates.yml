@@ -605,8 +605,8 @@ jobs:
           const GHSA = /^GHSA(-[23456789cfghjmpqrvwx]{4}){3}$/;
           // The lockfile chooses the walk: a few dependents per level multiply
           // into exponentially many paths. The largest real state measured
-          // (the lockfile at 1e6ac1e0, 14 vulnerable packages) needs under a
-          // thousand steps, so this bound keeps two orders of magnitude of
+          // (the lockfile at 1e6ac1e0, 14 vulnerable packages) needs under
+          // five hundred steps, so this bound keeps two orders of magnitude of
           // headroom and still ends in well under a second.
           const LIMIT = 100000;
           let label = "the merge tree";
@@ -637,32 +637,52 @@ jobs:
             }
             let steps = 0;
             for (const root of JSON.parse(out)) {
-              // A deduped node is listed without dependents: they hang off its
-              // one expanded occurrence elsewhere in the same root tree.
+              // pnpm why prints each node of a root tree once, expanded with
+              // every dependent; a later occurrence is marked deduped, and a
+              // dependent already above it on the printed chain is marked
+              // circular without its peer suffix. Both marks are real edges,
+              // so the graph is rebuilt from them before any path is read.
               const key = (node) => JSON.stringify([node.name, node.version, node.peersSuffixHash]);
-              const expanded = new Map();
-              for (const stack = [root]; stack.length > 0; ) {
-                const node = stack.pop();
-                if (node.depField !== undefined || node.deduped === true) continue;
-                if (node.circular === true) refuse("pnpm why reports a dependency cycle above " + root.name + "@" + root.version + " in " + label + ", which hides paths; refusing");
-                // A node listed without dependents or a mark throws at the spread.
-                if (expanded.has(key(node))) throw new Error("expanded twice");
-                expanded.set(key(node), node.dependents);
-                stack.push(...node.dependents);
-              }
-              const found = paths.get(root.name + "@" + root.version);
-              // Each entry is a node and the path below it, in pnpm audit spelling.
-              for (const walk = [[root, ""]]; walk.length > 0; ) {
-                const [node, below] = walk.pop();
-                if (++steps > LIMIT) refuse("the paths in " + label + " need more than " + LIMIT + " steps to enumerate; refusing");
-                if (node.depField !== undefined) {
-                  found.add("." + below);
-                  continue;
+              const graph = new Map();
+              const chain = [];
+              const expand = (node) => {
+                // A node listed without dependents or a mark throws at the loop.
+                if (graph.has(key(node))) throw new Error("expanded twice");
+                const parents = new Set();
+                graph.set(key(node), { name: node.name, parents });
+                chain.push(node);
+                for (const dependent of node.dependents) {
+                  if (dependent.depField !== undefined) {
+                    parents.add(".");
+                    continue;
+                  }
+                  if (!SAFE.test(dependent.name)) refuse("a package name or version in " + label + " is outside the npm alphabet; refusing to print or key it");
+                  if (dependent.circular === true) {
+                    const above = chain.filter((node) => node.name === dependent.name && node.version === dependent.version);
+                    if (above.length !== 1) throw new Error("a cycle mark that names no single node above it");
+                    parents.add(key(above[0]));
+                    continue;
+                  }
+                  parents.add(key(dependent));
+                  if (dependent.deduped !== true) expand(dependent);
                 }
-                if (!SAFE.test(node.name)) refuse("a package name or version in " + label + " is outside the npm alphabet; refusing to print or key it");
-                const dependents = node.deduped === true ? expanded.get(key(node)) : node.dependents;
-                for (const dependent of dependents) walk.push([dependent, ">" + node.name + below]);
-              }
+                chain.pop();
+              };
+              expand(root);
+              const found = paths.get(root.name + "@" + root.version);
+              // Every simple path: a node already on the path is not entered
+              // again, which is what makes a cycle finite.
+              const onPath = new Set();
+              const walk = (node, below) => {
+                if (++steps > LIMIT) refuse("the paths in " + label + " need more than " + LIMIT + " steps to enumerate; refusing");
+                onPath.add(node);
+                for (const parent of graph.get(node).parents) {
+                  if (parent === ".") found.add("." + below);
+                  else if (!onPath.has(parent)) walk(parent, ">" + graph.get(parent).name + below);
+                }
+                onPath.delete(node);
+              };
+              walk(key(root), ">" + root.name);
             }
             const keyed = new Map();
             for (const [id, pkg] of findings) {
