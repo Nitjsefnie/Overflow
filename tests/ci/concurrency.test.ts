@@ -381,7 +381,7 @@ const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
   // check-run name is what branch protection and .github/required-checks.json
   // match.
   "actionlint.yml": ["actionlint"],
-  "advisory-tracking.yml": ["advisory-tracking"],
+  "advisory-tracking.yml": ["advisory-audit", "advisory-comment"],
   "ci-pr.yml": ["verify"],
   "ci.yml": ["calibrate", "postgres-image", "push-recalibration", "shellcheck", "verify"],
   "claim.yml": ["claim"],
