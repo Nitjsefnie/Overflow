@@ -97,6 +97,7 @@ describe.skipIf(process.platform !== "linux")("the audit job's listing and the c
   // [name, audit answers, comment pages before the run, the one body posted (trailing newline dropped), or none]
   const rows: Array<[string, Outcome[], () => Comment[][], () => string | undefined]> = [
     ["writes nothing when the latest marked bot comment, on a later page, is the same listing", [report(G1)], () => [[bot(listed(G2))], [bot(listed(G1)), person("a later reply")]], () => undefined],
+    ["writes nothing when the latest of three marked bot listings is the same listing", [report(G1)], () => [[bot(listed(G2)), bot(listed(G2))], [bot(listed(G1))]], () => undefined],
     ["writes nothing when a later bot reply carries no marker", [report(G1)], () => [[bot(listed(G1)), bot("Assigned to @someone.")]], () => undefined],
     ["posts when the listing differs from the latest marked bot comment, though an earlier one matched", [report(G1)], () => [[bot(listed(G1)), bot(listed(G2))]], () => listed(G1)],
     ["posts the clean body once a listed advisory is disposed of", [report()], () => [[bot(listed(G1))]], () => "<!-- overflow:advisory-tracking -->\n\nNo advisory against main's lockfile lacks a disposition."],
@@ -104,8 +105,7 @@ describe.skipIf(process.platform !== "linux")("the audit job's listing and the c
     ["never counts another App's bot comment, marker and all, as the previous listing", [report(G1)], () => [[app(listed(G1))]], () => listed(G1)],
   ];
   it.each(rows)("%s", (_name, audit, before, after) => {
-    const [comments, posted] = [before(), after()];
-    const outcome = run({ [AUDIT]: audit, [READ]: pages(...comments) });
+    const [comments, posted] = [before(), after()]; const outcome = run({ [AUDIT]: audit, [READ]: pages(...comments) });
     expect([outcome.status, outcome.calls, outcome.posts.map((body) => body.replace(/\n+$/, ""))]).toEqual([0, posted === undefined ? [AUDIT, READ] : [AUDIT, READ, POST], posted === undefined ? [] : [posted]]);
   });
 
