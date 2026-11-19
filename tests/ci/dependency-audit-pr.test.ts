@@ -49,7 +49,7 @@ const REFUSALS = {
   mergeTree: "::error::git merge-tree could not produce a merge tree for this pull request (exit",
   sanitizedExists: "already exists; refusing to write manifests into a directory this run did not create",
   manifestEntry: "must be exactly one mode-100644 blob entry in the ${3:?}; refusing",
-  prototypeKey: "an importer name that collides with an object prototype key; refusing",
+  prototypeKey: "carries, directly or through YAML escapes, an importer name that collides with an object prototype key; refusing",
 };
 
 /** Planted in pull-request-controlled content; must never reach the step's output. */
@@ -549,14 +549,16 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
     expect(outcome.invocations).toEqual([]);
   });
 
-  // The audit request drops an importer named __proto__, so that side's audit reads clean and a hidden edge would pass: each spelling, on either side, refuses first.
+  // An importer name that collides with an object prototype key leaves the audit request, so that side's audit reads clean and a hidden edge would pass:
+  // each spelling that decodes to it refuses first, on either side, and the writer's ordinary escapes (last pair) do not.
   const hidden = (key: string): string => `${BASE_LOCKFILE}\n${key}\n    dependencies:\n      x:\n        specifier: 1.0.0\n        version: 1.0.0\n`;
-  it.each([[BASE_LOCKFILE, hidden("  __proto__:"), "merge tree", audit(), []], [BASE_LOCKFILE, hidden('  "\\x5f_proto__":'), "merge tree", audit(), []],
-    [hidden("  __proto__:"), `${BASE_LOCKFILE}# head\n`, "base commit's tree", audit([G1, X]), [H]]] as Array<[string, string, string, Outcome[], string[]]>)(
-    "refuses a lockfile importer colliding with an object prototype key (pair %#)", async (base, head, side, headAudit, invoked) => {
+  const SPELLINGS = ["  __proto__:", "  ? __proto__\n  :", '  "__proto__" :', '  "\\x5f_proto__":', '  "__pr\\u006Fto__":', '  "__\\U00000070roto__":', '  ? "__pro\\\n    to__"\n  :', '  ? "__pro\\\r    to__"\n  :'];
+  it.each([...SPELLINGS.map((key) => [BASE_LOCKFILE, hidden(key), "merge tree", audit(), []]), [hidden(SPELLINGS[0]!), `${BASE_LOCKFILE}# head\n`, "base commit's tree", audit([G1, X]), [H]],
+    [BASE_LOCKFILE, `${BASE_LOCKFILE}\npackages:\n\n  x@1.0.0:\n    deprecated: "old\\tversion\\_\\L\\uFEFF\\x09"\n`, "", audit(), [H]]] as Array<[string, string, string, Outcome[], string[]]>)(
+    "refuses a lockfile importer colliding with an object prototype key, and only that (pair %#)", async (base, head, side, headAudit, invoked) => {
       const outcome = await runStep(await fixture({ "package.json": BASE_PACKAGE, "pnpm-lock.yaml": base }, { "pnpm-lock.yaml": head }), { [H]: headAudit });
-      expect(outcome.status).toBe(1);
-      expect(outcome.stdout + outcome.stderr).toContain(`::error::pnpm-lock.yaml in the ${side} spells, or could escape-spell, ${REFUSALS.prototypeKey}`);
+      expect(outcome.status).toBe(side ? 1 : 0);
+      expect(outcome.stdout + outcome.stderr).toContain(side ? `::error::pnpm-lock.yaml in the ${side} ${REFUSALS.prototypeKey}` : "clean — no known vulnerabilities found");
       expect(outcome.invocations).toEqual(invoked);
     });
 
