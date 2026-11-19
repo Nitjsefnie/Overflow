@@ -487,12 +487,17 @@ jobs:
             done
             # The audit request drops an importer name that collides with an
             # object prototype key, so neither the audit nor the importer
-            # check below would see it. YAML spells that name only literally or
-            # through a backslash escape, and no npm package name holds
-            # either, so both are refused wherever they sit.
+            # check below would see it. YAML spells that name directly, or
+            # through \x, \u and \U escapes and escaped line breaks (LF, CRLF
+            # or a lone CR) that join pieces of it; its other escapes cannot
+            # yield it. The text is decoded for exactly those, and the name
+            # is refused wherever it then sits.
             node -e '
-          if (/__proto__|\\/.test(require("node:fs").readFileSync(process.argv[1], "utf8"))) {
-            console.log("::error::pnpm-lock.yaml in the " + process.argv[2] + " spells, or could escape-spell, an importer name that collides with an object prototype key; refusing");
+          const text = require("node:fs").readFileSync(process.argv[1], "utf8")
+            .replace(/\\(?:\r\n?|\n)[ \t]*/g, "")
+            .replace(/\\(?:x([0-9A-Fa-f]{2})|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8}))/g, (_, x, u, U) => String.fromCodePoint(parseInt(x ?? u ?? U, 16)));
+          if (text.includes("__proto__")) {
+            console.log("::error::pnpm-lock.yaml in the " + process.argv[2] + " carries, directly or through YAML escapes, an importer name that collides with an object prototype key; refusing");
             process.exit(1);
           }
           ' "${2}/pnpm-lock.yaml" "${3}" || exit 1
