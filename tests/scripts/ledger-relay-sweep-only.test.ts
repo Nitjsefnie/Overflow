@@ -247,78 +247,79 @@ describe("sweep-only relay runs (issue 1116)", () => {
   });
 
   it("fails visibly when the sweep itself throws", async () => {
-    // The listing's last attempt is a network error, not a 5xx answer, so the
-    // sweep does not defer; only a read GitHub answered with a 5xx defers it.
+    // The listing's last answer is a 429 without rate-limit markers: neither a
+    // rate limit nor a transient read failure, so the sweep does not defer.
     const fetchStub = makeFetch([
       token(),
       { status: 500, body: { message: "boom" } },
       { status: 500, body: { message: "boom" } },
+      { status: 429, body: { message: "too many" } },
     ]);
-    let listings = 0;
-    const fn = (async (url: unknown, init?: RequestInit) => {
-      if (String(url) === SWEEP_RUNS_URL && ++listings === 3) throw new TypeError("fetch failed");
-      return fetchStub.fn(url as string, init);
-    }) as unknown as typeof fetch;
     const delay = makeDelay();
-    const error = await caughtError(relay(sweepOnlyEnv(), fn, delay.fn));
+    const error = await caughtError(relay(sweepOnlyEnv(), fetchStub.fn, delay.fn));
 
     expect(error, "a thrown sweep must leave the job red").toBeInstanceOf(Error);
     expect(error?.message).toBe(
-      "the repository's workflow-run listing for the orphan sweep failed after 3 attempts: fetch failed");
+      "the repository's workflow-run listing for the orphan sweep failed after 3 attempts: HTTP 429: {\"message\":\"too many\"}");
     // The bounded retry ran and the failure still propagated.
     expect(delay.delays).toEqual([1000, 2000]);
   });
 
-  /** Answers every ledger App check-suites read at HEAD_SHA with HTTP 500 once `armed()` holds. */
-  function failingSuites(base: typeof fetch, armed: () => boolean) {
-    const suiteReads: string[] = [];
+  /** Fails each `read` once `armed()` holds: a check-suites read at HEAD_SHA with HTTP 500, the runs listing thrown from fetch. */
+  function failingReads(base: typeof fetch, read: "suites" | "listing", armed: () => boolean) {
+    const failed: string[] = [];
     const fn = (async (url: unknown, init?: RequestInit) => {
       const rendered = String(url);
-      if (rendered.includes(`/commits/${HEAD_SHA}/check-suites?`) && armed()) {
-        suiteReads.push(rendered);
+      if ((read === "suites" ? rendered.includes(`/commits/${HEAD_SHA}/check-suites?`) : rendered === SWEEP_RUNS_URL) && armed()) {
+        failed.push(rendered);
+        if (read === "listing") throw new TypeError("fetch failed");
         return new Response("", { status: 500 });
       }
       return base(rendered, init);
     }) as unknown as typeof fetch;
-    return { fn, suiteReads };
+    return { fn, failed };
   }
+  const failedReads = [
+    ["check-suites read stays 5xx", "suites", `the ledger App's check-suites at ${HEAD_SHA} failed after 3 attempts: HTTP 500: `],
+    ["runs listing throws from fetch", "listing", "the repository's workflow-run listing for the orphan sweep failed after 3 attempts: fetch failed"],
+  ] as const;
 
-  it("defers an orphan sweep whose check-suites read stays 5xx through its retries and exits 0 (issue 1532)", async () => {
+  it.each(failedReads)("defers an orphan sweep whose %s through its retries and exits 0 (issues 1532, 1716)", async (_name, read, message) => {
     const fetchStub = makeFetch([token(), sweepListing([sweepRun(9002, { path: PATH_ACTIONLINT })])]);
-    const suites = failingSuites(fetchStub.fn, () => true);
+    const reads = failingReads(fetchStub.fn, read, () => true);
     const delay = makeDelay();
-    const result = await relay(sweepOnlyEnv(), suites.fn, delay.fn);
+    const result = await relay(sweepOnlyEnv(), reads.fn, delay.fn);
 
     expect(result.sweepOnly).toBe(true);
-    expect(result.sweepDeferred).toBe(`the ledger App's check-suites at ${HEAD_SHA} failed after 3 attempts: HTTP 500: `);
+    expect(result.sweepDeferred).toBe(message);
     expect(renderRelayResult(result)).toEqual([
       `[ledger-relay] orphan-sweep: deferred to the next scheduled sweep: ${result.sweepDeferred}`,
     ]);
-    expect(suites.suiteReads).toHaveLength(3);
+    expect(reads.failed).toHaveLength(3);
     expect(delay.delays).toEqual([1000, 2000]);
     expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(0);
   });
 
-  it("keeps a triggered start red when its orphan sweep's check-suites read stays 5xx (issue 1532)", async () => {
+  it.each(failedReads)("keeps a triggered start red when its orphan sweep's %s (issues 1532, 1716)", async (_name, read, message) => {
     // The second runs listing is the sweep's: it names an orphan at the same
-    // head, and every check-suites read from then on fails.
+    // head, and from it on the failing read (it, or each check-suites read) fails.
     const fetchStub = triggeredStart();
-    let listings = 0;
+    let listings = 0, seen = 0;
     const withOrphan = (async (url: unknown, init?: RequestInit) => {
       if (String(url) === SWEEP_RUNS_URL && ++listings > 1) {
         return new Response(JSON.stringify(sweepListing([sweepRun(9002, { path: PATH_ACTIONLINT })]).body));
       }
       return fetchStub.fn(url as string, init);
     }) as unknown as typeof fetch;
-    const suites = failingSuites(withOrphan, () => listings > 1);
+    const reads = failingReads(withOrphan, read, () => read === "suites" ? listings > 1 : ++seen > 1);
     const delay = makeDelay();
-    const error = await caughtError(relay(triggeredEnv(), suites.fn, delay.fn));
+    const error = await caughtError(relay(triggeredEnv(), reads.fn, delay.fn));
 
-    expect(error, "a triggered start must not defer on a 5xx sweep read").toBeInstanceOf(Error);
-    expect(error?.message).toBe(`the ledger App's check-suites at ${HEAD_SHA} failed after 3 attempts: HTTP 500: `);
+    expect(error, "a triggered start must not defer on a transient sweep read").toBeInstanceOf(Error);
+    expect(error?.message).toBe(message);
     // The primary went green first: a defer here would hide a finished mirror.
     expect(requestsTo(fetchStub.requests, CHECK_RUNS_URL)).toHaveLength(1);
-    expect(suites.suiteReads).toHaveLength(3);
+    expect(reads.failed).toHaveLength(3);
   });
 
   it("defers a rate-limited orphan sweep to the next scheduled sweep and exits 0 (issue 1355)", async () => {

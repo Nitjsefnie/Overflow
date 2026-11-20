@@ -3,7 +3,7 @@ import { appSuiteListing, appChecksUrl, appSuitesUrl, RELAY_OWN_RUN_ENV, relayJo
 import { generateKeyPairSync } from "node:crypto";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import { apiCall, RateLimitExceededError, RATE_LIMIT_RESET_MARGIN_MS, ServerErrorExhaustedError,
+import { apiCall, RateLimitExceededError, RATE_LIMIT_RESET_MARGIN_MS, TransientReadExhaustedError,
   type RelayHttpDeps } from "../../scripts/ledger-relay-http.ts";
 import { renderRelayResult, runRelay, type RelayDeps } from "../../scripts/ledger-relay.ts";
 
@@ -92,7 +92,7 @@ describe("ledger relay request lifetime", () => {
     } finally { timeout.mockRestore(); }
   });
 
-  it("aborts a never-resolving GET with the injected timeout and retries as a network error", async () => {
+  it("aborts a never-resolving GET with the injected timeout, retries it as a network error and defers the sweep-only start", async () => {
     const w = world();
     const signals: AbortSignal[] = [];
     w.state.intercept = async (url, init) => {
@@ -101,7 +101,7 @@ describe("ledger relay request lifetime", () => {
       return stalled(init.signal);
     };
 
-    await expect(w.run({ requestTimeoutMs: 5 })).rejects.toThrow(/failed after 3 attempts/);
+    expect((await w.run({ requestTimeoutMs: 5 })).sweepDeferred).toMatch(/failed after 3 attempts: The operation was aborted due to timeout$/);
 
     expect(signals).toHaveLength(3);
     for (const signal of signals) {
@@ -165,39 +165,25 @@ describe("ledger relay request lifetime", () => {
     expect(w.state.requests).toEqual([]);
   });
 
-  it.each(["network", "timeout", "malformed"])("stays red when the timed-out POST re-read fails (%s)", async (failure) => {
+  it.each([
+    ["network", / failed after 3 attempts: latest checks unavailable$/], ["timeout", / failed after 3 attempts: The operation was aborted due to timeout$/],
+    ["5xx", / failed after 3 attempts: HTTP 503: latest checks unavailable$/], ["malformed", /re-read returned no check_runs array/],
+  ] as const)("never re-posts when the timed-out POST re-read fails (%s); a sweep-only start defers a transient failure (issues 1532, 1716)", async (failure, message) => {
     const w = world();
     w.state.intercept = async (url, init) => {
       if (url === `${ROOT}/check-runs` && w.state.posts === 1) throw new DOMException("request timed out", "TimeoutError");
       if (url !== CHECKS || w.state.posts === 0) return;
       if (failure === "network") throw new TypeError("latest checks unavailable");
       if (failure === "timeout") return stalled(init.signal);
-      return response({});
+      return failure === "5xx" ? new Response("latest checks unavailable", { status: 503 }) : response({});
     };
+    const run = w.run({ requestTimeoutMs: 5 });
 
-    await expect(w.run({ requestTimeoutMs: 5 })).rejects.toThrow(
-      failure === "malformed" ? /re-read returned no check_runs array/ :
-        failure === "timeout" ? /failed after 3 attempts/ : /latest checks unavailable/,
-    );
-
+    if (failure === "malformed") await expect(run).rejects.toThrow(message);
+    else expect((await run).sweepDeferred).toMatch(message);
     expect(w.state.posts).toBe(1);
     expect(w.state.checks).toEqual([]);
     expect(w.state.requests.filter(({ url }) => url === CHECKS)).toHaveLength(failure === "malformed" ? 2 : 4);
-  });
-
-  it("defers a sweep-only start, without repeating the POST, when the timed-out POST re-read stays 5xx (issue 1532)", async () => {
-    const w = world();
-    w.state.intercept = async (url) => {
-      if (url === `${ROOT}/check-runs` && w.state.posts === 1) throw new DOMException("request timed out", "TimeoutError");
-      if (url === CHECKS && w.state.posts > 0) return new Response("latest checks unavailable", { status: 503 });
-    };
-
-    const result = await w.run({ requestTimeoutMs: 5 });
-
-    expect(result.sweepDeferred).toMatch(/ failed after 3 attempts: HTTP 503: latest checks unavailable$/);
-    expect(w.state.posts).toBe(1);
-    expect(w.state.checks).toEqual([]);
-    expect(w.state.requests.filter(({ url }) => url === CHECKS)).toHaveLength(4);
   });
 
   it.each([
@@ -410,17 +396,18 @@ describe("ledger relay request lifetime", () => {
 });
 
 describe("ledger relay rate-limit handling (issue 1355)", () => {
-  /** A RelayHttpDeps whose clock is injected and whose fetch replays `responses` ("network" throws). */
-  function rateLimitDeps(responses: Array<Response | "network">) {
+  /** A RelayHttpDeps whose clock is injected and whose fetch replays `responses` ("network" throws, "timeout" stalls). */
+  function rateLimitDeps(responses: Array<Response | "network" | "timeout">) {
     const state = { now: 10_000, requests: [] as number[], delays: [] as number[] };
     const deps: RelayHttpDeps = {
-      deadlineMs: 60_000,
+      deadlineMs: 60_000, requestTimeoutMs: 5,
       nowFn: () => state.now,
       delayFn: async (ms) => { state.delays.push(ms); state.now += ms; },
-      fetchFn: async () => {
+      fetchFn: async (_url, init) => {
         state.requests.push(state.now);
         const next = responses.shift();
         if (next === "network") throw new TypeError("fetch failed");
+        if (next === "timeout") return stalled(init?.signal);
         if (next === undefined) throw new Error("unexpected extra request");
         return next;
       },
@@ -598,25 +585,25 @@ describe("ledger relay rate-limit handling (issue 1355)", () => {
     const error = await caught(apiCall(deps, theCall, what));
 
     // The last answer was a network error, not a rate-limited response: the
-    // loop ends on the plain attempts error, not a rate limit a sweep-only
-    // start would defer on.
+    // loop ends on the attempts error naming that network error, not on the
+    // earlier rate limit.
     expect(error).not.toBeInstanceOf(RateLimitExceededError);
     expect(error.message).toContain("failed after 3 attempts: fetch failed");
     expect(state.delays).toEqual([4_000, 2_000]);
     expect(state.requests).toHaveLength(3);
   });
 
-  describe("a read whose last attempt is answered 5xx (issue 1532)", () => {
+  describe("a read whose last attempt failed transiently (issues 1532, 1716)", () => {
     const serverError = (status = 500) => new Response("boom", { status });
     const unmarked429 = () => new Response("too many", { status: 429 });
 
-    it("throws ServerErrorExhaustedError for a GET answered 5xx on every attempt, keeping the attempts message", async () => {
+    it("throws TransientReadExhaustedError for a GET answered 5xx on every attempt, keeping the attempts message", async () => {
       const { deps, state } = rateLimitDeps([serverError(), serverError(502), serverError()]);
 
       const error = await caught(apiCall(deps, theCall, what));
 
-      expect(error).toBeInstanceOf(ServerErrorExhaustedError);
-      expect(error.name).toBe("ServerErrorExhaustedError");
+      expect(error).toBeInstanceOf(TransientReadExhaustedError);
+      expect(error.name).toBe("TransientReadExhaustedError");
       expect(error.message).toBe(`${what} failed after 3 attempts: HTTP 500: boom`);
       expect(state.delays).toEqual([1_000, 2_000]);
       expect(state.requests).toHaveLength(3);
@@ -627,7 +614,7 @@ describe("ledger relay rate-limit handling (issue 1355)", () => {
 
       const error = await caught(apiCall(deps, theCall, what));
 
-      expect(error).toBeInstanceOf(ServerErrorExhaustedError);
+      expect(error).toBeInstanceOf(TransientReadExhaustedError);
       expect(error.message).toBe(`${what} failed after 3 attempts: HTTP 503: boom`);
       expect(state.requests).toHaveLength(3);
     });
@@ -637,16 +624,28 @@ describe("ledger relay rate-limit handling (issue 1355)", () => {
 
       const error = await caught(apiCall(deps, theCall, what, false));
 
-      expect(error).toBeInstanceOf(ServerErrorExhaustedError);
+      expect(error).toBeInstanceOf(TransientReadExhaustedError);
       expect(error.message).toBe(`${what} failed after 1 attempts: HTTP 500: boom`);
       expect(state.delays).toEqual([]);
     });
 
     it.each([
+      ["every attempt throws from fetch", ["network", "network", "network"], "fetch failed"],
+      ["5xx answers end in a network error", [serverError(), serverError(), "network"], "fetch failed"],
+      ["the last attempt times out", [serverError(), "network", "timeout"], "The operation was aborted due to timeout"],
+    ] as const)("throws it for a GET when %s", async (_name, answers, last) => {
+      const { deps, state } = rateLimitDeps([...answers]);
+      const error = await caught(apiCall(deps, theCall, what));
+      expect(error).toBeInstanceOf(TransientReadExhaustedError);
+      expect(error.message).toBe(`${what} failed after 3 attempts: ${last}`);
+      expect(state.requests).toHaveLength(3);
+    });
+
+    it.each([
       ["a POST answered 5xx on every attempt", { ...theCall, method: "POST" as const },
         [serverError(), serverError(), serverError()], "HTTP 500: boom"],
-      ["a GET answered 5xx then a network error last", theCall,
-        [serverError(), serverError(), "network" as const], "fetch failed"],
+      ["a POST whose every attempt throws from fetch", { ...theCall, method: "POST" as const },
+        ["network" as const, "network" as const, "network" as const], "fetch failed"],
       ["a GET whose last answer is a 429 without rate-limit markers", theCall,
         [serverError(), serverError(), unmarked429()], "HTTP 429: too many"],
     ])("keeps the plain attempts error for %s", async (_name, call, answers, last) => {
@@ -654,7 +653,7 @@ describe("ledger relay rate-limit handling (issue 1355)", () => {
 
       const error = await caught(apiCall(deps, call, what));
 
-      expect(error).not.toBeInstanceOf(ServerErrorExhaustedError);
+      expect(error).not.toBeInstanceOf(TransientReadExhaustedError);
       expect(error).not.toBeInstanceOf(RateLimitExceededError);
       expect(error.name).toBe("Error");
       expect(error.message).toBe(`${what} failed after 3 attempts: ${last}`);

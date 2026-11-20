@@ -26,10 +26,10 @@ export class RateLimitExceededError extends Error {
   }
 }
 
-export class ServerErrorExhaustedError extends Error {
+export class TransientReadExhaustedError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "ServerErrorExhaustedError";
+    this.name = "TransientReadExhaustedError";
   }
 }
 
@@ -63,8 +63,9 @@ interface ApiRequest {
  * Three attempts, 1s then 2s backoff; other 4xx responses fail immediately. A
  * rate-limited 403 or 429 waits out its named reset only while
  * another attempt remains and the reset plus margin fits the deadline, and
- * otherwise throws RateLimitExceededError at once. A GET whose
- * last attempt was 5xx throws ServerErrorExhaustedError.
+ * otherwise throws RateLimitExceededError at once. A GET whose last attempt
+ * got no response (fetch or its body read threw, the timeout included) or a
+ * 5xx throws TransientReadExhaustedError.
  */
 export async function apiCall<T>(
   deps: RelayHttpDeps, request: ApiRequest, what: string, retryTransient = true,
@@ -130,8 +131,8 @@ export async function apiCall<T>(
     if (response.status < 500 && response.status !== 429) throw new Error(`${what} failed: ${lastMessage}`);
   }
   const message = `${what} failed after ${retryCount + 1} attempts: ${lastMessage}`;
-  if (request.method === "GET" && lastStatus !== undefined && lastStatus >= 500) {
-    throw new ServerErrorExhaustedError(message);
+  if (request.method === "GET" && (lastStatus === undefined || lastStatus >= 500)) {
+    throw new TransientReadExhaustedError(message);
   }
   throw new Error(message);
 }
