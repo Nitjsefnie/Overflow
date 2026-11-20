@@ -50,7 +50,7 @@ import {
   type SweepOutcome,
 } from "./ledger-relay-sweep.ts";
 import { API_ROOT, API_HEADERS, RUN_DEADLINE_MS, apiCall, sweepApi, assertRunDeadline,
-  RateLimitExceededError, ServerErrorExhaustedError, type RelayHttpOptions } from "./ledger-relay-http.ts";
+  RateLimitExceededError, TransientReadExhaustedError, type RelayHttpOptions } from "./ledger-relay-http.ts";
 import { publishProducerContexts } from "./ledger-relay-publication.ts";
 import { readEffectiveDeadline } from "./ledger-relay-job-budget.ts";
 import { type CheckRunSuppression, type SweepCandidate } from "./ledger-relay-producers.ts";
@@ -300,10 +300,10 @@ export async function runRelay(inputDeps: RelayDeps): Promise<RelayResult> {
       ];
       assertRunDeadline(deps, "completion of the relay run");
     } catch (sweepError) {
-      // Issues 1355/1532: a rate-limited or exhausted-5xx sweep defers a
+      // A rate limit, or a read ending in no response or a 5xx, defers a
       // sweep-only start; triggered starts keep failing red, that is the design.
       if (!failed && sweepOnlyStart && (sweepError instanceof RateLimitExceededError ||
-        sweepError instanceof ServerErrorExhaustedError)) {
+        sweepError instanceof TransientReadExhaustedError)) {
         result.sweepDeferred = sweepError.message;
         return result;
       }
