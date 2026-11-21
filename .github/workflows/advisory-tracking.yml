@@ -1,0 +1,180 @@
+name: advisory tracking
+
+# Keeps one comment on the standing tracking issue listing every advisory
+# pnpm audit reports against main's lockfile. pnpm already drops the
+# ignoreGhsas entries, so each one listed has no disposition yet. A listing
+# equal to the latest one is not posted again; a failed audit posts nothing.
+
+on:
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: advisory-tracking
+  cancel-in-progress: false
+
+jobs:
+  # Runs pnpm under the workflow's read-only token and hands the comment body
+  # to advisory-comment as an output, the way ci.yml's calibrate does.
+  advisory-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      body: ${{ steps.listing.outputs.body }}
+    # dependency-audit.yml's five pins.
+    env:
+      COREPACK_ENABLE_PROJECT_SPEC: "0"
+      npm_config_registry: "https://registry.npmjs.org/"
+      npm_config_strict_ssl: "true"
+      npm_config_cafile: "/etc/ssl/certs/ca-certificates.crt"
+      npm_config_audit_level: "low"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.17.0"
+
+      - name: Enable the pinned package manager
+        run: |
+          corepack enable
+          corepack install --global pnpm@10.33.0
+          pnpm --version
+
+      # dependency-audit.yml's classifier and retry, byte for byte but the
+      # clean and advisories arms. Every advisory field goes in a code span
+      # (whitespace collapsed, fence longer than its backtick runs), so no
+      # mention or reference fires and no body line can equal the delimiter.
+      - name: List the advisories without a disposition
+        id: listing
+        run: |
+          set -uo pipefail
+          attempts=3
+          delay="${DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS:-30}"
+          for attempt in $(seq 1 "$attempts"); do
+            code=0
+            pnpm audit --json > audit.json 2> audit.err || code=$?
+            result=$(AUDIT_EXIT="$code" node -e '
+          const fs = require("node:fs");
+          let report;
+          try {
+            report = JSON.parse(fs.readFileSync("audit.json", "utf8"));
+          } catch {
+            console.log("unreadable|the audit produced no JSON report");
+            process.exit(0);
+          }
+          if (report && report.error) {
+            const statuses = [...String(report.error.message ?? "").matchAll(/responded with (\d{3})/g)]
+              .map((match) => Number(match[1]));
+            const transient = statuses.length > 0
+              && statuses.every((status) => status === 429 || (status >= 500 && status < 600));
+            const first = (message) => String(message).split("\n")[0];
+            const reported = first(report.error.message ?? "the advisory endpoint did not answer");
+            console.log(String(report.error.code ?? "") === "ERR_PNPM_AUDIT_NO_LOCKFILE"
+              ? "unreadable|" + reported
+              : transient
+                ? "transient|" + first("the advisory endpoint answered " + statuses.join(" and "))
+                : "unreachable|" + reported);
+            process.exit(0);
+          }
+          const advisories = report && report.advisories ? Object.keys(report.advisories).length : -1;
+          if (advisories > 0) {
+            const counts = report.metadata?.vulnerabilities ?? {};
+            const summary = ["critical", "high", "moderate", "low", "info"]
+              .map((severity) => (counts[severity] ?? 0) + " " + severity)
+              .filter((entry) => !entry.startsWith("0 "))
+              .join(", ");
+            console.log("advisories|" + advisories + " advisories (" + (summary || "severities unreported") + ")");
+            process.exit(0);
+          }
+          console.log(advisories === 0
+            ? process.env.AUDIT_EXIT === "0"
+              ? "clean|no known vulnerabilities found"
+              : "unreadable|the audit report carried an empty advisories map and exited " + process.env.AUDIT_EXIT
+            : "unreadable|the audit report carried no advisories field and exited " + process.env.AUDIT_EXIT);
+          ')
+            verdict="${result%%|*}"
+            detail="${result#*|}"
+            echo "attempt $attempt of $attempts, pnpm audit --json exited $code: $verdict — $detail"
+            case "$verdict" in
+              clean|advisories)
+                echo "$detail"
+                break
+                ;;
+              transient)
+                cat audit.err
+                if [ "$attempt" -lt "$attempts" ]; then
+                  echo "$detail — a registry outage, not a finding; retrying"
+                  sleep "$delay"
+                  continue
+                fi
+                echo "$detail — the advisory endpoint was still unavailable after $attempts attempts"
+                exit 1
+                ;;
+              *)
+                cat audit.err
+                echo "$detail — the lockfile was NOT audited, so this run reports nothing about it"
+                exit 1
+                ;;
+            esac
+          done
+          node -e '
+          const report = JSON.parse(require("node:fs").readFileSync("audit.json", "utf8"));
+          const span = (value) => {
+            const text = String(value).replace(/\s+/g, " ");
+            const fence = "\x60".repeat(Math.max(0, ...(text.match(/\x60+/g) ?? []).map((run) => run.length)) + 1);
+            return fence + " " + text + " " + fence;
+          };
+          const advisories = Object.values(report.advisories ?? {})
+            .sort((left, right) => String(left.github_advisory_id).localeCompare(String(right.github_advisory_id)));
+          console.log(["<!-- overflow:advisory-tracking -->", "", ...(advisories.length === 0 ? ["No advisory against main\x27s lockfile lacks a disposition."] : [
+            "These advisories against main\x27s lockfile have no disposition yet:",
+            "",
+            ...advisories.map((advisory) => "- " + span(advisory.github_advisory_id) + ": " + span(advisory.module_name) + " " + span(advisory.vulnerable_versions)
+              + ", " + span(advisory.severity) + ": " + span(advisory.title) + " (patched " + span(advisory.patched_versions) + ")"),
+            "",
+            "Each needs a disposition: an upgrade, an override, a removal, or a \x60pnpm.auditConfig.ignoreGhsas\x60 entry"
+              + " whose reason tests/ci/audit-acceptance.test.ts records.",
+          ])].join("\n"));
+          ' > "${RUNNER_TEMP}/advisory-tracking.md"
+          {
+            echo 'body<<ADVISORY_TRACKING_BODY_END'
+            cat "${RUNNER_TEMP}/advisory-tracking.md"
+            echo 'ADVISORY_TRACKING_BODY_END'
+          } >> "$GITHUB_OUTPUT"
+
+  # The only job holding issues: write: no checkout, no pnpm, no node.
+  advisory-comment:
+    needs: advisory-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      # The previous listing is the latest comment github-actions[bot] wrote
+      # carrying the marker, as in coverage-comment.yml; a body equal to it,
+      # trailing newlines dropped on both sides, is not posted again.
+      - name: Update the tracking issue's comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OVERFLOW_ADVISORY_TRACKING_ISSUE: "1714"
+          OVERFLOW_ADVISORY_BODY: ${{ needs.advisory-audit.outputs.body }}
+        run: |
+          comments="repos/${GITHUB_REPOSITORY}/issues/${OVERFLOW_ADVISORY_TRACKING_ISSUE:?}/comments"
+          body=$(printf '%s\n' "${OVERFLOW_ADVISORY_BODY:?}")
+          listings=$(gh api --paginate "${comments}" --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- overflow:advisory-tracking -->"))) | .body | @json')
+          latest=$(printf '%s' "${listings##*$'\n'}" | jq -r '.')
+          if [ "${latest}" = "${body}" ]; then
+            echo "the latest listing on the tracking issue is current; nothing posted"
+            exit 0
+          fi
+          printf '%s\n' "${body}" > "${RUNNER_TEMP}/advisory-tracking.md"
+          gh api --method POST "${comments}" -F body=@"${RUNNER_TEMP}/advisory-tracking.md" --silent

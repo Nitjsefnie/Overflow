@@ -68,24 +68,13 @@ type Workflow = {
 // explicitly classified and checked per head SHA below.
 const BOUNDED: Record<string, { group: string; "cancel-in-progress": false; queue: "max" }> = {
   "comment-share.yml": {
-    group: "comment-share-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-    "cancel-in-progress": false,
-    queue: "max",
-  },
+    group: "comment-share-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}", "cancel-in-progress": false, queue: "max" },
   "size-baseline.yml": {
-    group: "size-baseline-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}",
-    "cancel-in-progress": false,
-    queue: "max",
-  },
+    group: "size-baseline-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}", "cancel-in-progress": false, queue: "max" },
 };
 
 /** Required PR gates cancel only an older run of the same pull request. */
-const PER_PR_REQUIRED = {
-  "pr-gates.yml": {
-    group: "pr-gates-${{ github.event.pull_request.number }}",
-    "cancel-in-progress": true,
-  },
-};
+const PER_PR_REQUIRED = { "pr-gates.yml": { group: "pr-gates-${{ github.event.pull_request.number }}", "cancel-in-progress": true } };
 
 /**
  * Every workflow that is deliberately NOT repository-bounded: why keeping it
@@ -214,154 +203,56 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
     "cancel-in-progress": false,
     queue: undefined,
   }],
-  [
-    "code-scanning.yml",
-    {
-      reason:
-        "Each pull request has its own scan group, so cancellation drops only that pull request's superseded analysis and its newer push supplies the replacement. Different pull requests never share the group. Push, schedule and dispatch runs key on the SHA and never cancel an in-flight scan.",
-      group: "code-scanning-${{ github.event.pull_request.number || github.sha }}",
-      "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
-      queue: undefined,
-      premise: "superseded-attempt",
-    },
-  ],
-  [
-    "event-policy.yml",
-    {
-      reason:
-        "Each pull request has its own event-policy group, so cancellation drops only that pull request's superseded policy check and its newer push supplies the replacement. Different pull requests never share the group. Push and schedule runs key on the SHA and never cancel an in-flight check.",
-      group: "event-policy-${{ github.event.pull_request.number || github.sha }}",
-      "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
-      queue: undefined,
-      premise: "superseded-attempt",
-    },
-  ],
-  [
-    "claim.yml",
-    {
-      reason:
-        "Two racers commenting /claim on one issue must both get an answer. A shared group keeps only the newest PENDING run and cancels the older even at cancel-in-progress false, so one racer would silently never be answered.",
-      group: "claim-${{ github.event.issue.number }}",
-      "cancel-in-progress": false,
-      // `queue: max` is what makes the reason true rather than aspirational:
-      // the single PENDING slot is exactly the drop the reason describes, and
-      // the queue is the only setting that holds the arrivals instead of
-      // cancelling the older one.
-      queue: "max",
-    },
-  ],
-  [
-    "pr-gate.yml",
-    {
-      reason:
-        "Each run rewrites the gate's one marker comment for the head it read. A run cancelled mid-write can leave that comment stale, so a running gate finishes and the queued run re-reads the pull request and writes the final verdict.",
-      group: "pr-gate-${{ github.event.pull_request.number }}",
-      "cancel-in-progress": false,
-      queue: undefined,
-    },
-  ],
-  [
-    "pin-guard.yml",
-    {
-      reason:
-        "A running screen may be mid-delivery of its review and sticky status comment; cancelling it can leave a partial review that no later run removes. A newer head's run replaces only a pending one and edits the status comment last.",
-      group: "pin-guard-${{ github.event.pull_request.number }}",
-      "cancel-in-progress": false,
-      queue: undefined,
-    },
-  ],
-  [
-    "ledger-relay.yml",
-    {
-      reason:
-        "The relay posts the check-runs branch protection requires. Every schedule, workflow_dispatch (with or without run_id), and workflow_run start shares the literal ledger-relay group, so only one relay run writes at a time across the repository. cancel-in-progress false preserves the running start. Up to 100 pending starts wait in FIFO order (ordering is not guaranteed); a full queue cancels the new arrival. Every start sweeps to attest a cancelled arrival's producer within the sweep window.",
-      group: "ledger-relay",
-      "cancel-in-progress": false,
-      queue: "max",
-    },
-  ],
-  [
-    "coverage-comment.yml",
-    {
-      reason:
-        "The report posts a comment the author reads. Cancelling a queued run loses the report for that head commit, and the next run may not come.",
-      group:
-        "coverage-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}",
-      "cancel-in-progress": false,
-      queue: undefined,
-    },
-  ],
-  [
-    "secret-scan.yml",
-    {
-      reason:
-        "No PR event reaches this main producer. The secret-scan PR job lives in pr-gates.yml with a per-PR cancelling group. This file checks main on push and dispatch and schedule. Its SHA-keyed group preserves every in-flight run, so another merged SHA cannot cancel a conclusion that deployment reads.",
-      group: "secret-scan-${{ github.sha }}",
-      "cancel-in-progress": false,
-      queue: undefined,
-    },
-  ],
-  [
-    "actionlint.yml",
-    {
-      reason:
-        "No PR event reaches this main producer. The actionlint PR job lives in pr-gates.yml with a per-PR cancelling group. This file checks main on push and dispatch. Its SHA-keyed group preserves every in-flight run, so another merged SHA cannot cancel a conclusion that deployment reads.",
-      group: "actionlint-${{ github.sha }}",
-      "cancel-in-progress": false,
-      queue: undefined,
-    },
-  ],
-  [
-    "ratchet-guard.yml",
-    {
-      reason:
-        "No PR event reaches this main producer. The ratchet-guard PR job lives in pr-gates.yml with a per-PR cancelling group. This file checks main on push and dispatch. Its SHA-keyed group preserves every in-flight run, so another merged SHA cannot cancel a conclusion that deployment reads.",
-      group: "ratchet-guard-${{ github.sha }}",
-      "cancel-in-progress": false,
-      queue: undefined,
-    },
-  ],
-  [
-    "ci.yml",
-    {
-      reason:
-        "No PR trigger reaches this main producer. The verify PR job lives in ci-pr.yml. Its legs are push to main and workflow_dispatch — the latter being the deploy-recovery dispatch — and the group is per-SHA so no push to main shares a group with another push: a cancelled conclusion on a merged SHA makes the deploy gate refuse immediately (issue 474). A workflow with no pull_request and no pull_request_target event cannot be listed in BOUNDED at all, because the bound it would carry would be vacuous: the repository-level arm is dead code, so recording it would pin a promise no run exercises.",
-      group: "ci-${{ github.sha }}",
-      "cancel-in-progress": false,
-      queue: undefined,
-    },
-  ],
-  [
-    "dependency-audit.yml",
-    {
-      reason:
-        "No PR event reaches this main producer. The dependency-audit PR job lives in pr-gates.yml with a per-PR cancelling group. This file checks main on push and dispatch and schedule. Its SHA-keyed group preserves every in-flight run, so another merged SHA cannot cancel a conclusion that deployment reads.",
-      group: "dependency-audit-${{ github.sha }}",
-      "cancel-in-progress": false,
-      queue: undefined,
-    },
-  ],
-  [
-    "pr-suite.yml",
-    {
-      reason:
-        "This is where a pull request's own code runs, under pull_request with a read-only token, and its outcome is read by ci-pr.yml's verify job for the event's exact head SHA. Its group is scoped to ONE pull request, so a run it cancels is always that same pull request's superseded head, never a peer's, and the push that superseded it scheduled the replacement run verify then awaits. Bounding it repository-wide would make every open pull request's verify wait behind every other's suite. It triggers on pull_request alone, so the literal true is the pull-request event expression with no other leg to cancel, and it names no required context: verify, not this workflow, carries the required check.",
-      group: "pr-suite-${{ github.event.pull_request.number }}",
-      "cancel-in-progress": true,
-      queue: undefined,
-      premise: "superseded-attempt",
-    },
-  ],
-  [
-    "scorecard.yml",
-    {
-      reason:
-        "This workflow has NO pull_request and NO pull_request_target trigger — it is schedule and workflow_dispatch only — so BOTH arms that would make it unbounded are dead: it never keys its group on one contributor's pull request, and it never receives the event that would make a repository-level group contend. The group is therefore already per-ref, and on a schedule tick github.ref is the default branch. Unlike the two schedule workflows above it, which make cancel-in-progress an event expression that is never true here, this one ships the literal true, and that flag is NOT unreachable — workflow_dispatch is an arrival into this group too, because a manual run on the default branch resolves to the same github.ref as the tick, so a maintainer dispatching while a tick is in flight would cancel that tick. What bounds the exposure is the window rather than the absence of arrivals: ticks are a week apart and the job bounds itself at 15 minutes, so the only overlap possible is a dispatch inside those 15 minutes, and what that costs is one weekly reading of a signal nothing in this repository depends on. Scorecard is also not reproducible from a later push the way a metered CI leg is — its SARIF is a weekly reading, not a per-commit verdict — which is the second reason the group needs no repository-level bound.",
-      group: "scorecard-${{ github.ref }}",
-      "cancel-in-progress": true,
-      queue: undefined,
-    },
-  ],
+  ["advisory-tracking.yml", {
+    reason: "Schedule and dispatch only. The one literal group runs one listing at a time, so two runs cannot both read the tracking issue before either posts and leave it two identical comments; a cancelled run loses nothing, since the next daily run re-audits main and re-reads the issue.",
+    group: "advisory-tracking", "cancel-in-progress": false, queue: undefined }],
+  ["code-scanning.yml", {
+    reason: "Each pull request has its own scan group, so cancellation drops only that pull request's superseded analysis and its newer push supplies the replacement. Different pull requests never share the group. Push, schedule and dispatch runs key on the SHA and never cancel an in-flight scan.",
+    group: "code-scanning-${{ github.event.pull_request.number || github.sha }}", "cancel-in-progress": "${{ github.event_name == 'pull_request' }}", queue: undefined, premise: "superseded-attempt" }],
+  ["event-policy.yml", {
+    reason: "Each pull request has its own event-policy group, so cancellation drops only that pull request's superseded policy check and its newer push supplies the replacement. Different pull requests never share the group. Push and schedule runs key on the SHA and never cancel an in-flight check.",
+    group: "event-policy-${{ github.event.pull_request.number || github.sha }}", "cancel-in-progress": "${{ github.event_name == 'pull_request' }}", queue: undefined, premise: "superseded-attempt" }],
+  ["claim.yml", {
+    reason: "Two racers commenting /claim on one issue must both get an answer. A shared group keeps only the newest PENDING run and cancels the older even at cancel-in-progress false, so one racer would silently never be answered.",
+    group: "claim-${{ github.event.issue.number }}", "cancel-in-progress": false,
+    // `queue: max` is what makes the reason true rather than aspirational:
+    // the single PENDING slot is exactly the drop the reason describes, and
+    // the queue is the only setting that holds the arrivals instead of
+    // cancelling the older one.
+    queue: "max" }],
+  ["pr-gate.yml", {
+    reason: "Each run rewrites the gate's one marker comment for the head it read. A run cancelled mid-write can leave that comment stale, so a running gate finishes and the queued run re-reads the pull request and writes the final verdict.",
+    group: "pr-gate-${{ github.event.pull_request.number }}", "cancel-in-progress": false, queue: undefined }],
+  ["pin-guard.yml", {
+    reason: "A running screen may be mid-delivery of its review and sticky status comment; cancelling it can leave a partial review that no later run removes. A newer head's run replaces only a pending one and edits the status comment last.",
+    group: "pin-guard-${{ github.event.pull_request.number }}", "cancel-in-progress": false, queue: undefined }],
+  ["ledger-relay.yml", {
+    reason: "The relay posts the check-runs branch protection requires. Every schedule, workflow_dispatch (with or without run_id), and workflow_run start shares the literal ledger-relay group, so only one relay run writes at a time across the repository. cancel-in-progress false preserves the running start. Up to 100 pending starts wait in FIFO order (ordering is not guaranteed); a full queue cancels the new arrival. Every start sweeps to attest a cancelled arrival's producer within the sweep window.",
+    group: "ledger-relay", "cancel-in-progress": false, queue: "max" }],
+  ["coverage-comment.yml", {
+    reason: "The report posts a comment the author reads. Cancelling a queued run loses the report for that head commit, and the next run may not come.",
+    group: "coverage-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}", "cancel-in-progress": false, queue: undefined }],
+  ["secret-scan.yml", {
+    reason: "No PR event reaches this main producer. The secret-scan PR job lives in pr-gates.yml with a per-PR cancelling group. This file checks main on push and dispatch and schedule. Its SHA-keyed group preserves every in-flight run, so another merged SHA cannot cancel a conclusion that deployment reads.",
+    group: "secret-scan-${{ github.sha }}", "cancel-in-progress": false, queue: undefined }],
+  ["actionlint.yml", {
+    reason: "No PR event reaches this main producer. The actionlint PR job lives in pr-gates.yml with a per-PR cancelling group. This file checks main on push and dispatch. Its SHA-keyed group preserves every in-flight run, so another merged SHA cannot cancel a conclusion that deployment reads.",
+    group: "actionlint-${{ github.sha }}", "cancel-in-progress": false, queue: undefined }],
+  ["ratchet-guard.yml", {
+    reason: "No PR event reaches this main producer. The ratchet-guard PR job lives in pr-gates.yml with a per-PR cancelling group. This file checks main on push and dispatch. Its SHA-keyed group preserves every in-flight run, so another merged SHA cannot cancel a conclusion that deployment reads.",
+    group: "ratchet-guard-${{ github.sha }}", "cancel-in-progress": false, queue: undefined }],
+  ["ci.yml", {
+    reason: "No PR trigger reaches this main producer. The verify PR job lives in ci-pr.yml. Its legs are push to main and workflow_dispatch — the latter being the deploy-recovery dispatch — and the group is per-SHA so no push to main shares a group with another push: a cancelled conclusion on a merged SHA makes the deploy gate refuse immediately (issue 474). A workflow with no pull_request and no pull_request_target event cannot be listed in BOUNDED at all, because the bound it would carry would be vacuous: the repository-level arm is dead code, so recording it would pin a promise no run exercises.",
+    group: "ci-${{ github.sha }}", "cancel-in-progress": false, queue: undefined }],
+  ["dependency-audit.yml", {
+    reason: "No PR event reaches this main producer. The dependency-audit PR job lives in pr-gates.yml with a per-PR cancelling group. This file checks main on push and dispatch and schedule. Its SHA-keyed group preserves every in-flight run, so another merged SHA cannot cancel a conclusion that deployment reads.",
+    group: "dependency-audit-${{ github.sha }}", "cancel-in-progress": false, queue: undefined }],
+  ["pr-suite.yml", {
+    reason: "This is where a pull request's own code runs, under pull_request with a read-only token, and its outcome is read by ci-pr.yml's verify job for the event's exact head SHA. Its group is scoped to ONE pull request, so a run it cancels is always that same pull request's superseded head, never a peer's, and the push that superseded it scheduled the replacement run verify then awaits. Bounding it repository-wide would make every open pull request's verify wait behind every other's suite. It triggers on pull_request alone, so the literal true is the pull-request event expression with no other leg to cancel, and it names no required context: verify, not this workflow, carries the required check.",
+    group: "pr-suite-${{ github.event.pull_request.number }}", "cancel-in-progress": true, queue: undefined, premise: "superseded-attempt" }],
+  ["scorecard.yml", {
+    reason: "This workflow has NO pull_request and NO pull_request_target trigger — it is schedule and workflow_dispatch only — so BOTH arms that would make it unbounded are dead: it never keys its group on one contributor's pull request, and it never receives the event that would make a repository-level group contend. The group is therefore already per-ref, and on a schedule tick github.ref is the default branch. Unlike the two schedule workflows above it, which make cancel-in-progress an event expression that is never true here, this one ships the literal true, and that flag is NOT unreachable — workflow_dispatch is an arrival into this group too, because a manual run on the default branch resolves to the same github.ref as the tick, so a maintainer dispatching while a tick is in flight would cancel that tick. What bounds the exposure is the window rather than the absence of arrivals: ticks are a week apart and the job bounds itself at 15 minutes, so the only overlap possible is a dispatch inside those 15 minutes, and what that costs is one weekly reading of a signal nothing in this repository depends on. Scorecard is also not reproducible from a later push the way a metered CI leg is — its SARIF is a weekly reading, not a per-commit verdict — which is the second reason the group needs no repository-level bound.",
+    group: "scorecard-${{ github.ref }}", "cancel-in-progress": true, queue: undefined }],
 ]);
 
 /** The two events that make a workflow reachable from a fork pull request. */
@@ -464,14 +355,7 @@ export function unboundedGroupKeysIn(group: string): string[] {
  * nothing reads, and a later check would deny nothing. Adding one together with
  * the workflow that uses it is the only way an entry belongs in this list.
  */
-const ALLOWED_TOP_LEVEL_KEYS = [
-  "concurrency",
-  "jobs",
-  "name",
-  "on",
-  "permissions",
-  "run-name",
-];
+const ALLOWED_TOP_LEVEL_KEYS = ["concurrency", "jobs", "name", "on", "permissions", "run-name"];
 
 /**
  * Exact job-name sets for every workflow. Equality in the assertion below
@@ -486,6 +370,7 @@ const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
   // check-run name is what branch protection and .github/required-checks.json
   // match.
   "actionlint.yml": ["actionlint"],
+  "advisory-tracking.yml": ["advisory-audit", "advisory-comment"],
   "ci-pr.yml": ["verify"],
   "ci.yml": ["calibrate", "postgres-image", "push-recalibration", "shellcheck", "verify"],
   "claim.yml": ["claim"],
