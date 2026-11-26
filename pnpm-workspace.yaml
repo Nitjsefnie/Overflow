@@ -6,3 +6,11 @@ overrides:
   '@typescript-eslint/typescript-estree>minimatch': 11.0.4
   'readdir-glob>minimatch': 11.0.4
   'archiver-utils>glob': 14.0.3
+auditConfig:
+  ignoreGhsas:
+    # GHSA-fc5q-39xc-vjpf: unpatched (4.0.7 is picomatch's newest release), and every copy is reached only through the dev-only vite, vitest and tinyglobby
+    - GHSA-fc5q-39xc-vjpf
+allowBuilds:
+  cpu-features: false
+  protobufjs: false
+  ssh2: false

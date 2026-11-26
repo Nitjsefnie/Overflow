@@ -49,7 +49,7 @@ describe("the verify workflow's package-manager step", () => {
     ).toHaveLength(1);
     // Actions env is step-scoped; dependency-audit.yml pins both at job scope so every pnpm step inherits them.
     expect(job?.env?.COREPACK_ENABLE_PROJECT_SPEC).toBe("0");
-    expect(job?.env?.npm_config_registry).toBe("https://registry.npmjs.org/");
+    expect(job?.env?.pnpm_config_registry).toBe("https://registry.npmjs.org/");
   });
 });
 

@@ -66,7 +66,7 @@ settlements or calibration between deployments, so a local instance starts empty
 and stays private to itself.
 
 Node and pnpm are pinned in `package.json`. `engines` names Node `24.22.3` and
-pnpm `10.33.0`, and `packageManager` names `pnpm@10.33.0`, which is what CI
+pnpm `12.23.0`, and `packageManager` names `pnpm@12.23.0`, which is what CI
 installs through corepack. Use those versions; the lockfile is installed frozen,
 so a different pnpm is the first thing that will argue with you.
 

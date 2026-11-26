@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import MarkdownIt from "markdown-it";
 import { expect, it } from "vitest";
 
-const canonicalInstall = "npm_config_package_import_method=copy pnpm install --frozen-lockfile";
+const canonicalInstall = "pnpm_config_package_import_method=copy pnpm install --frozen-lockfile";
 const otherShellShapes = [
   /^pnpm (?:--version|db:migrate|build|test|lint|typecheck)$/,
   /^OVERFLOW_NEXT_DIST_DIR="\$release" pnpm build$/,
@@ -406,7 +406,7 @@ for (const line of [
   "if [ \"$(cat \"${serving_release}/REVISION\")\" = \"${full_sha}\" ] ; then",
   "printf 'Already serving %s (%s); the tree fast-forwarded to the serving commit, so install, migrate and build are skipped and the existing release stays.\\n' \"${serving_release}\" \"${full_sha}\"",
   "exit 0",
-  "npm_config_package_import_method=copy pnpm install --frozen-lockfile",
+  "pnpm_config_package_import_method=copy pnpm install --frozen-lockfile",
   "printf '%s\\n' \"$full_sha\" > \"$release/REVISION\"",
   "printf 'Source revision: %s\\n' \"$full_sha\"",
   `base=$ ( gh api 'repos/Nitjsefnie/Overflow/actions/workflows/ratchet-guard.yml/runs?branch=main&status=success&per_page=50' --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")][0].head_sha' )`,
@@ -767,7 +767,7 @@ it.each([
   'pnpm() { command pnpm --package-import-method=hardlink "$@"; }',
   "pnpm --package-import-method=hardlink install --frozen-lockfile",
   `${canonicalInstall} > /tmp/unsafe-install-log`,
-  "npm_config_package_import_method='copy' pnpm install --frozen-lockfile",
+  "pnpm_config_package_import_method='copy' pnpm install --frozen-lockfile",
 ])("rejects unsupported pnpm syntax: %s", (line) => {
   expect(() => validateDocument(`\`\`\`bash\n${line}\n\`\`\``)).toThrow("Unsupported pnpm shape");
 });

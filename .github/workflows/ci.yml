@@ -164,7 +164,7 @@ jobs:
       OVERFLOW_MODERATOR_GITHUB_USER_IDS: "1"
       # At job scope so every `pnpm` step inherits both pins.
       COREPACK_ENABLE_PROJECT_SPEC: "0"
-      npm_config_registry: "https://registry.npmjs.org/"
+      pnpm_config_registry: "https://registry.npmjs.org/"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -179,7 +179,7 @@ jobs:
       - name: Enable the pinned package manager
         run: |
           corepack enable
-          corepack install --global pnpm@10.33.0
+          corepack install --global pnpm@12.23.0
           pnpm --version
 
       - name: Install dependencies
@@ -295,7 +295,7 @@ jobs:
       OVERFLOW_MODERATOR_GITHUB_USER_IDS: "1"
       # At job scope so every `pnpm` step inherits both pins.
       COREPACK_ENABLE_PROJECT_SPEC: "0"
-      npm_config_registry: "https://registry.npmjs.org/"
+      pnpm_config_registry: "https://registry.npmjs.org/"
 
     steps:
       - name: Require the test matrix and report
@@ -356,7 +356,7 @@ jobs:
       - name: Enable the pinned package manager
         run: |
           corepack enable
-          corepack install --global pnpm@10.33.0
+          corepack install --global pnpm@12.23.0
           pnpm --version
 
       - name: Install dependencies
