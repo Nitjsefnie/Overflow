@@ -209,7 +209,8 @@
       ],
       "tests/ci/audit-suppression-step.test.ts": [
         19.72,
-        12.98
+        12.98,
+        27.78
       ],
       "tests/ci/base-freshness.test.ts": [
         0.82
@@ -460,7 +461,8 @@
         1.48
       ],
       "tests/dashboard/queries.test.ts": [
-        6.65
+        6.65,
+        10.05
       ],
       "tests/dashboard/redirect-loop.test.ts": [
         0.11
@@ -497,7 +499,8 @@
       ],
       "tests/db/api-token-delivery-window.test.ts": [
         3.26,
-        1.49
+        1.49,
+        4.36
       ],
       "tests/db/api-token-expiry.test.ts": [
         0.69
@@ -630,7 +633,8 @@
       ],
       "tests/db/migration-upgrade.test.ts": [
         91.8,
-        51.74
+        51.74,
+        137.03
       ],
       "tests/db/pickup.test.ts": [
         0.07
@@ -749,7 +753,8 @@
       ],
       "tests/db/sweep-round-store.test.ts": [
         4.06,
-        1.72
+        1.72,
+        5.52
       ],
       "tests/db/sweep-walk-schema.test.ts": [
         0.39
@@ -870,7 +875,8 @@
       ],
       "tests/deploy/release-build.test.ts": [
         118.35,
-        73.93
+        73.93,
+        153.9
       ],
       "tests/deploy/release-check.test.ts": [
         7.02
@@ -890,7 +896,8 @@
         0.09
       ],
       "tests/deploy/webhook-upgrade-cli.test.ts": [
-        3.3
+        3.3,
+        4.87
       ],
       "tests/deploy/webhook-upgrade-order.test.ts": [
         0.24
@@ -933,6 +940,9 @@
       ],
       "tests/fold/catalog-change.test.ts": [
         0.22
+      ],
+      "tests/fold/diff-fingerprint.test.ts": [
+        0.01
       ],
       "tests/fold/donation-mark.test.ts": [
         0.02
