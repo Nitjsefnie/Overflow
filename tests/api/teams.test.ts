@@ -180,6 +180,17 @@ describe.each(cases)("$label", (route) => {
     expectNoDependencyCall({ createStore: deps.createStore });
   });
 
+  it("refuses an anonymous request before reading its body, so an invalid body gets the 401", async () => {
+    const deps = dependencies(undefined, { getSession: vi.fn().mockResolvedValue(null) });
+    const response = await send(deps, route.invalid[1]);
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "UNAUTHENTICATED", message: "Sign in is required." },
+    });
+    expectNoDependencyCall({ createStore: deps.createStore });
+  });
+
   it("refuses an account that no longer exists", async () => {
     const deps = dependencies(undefined, { getCurrentRole: vi.fn().mockResolvedValue(null) });
     const response = await send(deps);
