@@ -27,7 +27,26 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      records-only: ${{ steps.changes.outputs.records-only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Classify the push diff
+        id: changes
+        env:
+          OVERFLOW_BEFORE_SHA: ${{ github.event.before }}
+        run: python3 scripts/ci_records.py classify >> "$GITHUB_OUTPUT"
+
   analyze:
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'push' || (needs.changes.result == 'success' && needs.changes.outputs.records-only != 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:

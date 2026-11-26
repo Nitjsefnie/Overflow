@@ -70,11 +70,18 @@ jobs:
     timeout-minutes: 5
     outputs:
       image: ${{ steps.image.outputs.image }}
+      records-only: ${{ steps.changes.outputs.records-only }}
     steps:
-      # Reads one file at the event's own commit; the default depth carries it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      - name: Classify the push diff
+        id: changes
+        env:
+          OVERFLOW_BEFORE_SHA: ${{ github.event.before }}
+        run: python3 scripts/ci_records.py classify >> "$GITHUB_OUTPUT"
 
       - name: Resolve the PostgreSQL service image reference
         id: image
@@ -89,6 +96,8 @@ jobs:
   # Splits the test files into shards balanced by the run times recorded in
   # .github/test-times.json. It reads only the repository and the times file.
   plan:
+    needs: postgres-image
+    if: needs.postgres-image.outputs.records-only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -114,6 +123,7 @@ jobs:
   # the depth carries no pull-request data into a privileged job.
   test:
     needs: [postgres-image, plan]
+    if: needs.postgres-image.outputs.records-only != 'true'
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -187,14 +197,37 @@ jobs:
           source: src/**
           javascript: src/**
 
+  # Keep all repository code and API polling outside the job holding the deploy key.
+  record-source:
+    needs: postgres-image
+    if: needs.postgres-image.outputs.records-only == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      run-id: ${{ steps.source.outputs.run-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Find the successful main push that tested this code
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OVERFLOW_BEFORE_SHA: ${{ github.event.before }}
+        run: python3 scripts/ci_records.py source >> "$GITHUB_OUTPUT"
+
   # Merges the shards' coverage, gates it against the floor in
   # .github/ci-thresholds.json and, on a push to main, commits the raised
   # records with the main-push environment's deploy key. It checks out the
   # event's commit and runs only the action: no repository or dependency code
   # runs where the key is.
   report:
-    needs: test
-    if: ${{ !cancelled() }}
+    needs: [postgres-image, test, record-source]
+    if: ${{ !cancelled() && (needs.postgres-image.outputs.records-only != 'true' || needs.record-source.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: main-push
@@ -210,6 +243,7 @@ jobs:
       - uses: Nitjsefnie-Actions/test-ratchet/report@96562a47e9b7fe74b55cc70a4636d1b5d7b542e2 # v2.4.2
         with:
           github-token: ${{ github.token }}
+          run-id: ${{ needs.record-source.outputs.run-id || github.run_id }}
           cell: ubuntu-latest-node24.17.0
           times: .github/test-times.json
           precision: '2'
@@ -221,7 +255,7 @@ jobs:
   # report failed, or was cancelled, records verify as a failure naming the
   # job instead of a skip.
   verify:
-    needs: [postgres-image, test, report]
+    needs: [postgres-image, test, record-source, report]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -265,13 +299,16 @@ jobs:
     steps:
       - name: Require the test matrix and report
         env:
+          OVERFLOW_RECORDS_ONLY: ${{ needs.postgres-image.outputs.records-only }}
+          OVERFLOW_SOURCE_RESULT: ${{ needs.record-source.result }}
           OVERFLOW_TEST_RESULT: ${{ needs.test.result }}
           OVERFLOW_REPORT_RESULT: ${{ needs.report.result }}
         run: |
-          if [ "${OVERFLOW_TEST_RESULT}" != success ] || [ "${OVERFLOW_REPORT_RESULT}" != success ]; then
-            echo "::error::verify needs the test matrix and report to succeed: test ${OVERFLOW_TEST_RESULT}, report ${OVERFLOW_REPORT_RESULT}"
-            exit 1
-          fi
+          case "$OVERFLOW_RECORDS_ONLY/$OVERFLOW_TEST_RESULT/$OVERFLOW_SOURCE_RESULT/$OVERFLOW_REPORT_RESULT" in
+            false/success/skipped/success | true/skipped/success/success) exit 0 ;;
+          esac
+          echo "::error::records-only=$OVERFLOW_RECORDS_ONLY test=$OVERFLOW_TEST_RESULT source=$OVERFLOW_SOURCE_RESULT report=$OVERFLOW_REPORT_RESULT"
+          exit 1
 
       # No ref input: the default checkout takes the event's own commit — the
       # pushed main tip on a push, the dispatched ref's commit on a
