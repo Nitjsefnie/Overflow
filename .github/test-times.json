@@ -122,6 +122,9 @@
       "tests/api/settlements-read.test.ts": [
         0.01
       ],
+      "tests/api/teams.test.ts": [
+        0.07
+      ],
       "tests/api/tokens-session-cookie.test.ts": [
         0.08
       ],
@@ -205,7 +208,8 @@
         0.0
       ],
       "tests/ci/audit-suppression-step.test.ts": [
-        19.72
+        19.72,
+        12.98
       ],
       "tests/ci/base-freshness.test.ts": [
         0.82
@@ -273,7 +277,8 @@
         0.04
       ],
       "tests/ci/verify-zizmor-step.test.ts": [
-        2.34
+        2.34,
+        1.21
       ],
       "tests/components/account-controls-panel.test.tsx": [
         0.53
@@ -399,6 +404,9 @@
       "tests/components/stats-page.test.tsx": [
         0.63
       ],
+      "tests/components/team-page.test.tsx": [
+        0.48
+      ],
       "tests/components/terms-page.test.tsx": [
         0.17
       ],
@@ -448,7 +456,8 @@
         0.04
       ],
       "tests/dashboard/queries-postgres.test.ts": [
-        2.84
+        2.84,
+        1.48
       ],
       "tests/dashboard/queries.test.ts": [
         6.65
@@ -604,7 +613,8 @@
       ],
       "tests/db/migration-compatibility.test.ts": [
         3.9,
-        5.86
+        5.86,
+        2.4
       ],
       "tests/db/migration-immutability.test.ts": [
         0.14
@@ -619,7 +629,8 @@
         0.05
       ],
       "tests/db/migration-upgrade.test.ts": [
-        91.8
+        91.8,
+        51.74
       ],
       "tests/db/pickup.test.ts": [
         0.07
@@ -729,7 +740,8 @@
         0.46
       ],
       "tests/db/sweep-pass-store.test.ts": [
-        3.47
+        3.47,
+        2.36
       ],
       "tests/db/sweep-repository-share.test.ts": [
         9.61,
@@ -741,6 +753,15 @@
       ],
       "tests/db/sweep-walk-schema.test.ts": [
         0.39
+      ],
+      "tests/db/team-ledger.test.ts": [
+        0.43
+      ],
+      "tests/db/team-settlements.test.ts": [
+        1.16
+      ],
+      "tests/db/team-store.test.ts": [
+        0.31
       ],
       "tests/db/types-fetch-failure.test.ts": [
         0.76
@@ -1078,6 +1099,9 @@
       "tests/fold/sweep.test.ts": [
         0.15
       ],
+      "tests/fold/team-membership.test.ts": [
+        0.02
+      ],
       "tests/fold/unreadable-connection.test.ts": [
         0.04
       ],
@@ -1245,7 +1269,8 @@
         0.99
       ],
       "tests/lib/http-surface-non-envelope.test.ts": [
-        111.4
+        111.4,
+        82.26
       ],
       "tests/lib/http-surface-record.test.ts": [
         50.2,
