@@ -850,7 +850,7 @@ describe("recalibration credit adjustments", () => {
           kind: "conflict",
           detail: {
             cause: "SNAPSHOT_DRIFT",
-            description: "The settlement with proof fingerprint abc123 is no longer SETTLED.",
+            description: "The settlement for the stored contribution (repository 1, issue 2, pull request 3) is no longer SETTLED.",
           },
         },
       });
@@ -861,7 +861,7 @@ describe("recalibration credit adjustments", () => {
       ).rejects.toMatchObject<Partial<ModerationServiceError>>({
         code: "CONFLICT",
         message:
-          "The audit's stored calibration evidence no longer matches the live records: The settlement with proof fingerprint abc123 is no longer SETTLED.",
+          "The audit's stored calibration evidence no longer matches the live records: The settlement for the stored contribution (repository 1, issue 2, pull request 3) is no longer SETTLED.",
       });
       expect(creditStore.listCallCount).toBe(0);
     });
@@ -938,7 +938,7 @@ describe("recalibration credit adjustments", () => {
           kind: "conflict",
           detail: {
             cause: "SNAPSHOT_DRIFT",
-            description: "The settlement with proof fingerprint abc123 is no longer SETTLED.",
+            description: "The settlement for the stored contribution (repository 1, issue 2, pull request 3) is no longer SETTLED.",
           },
         },
       });
@@ -949,7 +949,7 @@ describe("recalibration credit adjustments", () => {
       ).rejects.toMatchObject<Partial<ModerationServiceError>>({
         code: "CONFLICT",
         message:
-          "The audit's stored calibration evidence no longer matches the live records: The settlement with proof fingerprint abc123 is no longer SETTLED.",
+          "The audit's stored calibration evidence no longer matches the live records: The settlement for the stored contribution (repository 1, issue 2, pull request 3) is no longer SETTLED.",
       });
     });
 

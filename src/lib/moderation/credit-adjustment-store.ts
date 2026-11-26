@@ -573,7 +573,7 @@ async function verifySelfWorkPair(
   targetAccountId: string,
   pair: CalibrationPair,
 ): Promise<string | null> {
-  const rows = await sql<SelfWorkResolutionRow[]>`
+  const rows = await sql<StoredPairEvidenceRow[]>`
     select
       self_work_calibrations.opening_comparison_points,
       self_work_calibrations.actual_points as settled_points,
@@ -754,14 +754,14 @@ type LineRow = {
 
 type AdjustmentLineRow = LineRow & { adjustment_id: string };
 
-type SelfWorkResolutionRow = {
+type StoredPairEvidenceRow = {
   opening_comparison_points: number | string;
   settled_points: number | string | null;
   proof_sha256: string | null;
   merged_at: string | Date;
 };
 
-type OutsiderResolutionRow = SelfWorkResolutionRow & { settlement_id: string; creditor_id: string; status: string };
+type OutsiderResolutionRow = StoredPairEvidenceRow & { settlement_id: string; creditor_id: string; status: string };
 
 function isUniqueViolation(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "23505";
