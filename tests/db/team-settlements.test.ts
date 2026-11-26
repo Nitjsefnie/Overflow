@@ -215,7 +215,7 @@ describe("an identity claim of a team member's UNCLAIMED settlement", () => {
 
   it("re-resolves a stale fold the same way before it is published", async () => {
     const [sponsor, lead, claimant, teammate, departed, joinedLater, formerTeammate, joinedAtMerge, sponsorJoinedAtMerge,
-      sponsorLeftAtMerge, sponsorJoinedLater, tied, otherLead] = await Promise.all(Array.from({ length: 13 }, account));
+      sponsorLeftAtMerge, sponsorJoinedLater, tied, otherLead, tiedReversed] = await Promise.all(Array.from({ length: 14 }, account));
     // Each SQL bound has a near miss at the merge instant, for the claimant's team and for the sponsor's membership of it.
     const teamId = await team(lead, [claimant, "2026-08-01T00:00:00Z"], [teammate, "2026-07-01T00:00:00Z"],
       [departed, "2026-07-01T00:00:00Z", mergedAt], [joinedLater, "2026-09-01T12:00:01Z"],
@@ -224,6 +224,10 @@ describe("an identity claim of a team member's UNCLAIMED settlement", () => {
       [tied, "2026-08-10T00:00:00Z", "2026-09-02T00:00:00Z"]);
     // Two rows joined at one instant both cover the merge: the greater team id decides, as in the fold.
     const otherTeamId = await team(otherLead, [tied, "2026-08-10T00:00:00Z"]);
+    // The same tie written the other way round, so no row order, first or last, can pass for the tie-break.
+    await sql`insert into team_memberships (team_id, user_id, joined_at) values (${otherTeamId}, ${tiedReversed.id}, '2026-08-10T00:00:00Z')`;
+    await sql`insert into team_memberships (team_id, user_id, joined_at, left_at)
+      values (${teamId}, ${tiedReversed.id}, '2026-08-10T00:00:00Z', '2026-09-02T00:00:00Z')`;
     const unclaimed = (githubIssueId: number, debtorId: string, author = claimant): FoldSettlement => ({
       githubIssueId, githubPullRequestId: githubIssueId + 1, provider: "github", instanceUrl: null, creditorId: null,
       creditorGitHubLogin: author.login, creditorGitHubUserId: author.githubId, debtorId, openingComparisonPoints: 5,
@@ -236,7 +240,7 @@ describe("an identity claim of a team member's UNCLAIMED settlement", () => {
       ledgerEntries: [], settlements: [unclaimed(1, sponsor.id), unclaimed(3, teammate.id), unclaimed(5, sponsor.id, departed),
         unclaimed(7, sponsor.id, joinedLater), unclaimed(9, formerTeammate.id), unclaimed(11, sponsor.id, joinedAtMerge),
         unclaimed(13, sponsorJoinedAtMerge.id), unclaimed(15, sponsorLeftAtMerge.id), unclaimed(17, sponsorJoinedLater.id),
-        unclaimed(19, sponsor.id, tied)] };
+        unclaimed(19, sponsor.id, tied), unclaimed(21, sponsor.id, tiedReversed)] };
 
     const resolved = await sql.begin((transaction) => reResolveIdentityClaims(transaction, stale)) as FoldResult;
     expect(resolved.settlements).toEqual([
@@ -248,6 +252,7 @@ describe("an identity claim of a team member's UNCLAIMED settlement", () => {
       { ...unclaimed(15, sponsorLeftAtMerge.id), creditorId: claimant.id, teamId, status: "SETTLED", credits: 5 },
       { ...unclaimed(17, sponsorJoinedLater.id), creditorId: claimant.id, teamId, status: "SETTLED", credits: 5 },
       { ...unclaimed(19, sponsor.id, tied), creditorId: tied.id, teamId: [teamId, otherTeamId].sort()[1], status: "SETTLED", credits: 5 },
+      { ...unclaimed(21, sponsor.id, tiedReversed), creditorId: tiedReversed.id, teamId: [teamId, otherTeamId].sort()[1], status: "SETTLED", credits: 5 },
     ]);
     expect(resolved.selfWorkCalibrations).toEqual([
       expect.objectContaining({ githubIssueId: 3, userId: teammate.id, actualPoints: 6 }),
