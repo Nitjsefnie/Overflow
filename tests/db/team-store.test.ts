@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
@@ -134,6 +135,7 @@ describe("changing a team's membership", () => {
         where wait_event_type = 'Lock' and query like '%insert into team_memberships%'
       `;
       if (blocked.count > 0) break;
+      await delay(20);
     }
     release();
     await holder;
@@ -220,9 +222,10 @@ describe("distributing a team's points", () => {
     const held = new Promise<void>((resolve) => { release = resolve; });
     let locked!: () => void;
     const holding = new Promise<void>((resolve) => { locked = resolve; });
-    // A second distributor in the store's own shape: team row locked, 3 points out, not yet committed.
+    // A second distributor holding the weakest lock that still excludes the store's `for no key update`
+    // (`for share`), so a store that weakens its lock to `for share` or drops it does not wait.
     const holder = sql.begin(async (tx) => {
-      await tx`select id from teams where id = ${teamId} for no key update`;
+      await tx`select id from teams where id = ${teamId} for share`;
       await tx`insert into team_distributions (team_id, member_id, points) values (${teamId}, ${lead.id}, 3)`;
       locked();
       await held;
@@ -236,6 +239,7 @@ describe("distributing a team's points", () => {
         select count(*)::int as count from pg_stat_activity where wait_event_type = 'Lock' and datname = current_database()
       `;
       if (blocked.count > 0 || settled) break;
+      await delay(20);
     }
     release();
     await holder;
