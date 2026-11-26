@@ -184,8 +184,8 @@ describe("a reconciled settlement of a team member's merged closing pull request
     expect(await balancesOf(sql, teamId, member.id, outsider.id)).toEqual([6, 0, 6]);
     for (const [author, pr, effect] of [[member, prs[0]!, 0], [outsider, prs[1]!, 6]] as const) {
       const settlement = (await settlementOf(pr))!;
-      expect((await listSettlementHistory(author.id, { sql })).map((row) => row.balanceEffect)).toEqual([effect]);
-      expect(await getSettlementProof(author.id, settlement.id, { sql })).toMatchObject({ balanceEffect: effect });
+      expect((await listSettlementHistory(author.id)).map((row) => row.balanceEffect)).toEqual([effect]);
+      expect(await getSettlementProof(author.id, settlement.id)).toMatchObject({ balanceEffect: effect });
     }
   });
 
