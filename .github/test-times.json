@@ -483,7 +483,8 @@
         0.29
       ],
       "tests/db/abandoned-reconciliation-runs.test.ts": [
-        0.68
+        0.68,
+        2.01
       ],
       "tests/db/account-deletion.test.ts": [
         0.5
