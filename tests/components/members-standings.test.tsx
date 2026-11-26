@@ -67,6 +67,13 @@ describe("member standings page", () => {
     expect(within(rows[2] as HTMLElement).getByText("earned 0 · given 6 · net −6")).toBeVisible();
   });
 
+  it("links the team page from the page heading, empty or not", async () => {
+    respondWith({ standings: [] });
+    render(await MembersStandingsPage());
+
+    expect(screen.getByRole("link", { name: "your team" })).toHaveAttribute("href", "/team");
+  });
+
   it("marks the signed-in member's own row and no other", async () => {
     respondWith({
       standings: [

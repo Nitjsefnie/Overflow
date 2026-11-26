@@ -32,7 +32,8 @@ the security reason and the change.
   `teamDistributions` (the team points distributed to the account). Each
   settlement row and each `moderationCreditAdjustmentLines` row adds
   `team_id`, the team the credit landed on (`null` when it landed on the
-  account itself).
+  account itself). Adds the team routes `/api/teams`, `/api/teams/members`
+  and `/api/teams/distributions`.
 - 2.0.0: `POST /api/account/export` no longer carries `account.avatarUrl`
   (removed after its 1.1.0 deprecation), and its `formatVersion`
   moves from `1` to `2`.
@@ -1107,6 +1108,67 @@ shared by both routes:
 | 422 | `INSUFFICIENT_EVIDENCE` | `Stored review evidence is required to grant this dispute.` The request stays open; inspect the evidence before granting. |
 | 500 | `MISCONFIGURED` | The trusted application origin is not configured. |
 | 502 | `UPSTREAM_FAILURE` | A POST failed internally (`Unable to complete the closed PR dispute request.`), or a GET read failed (`Unable to load your closed PR dispute requests.` / `Unable to load the closed PR dispute queue.`). |
+
+## Teams
+
+An account can create a team and becomes its lead; the lead adds and removes
+members, and an account belongs to at most one team. A settlement whose merged
+closing pull request was authored by a member of a team at the merge time
+credits the team's balance instead of the author's. Only the lead moves whole
+points from the team's balance to members' own balances (the lead included); a
+distribution that would take the balance below zero is refused. The page is
+`/team`. Every route accepts a session or an API token, acts for that
+credential's account, and every POST and DELETE body is limited to `4 KiB`
+and rejects unknown fields.
+
+| Route | Request | Success |
+| --- | --- | --- |
+| `GET /api/teams` | None. | `200` `{ "team": <team> \| null }`: the account's current team, or `null` when it is in none. |
+| `POST /api/teams` | `{ "name": <nonblank string, at most 80 characters, trimmed> }` | `201` `{ "team": { "id", "name", "leadId", "createdAt" } }`. The caller becomes the lead and its first member. Names are unique ignoring case. |
+| `POST /api/teams/members` | `{ "githubLogin": <nonblank string, at most 39 characters> }` | `201` `{ "member": { "userId" } }`. Lead only; the login is matched ignoring case against live accounts. |
+| `DELETE /api/teams/members` | `{ "memberId": <uuid> }` | `200` `{ "removed": true }`. Lead only; the lead cannot be removed. Credit for pull requests merged after the removal lands on the author again. |
+| `POST /api/teams/distributions` | `{ "memberId": <uuid of a current member>, "points": <integer, at least 1> }` | `201` `{ "distribution": { "id", "teamId", "memberId", "points", "createdAt" } }`. Lead only. |
+
+A team carries:
+
+```json
+{
+  "id": "uuid",
+  "name": "Quay",
+  "leadId": "uuid",
+  "createdAt": "2026-10-01T10:00:00.000Z",
+  "members": [{ "userId": "uuid", "githubLogin": "lead", "joinedAt": "2026-10-01T10:00:00.000Z" }],
+  "balance": 7,
+  "distributions": [
+    { "id": "uuid", "teamId": "uuid", "memberId": "uuid", "memberLogin": "mira", "points": 3,
+      "createdAt": "2026-10-03T10:00:00.000Z" }
+  ]
+}
+```
+
+`members` are the current members, oldest first; `distributions` are the
+team's whole history, newest first. `balance` is the team's settled balance,
+which a review-round deduction, dispute or moderator correction can take below
+zero.
+
+| HTTP | Code | Exact message | Meaning / next step |
+| --- | --- | --- | --- |
+| 401 | `UNAUTHENTICATED` | `Sign in is required.` or `The supplied API token was not accepted.` | No signed-in session and no accepted bearer token. |
+| 403 | `FORBIDDEN` | `The request origin is not allowed.` | Session writes: missing or foreign `Origin`. |
+| 403 | `FORBIDDEN` | `A member account is required.` | The credential's account no longer exists. |
+| 403 | `FORBIDDEN` | `Only the team's lead can do that.` | The caller leads no team. |
+| 404 | `NOT_FOUND` | `No active account matches.` | The login matches no live account, or more than one. |
+| 404 | `NOT_FOUND` | `That account is not a current member of your team.` | A removal or distribution names an account that is not a current member. |
+| 409 | `CONFLICT` | `Another team already has that name.` | Choose another name. |
+| 409 | `CONFLICT` | `An account belongs to at most one team.` | The caller, or the added account, is already in a team. |
+| 409 | `CONFLICT` | `The team's lead cannot be removed.` | Removal names the lead. |
+| 409 | `CONFLICT` | `The team's balance cannot cover that distribution.` | Distribute at most the team's balance. |
+| 413 | `PAYLOAD_TOO_LARGE` | `The request body is too large.` | The body exceeds `4 KiB`. |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | `The request must use the application/json content type.` | A declared non-JSON media type. |
+| 422 | `INVALID_REQUEST` | `Invalid team request.` | Unreadable JSON, a missing, extra or mistyped field, a blank or overlong name or login, or points below 1 or not whole. |
+| 422 | `INVALID_INPUT` | `A team needs a nonblank name.` / `Distribute a whole number of points of at least 1.` | The store refused the name or the points. |
+| 500 | `MISCONFIGURED` | `The server is not configured to accept this request.` | Session writes: `OVERFLOW_APP_URL` is absent or malformed. |
+| 502 | `UPSTREAM_FAILURE` | `Unable to complete the team request.` or `Unable to authorize the member request.` | The credential lookup, the database read or the write failed; retry when the service recovers. |
 
 ## Readiness probe
 
