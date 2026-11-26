@@ -31,9 +31,10 @@ type TeamRow = { id: string; name: string; lead_id: string; created_at: Date };
  * Reads and writes teams, their membership history and their lead's distributions.
  *
  * Every authorization is a database read inside the writing transaction: the
- * team row, found by its lead, is locked `for update`, so a lead's membership
- * changes and distributions serialize, and a distribution's balance check
- * cannot be raced by another distribution. One-team-per-account is the open
+ * team row, found by its lead, is locked `for no key update`, so a lead's
+ * membership changes and distributions serialize and a distribution's balance
+ * check cannot be raced by another distribution, while the foreign-key checks
+ * of rows naming the team (settlements, memberships) do not wait on it. One-team-per-account is the open
  * membership partial unique index's (migration 097): two adds of one account
  * to two teams both pass their reads, and the index refuses the second. Its
  * violation, like a taken name's, is mapped OUTSIDE sql.begin, because
@@ -168,7 +169,7 @@ function toTeam(row: TeamRow): Team {
 }
 
 async function lockLeadTeam(tx: TransactionClient, leadId: string): Promise<{ id: string } | undefined> {
-  const [team] = await tx<{ id: string }[]>`select id from teams where lead_id = ${leadId} for update`;
+  const [team] = await tx<{ id: string }[]>`select id from teams where lead_id = ${leadId} for no key update`;
   return team;
 }
 
