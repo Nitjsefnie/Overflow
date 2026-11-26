@@ -1040,9 +1040,7 @@ function sumLinesFor(
   lines: readonly CreditAdjustmentLineRecord[],
   creditorId: string,
 ): number {
-  return lines
-    .filter((line) => line.creditorId === creditorId)
-    .reduce((total, line) => total + line.amount, 0);
+  return lines.filter((line) => line.creditorId === creditorId).reduce((total, line) => total + line.amount, 0);
 }
 
 function bySettlementId(
