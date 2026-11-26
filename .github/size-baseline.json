@@ -1,6 +1,6 @@
 {
   "trees": {
-    "tests/": 196716
+    "tests/": 196702
   },
   "schema_version": 1,
   "baseline": {
@@ -8,7 +8,7 @@
     "src/app/globals.css": 1233,
     "src/components/repository-form.tsx": 833,
     "src/lib/dashboard/queries.ts": 1525,
-    "src/lib/fold/repository-fold.ts": 1416,
+    "src/lib/fold/repository-fold.ts": 1412,
     "src/lib/github/client.ts": 1434,
     "src/lib/moderation/credit-adjustment-store.ts": 826,
     "src/lib/repositories/register.ts": 1974,
