@@ -101,4 +101,5 @@ export const appliedMigrationNames: readonly string[] = [
   "094_webhook_rederivation_owed.sql",
   "095_unwritable_closure_unlabelled_self_work.sql",
   "096_drop_sweep_pass_walk_cursor.sql",
+  "097_team_accounts.sql",
 ];

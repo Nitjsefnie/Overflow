@@ -342,6 +342,9 @@ src/lib/retention/*
 !src/lib/security/
 src/lib/security/*
 !src/lib/security/*.ts
+!src/lib/teams/
+src/lib/teams/*
+!src/lib/teams/*.ts
 !src/lib/tokens/
 src/lib/tokens/*
 !src/lib/tokens/*.ts

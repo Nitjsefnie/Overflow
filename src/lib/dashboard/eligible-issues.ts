@@ -122,7 +122,7 @@ type EligibleIssueRow = {
  * nested-loop joins for the mis-estimate. An unnamed statement is re-planned
  * with the actual parameter values on every execution, so the collapse never
  * happens. Request values still bind as parameters; only the shared starting
- * limit is interpolated; migration 091's account_credit_limits view repeats
+ * limit is interpolated; migration 097's account_credit_limits view repeats
  * it, so a change needs a new migration. Future edits must keep the CTE-block
  * formatting: the migration-056 plan pins' `cteBlock()` parser matches
  * `^\s*CTE <name>$` headers and reads the deeper-indented lines under each, so
@@ -174,7 +174,7 @@ const BOARD_QUERY = `
       select account_id, balance from balances
     ),
     sponsor_credit_limits as materialized (
-      -- The account_credit_limits view's replay (migration 044), scoped to
+      -- The account_credit_limits view's replay (migration 097), scoped to
       -- the candidate sponsors. The window partitions by account, so the
       -- replay of a candidate's history is unchanged by every non-candidate's
       -- events being absent; the scoping keeps a world of settlement-heavy
@@ -198,7 +198,7 @@ const BOARD_QUERY = `
         join issues on issues.id = settlements.issue_id
         join registered_repositories as repositories on repositories.id = pull_requests.repository_id
         cross join lateral (values
-          (settlements.creditor_id, settlements.credits),
+          (coalesce(settlements.team_id, settlements.creditor_id), settlements.credits),
           (settlements.debtor_id, -settlements.credits)
         ) as legs(account_id, amount)
         where settlements.status = 'SETTLED'
@@ -222,7 +222,7 @@ const BOARD_QUERY = `
         left join issues on issues.id = settlements.issue_id
         left join registered_repositories as repositories on repositories.id = pull_requests.repository_id
         cross join lateral (values
-          (lines.creditor_id, lines.amount),
+          (coalesce(lines.team_id, lines.creditor_id), lines.amount),
           (adjustments.target_account_id, -lines.amount)
         ) as legs(account_id, amount)
         where legs.account_id in (select sponsor_id from candidate_sponsors)
@@ -259,7 +259,7 @@ const BOARD_QUERY = `
         join issues on issues.id = disputes.issue_id
         join registered_repositories as repositories on repositories.id = pull_requests.repository_id
         cross join lateral (values
-          (settlements.creditor_id, -settlements.credits, 'creditor'),
+          (coalesce(settlements.team_id, settlements.creditor_id), -settlements.credits, 'creditor'),
           (settlements.debtor_id, settlements.credits, 'debtor')
         ) as legs(account_id, amount, leg)
         where disputes.decision = 'GRANTED'
@@ -267,6 +267,16 @@ const BOARD_QUERY = `
           and settlements.credits > 0
           and settlements.creditor_id <> settlements.debtor_id
           and legs.account_id in (select sponsor_id from candidate_sponsors)
+        union all
+        -- A team distribution (migration 097) moves balance, never completed work.
+        select legs.account_id, legs.amount, distributions.created_at, 3,
+          distributions.id::text, null, null, null, null, null
+        from team_distributions as distributions
+        cross join lateral (values
+          (distributions.team_id, -distributions.points),
+          (distributions.member_id, distributions.points)
+        ) as legs(account_id, amount)
+        where legs.account_id in (select sponsor_id from candidate_sponsors)
       ),
       running_balances as (
         select *, coalesce(sum(amount) over (

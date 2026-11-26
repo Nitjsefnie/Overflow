@@ -1820,7 +1820,8 @@ describe("ambiguous claim sentinel against PostgreSQL", () => {
         settled_points integer,
         review_rounds integer,
         credits integer,
-        created_at timestamptz
+        created_at timestamptz,
+        team_id text
       );
       create table pull_requests (
         id text primary key,
@@ -1841,8 +1842,10 @@ describe("ambiguous claim sentinel against PostgreSQL", () => {
         adjustment_id text,
         settlement_id text,
         creditor_id text,
+        team_id text,
         amount integer
       );
+      create table team_distributions (id text primary key, team_id text, member_id text, points integer, created_at timestamptz);
       create table closed_pr_dispute_requests (id text primary key, pull_request_id text, issue_id text, landed_pull_request_id text, decision text, decided_at timestamptz);
       create table dispute_credit_adjustments (
         id text primary key, dispute_id text, target_account_id text, created_at timestamptz
