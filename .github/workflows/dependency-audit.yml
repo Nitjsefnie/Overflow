@@ -107,17 +107,13 @@ jobs:
           ws_file=pnpm-workspace.yaml
           npmrc_file=.npmrc
           
-          # Two more suppression surfaces, measured on pnpm 12.23.0 with a real advisory
-          # POST to a local TLS endpoint: the audit honours auditConfig and auditLevel
-          # from pnpm-workspace.yaml. A pinned pnpm_config_registry outranks .npmrc
-          # registry= and the workspace registries mapping, so the mapping does not
-          # redirect the advisory endpoint. .npmrc strict-ssl=false plus cafile= of
-          # that endpoint's certificate lets the POST arrive; pnpm_config_strict_ssl
-          # at true fails it closed, and pnpm_config_cafile does not outrank cafile=.
-          # .npmrc audit-level, proxy and https-proxy are not read. Both files are
-          # therefore compared alongside package.json; absent compares equal to a
-          # file carrying none of the audited keys, and an unparseable CHANGED file
-          # is a refusal, never a silent pass.
+          # Measured on pnpm 12.23.0: workspace auditConfig and auditLevel bind;
+          # pnpm_config_registry outranks .npmrc registry= and workspace registries.
+          # .npmrc strict-ssl=false plus cafile= reaches a local TLS endpoint;
+          # pnpm_config_strict_ssl=true fails closed; pnpm_config_cafile does not.
+          # .npmrc audit-level, proxy and https-proxy are unread. Both files are
+          # compared with package.json; absent equals no audited keys; a changed
+          # unparseable file is a refusal.
           
           # Reads a commit's package.json as git objects with the ls-tree single-blob
           # discipline: exactly one mode-100644 blob entry at package.json, or refuse.

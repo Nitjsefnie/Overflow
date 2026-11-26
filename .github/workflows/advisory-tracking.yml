@@ -1,9 +1,8 @@
 name: advisory tracking
 
-# Keeps one comment on the standing tracking issue listing every advisory
-# pnpm audit reports against main's lockfile. pnpm already drops the
-# ignoreGhsas entries, so each one listed has no disposition yet. A listing
-# equal to the latest one is not posted again; a failed audit posts nothing.
+# One comment on issue 1714 lists advisories pnpm audit reports on main.
+# ignoreGhsas entries are already dropped. An unchanged listing is not
+# posted again. A failed audit posts nothing.
 
 on:
   schedule:
@@ -25,7 +24,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       body: ${{ steps.listing.outputs.body }}
-    # dependency-audit.yml's pins, the ones measured to still bind on pnpm 12.23.0.
+    # Same pins as dependency-audit.yml.
     env:
       COREPACK_ENABLE_PROJECT_SPEC: "0"
       pnpm_config_registry: "https://registry.npmjs.org/"
