@@ -202,7 +202,7 @@ describe("push-recalibration's push step, executed", () => {
   };
 
   function sshFixture() {
-    const scratch = tempDirectories.create(join(root, "ssh-"));
+    const scratch = tempDirectories.create(join(tmpdir(), "prs-")); // ssh-agent's socket under HOME must fit 107 bytes
     const home = join(scratch, "home");
     const bin = join(scratch, "bin");
     const key = join(scratch, "deploy-key");
