@@ -215,6 +215,9 @@
       "tests/ci/base-freshness.test.ts": [
         0.82
       ],
+      "tests/ci/ci-records.test.ts": [
+        2.67
+      ],
       "tests/ci/comment-share.test.ts": [
         0.0
       ],
@@ -609,7 +612,8 @@
       "tests/db/migrate-default-branch-guard.test.ts": [
         6.45,
         3.5,
-        2.2
+        2.2,
+        9.89
       ],
       "tests/db/migration-checksum.test.ts": [
         7.26,
@@ -882,7 +886,8 @@
         153.9
       ],
       "tests/deploy/release-check.test.ts": [
-        7.02
+        7.02,
+        5.12
       ],
       "tests/deploy/release-prepare.test.ts": [
         4.54,
@@ -1249,7 +1254,8 @@
       ],
       "tests/lib/dispute-http-surface.test.ts": [
         6.22,
-        8.38
+        8.38,
+        3.24
       ],
       "tests/lib/drain-summary-logger.test.ts": [
         0.01
@@ -1526,7 +1532,8 @@
         0.0
       ],
       "tests/scripts/perf-workloads.test.ts": [
-        28.87
+        28.87,
+        14.25
       ],
       "tests/scripts/ratchets.test.ts": [
         8.15,
@@ -1555,7 +1562,8 @@
       ],
       "tests/security/credential-reencryption-postgres.test.ts": [
         4.34,
-        6.3
+        6.3,
+        2.9
       ],
       "tests/security/github-authorization-url.test.ts": [
         0.19
