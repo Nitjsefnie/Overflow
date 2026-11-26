@@ -1386,6 +1386,8 @@ exit 1
     // failure, a checkout without persist-credentials disabled — fails this
     // equality.
     expect(gateBehavior(analyze)).toEqual({
+      needs: "changes",
+      if: "${{ !cancelled() && (github.event_name != 'push' || (needs.changes.result == 'success' && needs.changes.outputs.records-only != 'true')) }}",
       permissions: { contents: "read", "security-events": "write" },
       strategy: {
         "fail-fast": false,

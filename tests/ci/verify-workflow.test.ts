@@ -677,9 +677,10 @@ describe("the verify workflows' untrusted-code boundary", () => {
       Object.entries(workflow.jobs ?? {})
         .filter(([, job]) => job !== undefined && "permissions" in job)
         .map(([name]) => name),
-      "only report may carry a permissions: override in ci.yml, reading the test artifacts; a verify " +
+      "only record-source and report may read Actions runs and artifacts; a verify " +
         "override here would be a scope no step in that job uses",
-    ).toEqual(["report"]);
+    ).toEqual(["record-source", "report"]);
+    expect(workflow.jobs?.["record-source"]?.permissions).toEqual({ contents: "read", actions: "read" });
     expect(workflow.jobs?.report?.permissions).toEqual({ contents: "read", actions: "read" });
 
     // ci-pr.yml keeps verify's read-only actions: read — the base copy of the

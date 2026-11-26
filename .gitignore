@@ -411,6 +411,7 @@ scripts/*
 !scripts/db-restore.sh
 !scripts/container-build.sh
 !scripts/ci-base-freshness.sh
+!scripts/ci_records.py
 !scripts/commit_scopes.py
 !scripts/secret-scan.sh
 !scripts/secret-scan-baseline.sh

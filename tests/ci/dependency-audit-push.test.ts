@@ -1,15 +1,14 @@
-import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
-const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "dependency-audit-push-")]);
-
-const LINUX_ONLY = process.platform === "linux";
+const prefix = join(tmpdir(), "dependency-audit-push-");
+const tempDirectories = createOwnedTempDirectoryRegistry([prefix]);
 
 type Step = {
   name?: string;
@@ -55,12 +54,7 @@ beforeAll(async () => {
 
 describe("the push trigger always fires", () => {
   it("carries no paths filter, and the workflow carries no pull_request trigger", () => {
-    // The deploy gate derives its required set from branch protection, so a
-    // push that changed no manifest must still produce a dependency-audit
-    // check-run: a paths filter would leave that push with a MISSING context,
-    // which protection refuses, and the deploy would be stranded. This file
-    // has no pull_request trigger: the pull-request leg is pr-gates.yml, the
-    // base-defined one.
+    // Deployment requires an audit conclusion even when the manifests are unchanged.
     expect(workflow.on).toEqual({
       push: { branches: ["main"] },
       schedule: [{ cron: "37 6 * * *" }],
@@ -77,9 +71,7 @@ describe("the fast path is an outcome, not a skip", () => {
   });
 
   it("receives the classification inputs through env:, never interpolation", () => {
-    // github.event.before and the event name reach the shell only through the
-    // step's env block; a ${{ }} inside the run block would be an
-    // interpolation channel this repository denies everywhere.
+    // Event data reaches the shell through env.
     expect(auditStep?.env).toEqual({
       OVERFLOW_EVENT_NAME: "${{ github.event_name }}",
       OVERFLOW_BEFORE_SHA: "${{ github.event.before }}",
@@ -107,284 +99,93 @@ describe("the fast path is an outcome, not a skip", () => {
   });
 
   it("checks out enough history for the ancestor check", () => {
-    // merge-base --is-ancestor needs the previous tip's history: a depth-1
-    // checkout would not hold it and every push would fall through to the
-    // full audit, which is safe but never fast.
+    // A shallow checkout cannot establish ancestry.
     const checkout = steps.filter((step) => step.uses?.startsWith("actions/checkout"));
     expect(checkout).toHaveLength(1);
+    expect(checkout[0]?.with?.["fetch-depth"]).toBe(0);
   });
 });
 
-describe.skipIf(!LINUX_ONLY)("the audit step's classification, run over scratch repositories", () => {
-  let root = "";
-  let cases = 0;
-
+describe.skipIf(process.platform !== "linux")("the shipped audit step on real push diffs", () => {
+  let root: string;
+  let base: string;
+  let sequence = 0;
+  const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1",
+    GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+    GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" };
+  function git(...args: string[]) {
+    return execFileSync("git", args, { cwd: root, env: gitEnv, encoding: "utf8" }).trim();
+  }
+  function change(path: string, content: string) {
+    git("checkout", "-q", "--detach", base);
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), content);
+    git("add", "--", path);
+    git("commit", "-qm", "change");
+  }
   beforeAll(async () => {
-    root = await tempDirectories.createAsync(join(tmpdir(), "dependency-audit-push-"));
+    root = await tempDirectories.createAsync(prefix);
+    git("init", "-qb", "main");
+    writeFileSync(join(root, "package.json"), '{"name":"scratch","version":"1.0.0","private":true}\n');
+    writeFileSync(join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n\nimporters:\n  .:\n    dependencies: {}\n");
+    git("add", ".");
+    git("commit", "-qm", "before");
+    base = git("rev-parse", "HEAD");
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    // The retry suite supplies sequences of responses. For classification one
+    // fixed registry answer suffices, and every pnpm and sleep call is logged.
+    writeFileSync(join(bin, "pnpm"), `#!/bin/sh
+echo pnpm >> "$CALLS"
+echo "$AUDIT_RESPONSE"
+exit "$AUDIT_STATUS"
+`, { mode: 0o755 });
+    writeFileSync(join(bin, "sleep"), '#!/bin/sh\necho sleep >> "$CALLS"\nexit 1\n', { mode: 0o755 });
   });
+  afterAll(async () => { await tempDirectories.disposeAsync(root); });
 
-  afterAll(async () => {
-    await tempDirectories.disposeAsync(root);
-  });
-
-  const BASE_PACKAGE = `${JSON.stringify({ name: "scratch", version: "1.0.0", private: true }, null, 2)}\n`;
-  const BASE_LOCKFILE = "lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies: {}\n";
-  const CLEAN = {
-    code: 0,
-    stdout: `${JSON.stringify({ advisories: {}, metadata: { vulnerabilities: {} } })}\n`,
-    stderr: "",
-  };
-  const ADVISORIES = {
-    code: 1,
-    stdout:
-      `${JSON.stringify({
-        advisories: {
-          "1106913": {
-            module_name: "scratch-left-pad",
-            severity: "high",
-            title: "synthetic advisory for the fixture only",
-            vulnerable_versions: "<1.3.1",
-            patched_versions: ">=1.3.1",
-          },
-        },
-        metadata: { vulnerabilities: { high: 1 } },
-      })}\n`,
-    stderr: "",
-  };
-
-  /**
-   * A scratch checkout at `after`, with `before` an ancestor of it — the
-   * state actions/checkout's fetch-depth: 0 leaves on a push event. The
-   * caller controls what changed between the two commits.
-   */
-  async function fixture(
-    before: Record<string, string>,
-    after: Record<string, string | { mode: string; content: string }>,
-  ): Promise<{ workspace: string; beforeSha: string; afterSha: string }> {
-    cases += 1;
-    const repo = join(root, `repo-${cases}`);
-    await mkdir(repo, { recursive: true });
-    const gitEnv: Record<string, string> = {
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_AUTHOR_NAME: "scratch repository",
-      GIT_AUTHOR_EMAIL: "scratch@example.invalid",
-      GIT_COMMITTER_NAME: "scratch repository",
-      GIT_COMMITTER_EMAIL: "scratch@example.invalid",
-    };
-    const g = (repoDir: string, ...args: string[]): string => {
-      const result = spawnSync("git", args, { cwd: repoDir, encoding: "utf8", env: { ...process.env, ...gitEnv } });
-      if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
-      return result.stdout.trim();
-    };
-    let blobCount = 0;
-    const writeBlob = async (content: string): Promise<string> => {
-      const file = join(root, `blob-${cases}-${(blobCount += 1)}`);
-      await writeFile(file, content);
-      return g(repo, "hash-object", "-w", file);
-    };
-    const commitTree = async (
-      entries: Record<string, string | { mode: string; content: string }>,
-      message: string,
-    ): Promise<void> => {
-      for (const [path, entry] of Object.entries(entries)) {
-        const spec = typeof entry === "string" ? { mode: "100644", content: entry } : entry;
-        const id = await writeBlob(spec.content);
-        g(repo, "update-index", "--add", "--cacheinfo", `${spec.mode},${id},${path}`);
-      }
-      g(repo, "commit", "--quiet", "-m", message);
-    };
-    g(repo, "init", "--quiet", "--initial-branch=main");
-    await commitTree(before, "before");
-    const beforeSha = g(repo, "rev-parse", "HEAD");
-    await commitTree(after, "after");
-    const afterSha = g(repo, "rev-parse", "HEAD");
-    g(repo, "checkout", "--quiet", "--detach", afterSha);
-    return { workspace: repo, beforeSha, afterSha };
-  }
-
-  interface CaseResult {
-    status: number | null;
-    stdout: string;
-    stderr: string;
-    invocations: string[];
-    sleeps: string[];
-  }
-
-  /** Runs the shipped audit-step text with `pnpm` and `sleep` stubbed. */
-  async function runStep(
-    fx: { workspace: string; beforeSha: string },
-    eventName: string,
-    beforeSha: string | undefined,
-    outcomes: Array<{ code: number; stdout: string; stderr: string }>,
-  ): Promise<CaseResult> {
-    const home = join(root, `run-${(cases += 1)}`);
-    mkdirSync(join(home, "bin"), { recursive: true });
-    const stubDir = join(home, "stub");
-    mkdirSync(stubDir, { recursive: true });
-    writeFileSync(join(stubDir, "outcomes.json"), JSON.stringify(outcomes));
-    writeFileSync(join(stubDir, "invocations"), "");
-    writeFileSync(join(stubDir, "sleeps"), "");
-    writeFileSync(join(stubDir, "counter"), "0");
-    writeFileSync(
-      join(home, "bin", "pnpm"),
-      [
-        "#!/usr/bin/env node",
-        'const fs = require("node:fs");',
-        'const dir = process.env.AUDIT_STUB_DIR;',
-        'fs.appendFileSync(dir + "/invocations", process.cwd() + "\\t" + process.argv.slice(2).join(" ") + "\\n");',
-        'const n = Number(fs.readFileSync(dir + "/counter", "utf8").trim());',
-        'fs.writeFileSync(dir + "/counter", String(n + 1));',
-        'const outcomes = JSON.parse(fs.readFileSync(dir + "/outcomes.json", "utf8"));',
-        "const outcome = outcomes[Math.min(n, outcomes.length - 1)];",
-        "process.stdout.write(outcome.stdout);",
-        "process.stderr.write(outcome.stderr);",
-        "process.exit(outcome.code);",
-        "",
-      ].join("\n"),
-    );
-    writeFileSync(
-      join(home, "bin", "sleep"),
-      [
-        "#!/usr/bin/env node",
-        'require("node:fs").appendFileSync(process.env.AUDIT_STUB_DIR + "/sleeps", process.argv.slice(2).join(" ") + "\\n");',
-        "",
-      ].join("\n"),
-    );
-    for (const stub of ["pnpm", "sleep"]) chmodSync(join(home, "bin", stub), 0o755);
-
-    const script = join(home, "step.sh");
-    await writeFile(script, auditStep?.run ?? "exit 99\n");
-
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_NOSYSTEM: "1",
-      OVERFLOW_EVENT_NAME: eventName,
-      OVERFLOW_BEFORE_SHA: beforeSha ?? "",
-      AUDIT_STUB_DIR: stubDir,
-      DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS: "7",
-      PATH: `${join(home, "bin")}:${dirname(process.execPath)}:${process.env.PATH ?? ""}`,
-    };
-    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", script], {
-      cwd: fx.workspace,
-      encoding: "utf8",
-      env,
+  function run(before: string, event = "push", advisory = false) {
+    const log = join(root, `calls-${++sequence}`);
+    writeFileSync(log, "");
+    const advisories = advisory ? { "1106913": { module_name: "scratch-left-pad", severity: "high",
+      title: "synthetic advisory for the fixture only", vulnerable_versions: "<1.3.1", patched_versions: ">=1.3.1" } } : {};
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", auditStep!.run!], {
+      cwd: root, encoding: "utf8", env: { ...gitEnv, PATH: `${root}/bin:${dirname(process.execPath)}:${process.env.PATH}`,
+        OVERFLOW_EVENT_NAME: event, OVERFLOW_BEFORE_SHA: before, CALLS: log, AUDIT_STATUS: advisory ? "1" : "0",
+        AUDIT_RESPONSE: JSON.stringify({ advisories, metadata: { vulnerabilities: advisory ? { high: 1 } : {} } }) },
     });
-    return {
-      status: result.status,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      invocations: (await readFile(join(stubDir, "invocations"), "utf8")).split("\n").filter((line) => line !== ""),
-      sleeps: (await readFile(join(stubDir, "sleeps"), "utf8")).split("\n").filter((line) => line !== ""),
-    };
+    return { ...result, calls: readFileSync(log, "utf8").trim() };
   }
 
-  it("records a green outcome without auditing when the push changed no manifest", async () => {
-    // The whole point: a docs-only push still leaves a green check-run, and
-    // the audit stub is never consulted — the fast path is an outcome, not a
-    // deferred or skipped audit. The stub is armed with an advisory to prove
-    // the outcome does not depend on what the registry would have said.
-    const fx = await fixture(
-      { "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE, "README.md": "one\n" },
-      { "README.md": "one\ntwo\n" },
-    );
-    const outcome = await runStep(fx, "push", fx.beforeSha, [ADVISORIES]);
-    expect(outcome.status).toBe(0);
-    expect(outcome.invocations).toEqual([]);
-    expect(outcome.sleeps).toEqual([]);
-    expect(outcome.stdout).toContain(FAST_PATH_MARKER);
+  it.each(["README.md", ".github/ci-thresholds.json"])("returns success without auditing or sleeping for %s", path => {
+    change(path, "changed");
+    const result = run(base, "push", true);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.calls).toBe("");
+    expect(result.stdout).toContain(FAST_PATH_MARKER);
   });
 
-  it("runs the full audit when the push changed the lockfile", async () => {
-    const changedLock = `${BASE_LOCKFILE}# changed\n`;
-    const fx = await fixture(
-      { "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE },
-      { "pnpm-lock.yaml": changedLock },
-    );
-    const outcome = await runStep(fx, "push", fx.beforeSha, [CLEAN]);
-    expect(outcome.status).toBe(0);
-    expect(outcome.invocations).toHaveLength(1);
-    expect(outcome.stdout).not.toContain(FAST_PATH_MARKER);
-    expect(outcome.stdout).toContain("clean — no known vulnerabilities found");
+  it.each([
+    ["pnpm-lock.yaml", false, 0, "clean — no known vulnerabilities found"],
+    ["package.json", true, 1, "scratch-left-pad high"],
+  ] as const)("audits a change to %s", (path, advisory, status, message) => {
+    change(path, "changed");
+    const result = run(base, "push", advisory);
+    expect(result.status, result.stderr).toBe(status);
+    expect(result.calls).toBe("pnpm");
+    expect(result.stdout).not.toContain(FAST_PATH_MARKER);
+    expect(result.stdout).toContain(message);
   });
 
-  it("runs the full audit when the push changed the manifest", async () => {
-    const changedPkg = `${BASE_PACKAGE}{"changed": true}\n`;
-    const fx = await fixture(
-      { "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE },
-      { "package.json": changedPkg },
-    );
-    const outcome = await runStep(fx, "push", fx.beforeSha, [ADVISORIES]);
-    expect(outcome.status).toBe(1);
-    expect(outcome.invocations).toHaveLength(1);
-    expect(outcome.stdout).toContain("scratch-left-pad high");
-  });
-
-  it("audits a before-SHA of all zeros — a new branch or force push is ambiguous", async () => {
-    const fx = await fixture(
-      { "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE, "README.md": "one\n" },
-      { "README.md": "one\ntwo\n" },
-    );
-    const outcome = await runStep(fx, "push", "0".repeat(40), [CLEAN]);
-    expect(outcome.status).toBe(0);
-    expect(outcome.invocations).toHaveLength(1);
-  });
-
-  it("audits a malformed before-SHA", async () => {
-    const fx = await fixture(
-      { "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE, "README.md": "one\n" },
-      { "README.md": "one\ntwo\n" },
-    );
-    const outcome = await runStep(fx, "push", "not-a-sha", [CLEAN]);
-    expect(outcome.status).toBe(0);
-    expect(outcome.invocations).toHaveLength(1);
-  });
-
-  it("audits a before that is not an ancestor of the pushed head", async () => {
-    // A second root commit shares no history with the checked-out head, so
-    // the ancestor check must refuse the fast path.
-    cases += 1;
-    const other = join(root, `other-${cases}`);
-    await mkdir(other, { recursive: true });
-    const gitEnv: Record<string, string> = {
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_AUTHOR_NAME: "scratch repository",
-      GIT_AUTHOR_EMAIL: "scratch@example.invalid",
-      GIT_COMMITTER_NAME: "scratch repository",
-      GIT_COMMITTER_EMAIL: "scratch@example.invalid",
-    };
-    const g = (repoDir: string, ...args: string[]): string => {
-      const result = spawnSync("git", args, { cwd: repoDir, encoding: "utf8", env: { ...process.env, ...gitEnv } });
-      if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
-      return result.stdout.trim();
-    };
-    g(other, "init", "--quiet", "--initial-branch=main");
-    const unrelated = join(root, `unrelated-blob-${cases}`);
-    await writeFile(unrelated, "unrelated\n");
-    const id = g(other, "hash-object", "-w", unrelated);
-    g(other, "update-index", "--add", "--cacheinfo", `100644,${id},README.md`);
-    g(other, "commit", "--quiet", "-m", "unrelated root");
-    const unrelatedSha = g(other, "rev-parse", "HEAD");
-
-    const fx = await fixture(
-      { "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE, "README.md": "one\n" },
-      { "README.md": "one\ntwo\n" },
-    );
-    const outcome = await runStep(fx, "push", unrelatedSha, [CLEAN]);
-    expect(outcome.status).toBe(0);
-    expect(outcome.invocations).toHaveLength(1);
-  });
-
-  it("never enters the fast path off a push event — schedule audits unconditionally", async () => {
-    const fx = await fixture(
-      { "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE, "README.md": "one\n" },
-      { "README.md": "one\ntwo\n" },
-    );
-    const outcome = await runStep(fx, "schedule", fx.beforeSha, [CLEAN]);
-    expect(outcome.status).toBe(0);
-    expect(outcome.invocations).toHaveLength(1);
-    expect(outcome.stdout).not.toContain(FAST_PATH_MARKER);
+  it.each(["zero", "malformed", "missing", "unrelated", "schedule"])("audits a %s base or event", scenario => {
+    change("README.md", "documentation");
+    // commit-tree without a parent makes an unrelated commit present in the
+    // checkout, so this case exercises ancestry separately from a missing base.
+    const bases: Record<string, string> = { zero: "0".repeat(40), malformed: "not-a-sha", missing: "1".repeat(40),
+      unrelated: git("commit-tree", "HEAD^{tree}", "-m", "unrelated"), schedule: base };
+    const result = run(bases[scenario]!, scenario === "schedule" ? "schedule" : "push");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.calls).toBe("pnpm");
+    expect(result.stdout).not.toContain(FAST_PATH_MARKER);
   });
 });

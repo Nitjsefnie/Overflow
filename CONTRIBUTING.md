@@ -208,8 +208,13 @@ CI is defined by a workflow pair: `.github/workflows/ci.yml` and
 shards, a `test` matrix job runs each shard with coverage measured against
 PostgreSQL 17 with migrations applied, and a `report` job merges the shards'
 coverage and gates it against the floor in `.github/ci-thresholds.json`.
-`verify` needs the test matrix and `report` and fails unless both succeeded;
-it then installs the pinned toolchain, applies migrations, and runs lint,
+On a push changing only `.github/{size-baseline,comment-share,ci-thresholds,test-times}.json`,
+CI skips the matrix and gives `report` the successful main push run that tested the same code.
+The report checks the pushed tip against its own previous thresholds and can commit records
+deferred when main moved during the original run. CodeQL skips these pushes. The required
+dependency-audit job already succeeds without auditing when neither manifest changed.
+`verify` requires a successful matrix or validated artifact source and a successful report.
+It then installs the pinned toolchain, applies migrations, and runs lint,
 typecheck, build and page-geometry checks. `ci-pr.yml` is the pull-request leg: its only trigger is
 `workflow_run` completion of `pr suite`, so no runner polls for the suite.
 Its `verify` checks out `main`, API-validates the exact triggering run, and
@@ -491,7 +496,7 @@ each shard's `run` step passes `source: src/**` (vitest's
 shards' coverage and fails when it falls below `coverage.javascript.floor` in
 `.github/ci-thresholds.json`, read at the pull request's base. With
 `precision: '2'` the gate compares the exact coverage with the floor and shows
-the figure truncated to two decimals. Every change runs the measurement,
+the figure truncated to two decimals. Every pull request and every main push changing other paths runs the measurement,
 documentation-only changes included.
 
 The records move in one direction only. On a push to `main` whose gate passed
