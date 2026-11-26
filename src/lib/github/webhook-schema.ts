@@ -55,6 +55,10 @@ const issueViewSchema = z.object({
   body: z.string().nullable(),
   html_url: z.url({ protocol: /^https?$/ }),
 });
+const issueStatusChangesSchema = z.object({
+  state: z.object({ from: issueViewSchema.shape.state }).optional(),
+  state_reason: z.object({ from: z.string().nullable() }).optional(),
+});
 
 const payloadSchema = z
   .object({
@@ -68,7 +72,7 @@ const payloadSchema = z
   .passthrough();
 
 const supportedActions = {
-  issues: new Set(["opened", "edited", "closed", "reopened", "labeled", "unlabeled", "assigned", "unassigned"]),
+  issues: new Set(["opened", "edited", "closed", "reopened", "labeled", "unlabeled", "assigned", "unassigned", "status_changed"]),
   pull_request: new Set(["opened", "edited", "closed", "reopened", "labeled", "unlabeled", "synchronize"]),
   pull_request_review: new Set(["submitted", "edited", "dismissed"]),
   issue_comment: new Set(["created", "edited", "deleted"]),
@@ -130,6 +134,13 @@ export function parseGitHubWebhookDeliveryDetailed(
     if (envelope.data.pull_request !== undefined) return { status: "ignored" };
     const view = issueViewSchema.safeParse(parsed.data.issue);
     if (!view.success) return { status: "invalid" };
+    if (eventName === "issues" && parsed.data.action === "status_changed") {
+      const changes = issueStatusChangesSchema.safeParse(parsed.data.changes);
+      if (!changes.success) return { status: "invalid" };
+      // The issue view stores open/closed state, and reconciliation uses the
+      // close reason. A change to the workflow status alone affects neither.
+      if (!changes.data.state && !changes.data.state_reason) return { status: "ignored" };
+    }
     issue = { state: view.data.state === "open" ? "OPEN" : "CLOSED", updatedAt: view.data.updated_at,
       title: view.data.title, body: view.data.body ?? "", url: view.data.html_url };
   }
