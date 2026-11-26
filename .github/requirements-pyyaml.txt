@@ -19,18 +19,19 @@
 # sha256 does not match, so tampered or attacker-served wheel content fails
 # the install, never the parse.
 #
-# pyyaml==6.0.3 has no transitive runtime dependencies on PyPI, so the file is
-# the one pin. Two hashes: the manylinux_2_17 x86_64 wheel for the runner's
-# CPython 3.12 (ubuntu-latest), and the sdist, which covers every other
-# CPython — pip falls back to it wherever the wheel does not resolve, so the
-# install works on any interpreter and still fails closed on unexpected
-# content.
+# pyyaml==6.0.4 has no transitive runtime dependencies on PyPI, so the file is
+# the one pin. Three hashes: the manylinux_2_17 x86_64 wheels for the runner's
+# CPython 3.12 (ubuntu-latest) and for the CPython 3.15 the suite sets up, and
+# the sdist, which covers every other CPython — pip falls back to it wherever no
+# pinned wheel resolves, so the install works on any interpreter and still fails
+# closed on unexpected content.
 #
-# Regenerate by hand when bumping pyyaml. Take the hashes from the index's own
-# record for the new version, exactly the two artifacts this file pins:
+# Regenerate by hand when bumping pyyaml: a Dependabot bump of this file moves
+# the version only. Take the hashes from the index's own record for the new
+# version, exactly the three artifacts this file pins:
 #   curl -s https://pypi.org/pypi/pyyaml/<version>/json | jq -r '
-#     .urls[] | select(.filename | test("cp312.*x86_64\\.whl$|tar\\.gz$"))
+#     .urls[] | select(.filename | test("cp31[25]-cp31[25]-manylinux.*x86_64\\.whl$|tar\\.gz$"))
 #     | "--hash=sha256:" + .digests.sha256'
 # then write `pyyaml==<version>` followed by those values, joined onto ONE line
 # with single spaces, as committed here.
-pyyaml==6.0.3 --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc --hash=sha256:d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f
+pyyaml==6.0.4 --hash=sha256:93bfb2459195406a518e2f487a9bbf01df240175f31e06f5a252ac6734c7bbf0 --hash=sha256:c57e40928738c4a202852759f9e1ee2c7063429a9469ee1ac15651bbf7d69963 --hash=sha256:e24bf71af8a432d7808fabff134d38dfe16d3cbb41f2873bb4b1e42422de0a1a
