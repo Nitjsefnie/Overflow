@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { JSONValue, Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
@@ -15,6 +15,7 @@ import {
   PostgresRecalibrationCreditStore,
   type CreditAdjustmentLineRecord,
 } from "@/lib/moderation/credit-adjustment-store";
+import { parseStoredSnapshot } from "@/lib/moderation/snapshot";
 import { PostgresTeamStore } from "@/lib/teams/store";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { startPostgresContainer } from "../support/postgres-container";
@@ -26,6 +27,8 @@ const originalDatabaseUrl = process.env.OVERFLOW_DATABASE_URL;
 
 const SAMPLE_STARTED_AT = "2020-01-01T00:00:00.000Z";
 const SAMPLE_ENDED_AT = "2030-01-01T00:00:00.000Z";
+// The proof the fold stores for a pull request whose diff GitHub refused.
+const EMPTY_DIFF_PROOF = createHash("sha256").update("").digest("hex");
 
 function nextExternalId(): number {
   externalId += 1;
@@ -504,72 +507,96 @@ describe("PostgreSQL recalibration credit adjustments", () => {
     `).resolves.toEqual([{ count: 0 }]);
   });
 
-  it("refuses a stored snapshot that lists one outsider settlement twice", async () => {
+  it.each([
+    ["one outsider pull request closing two issues", "sharedOutsiderPullRequest"],
+    ["one self-work pull request closing two issues", "sharedSelfWorkPullRequest"],
+    ["two outsider pull requests folded with the empty diff", "emptyDiffOutsiders"],
+  ] as const)("previews and applies an audit whose cohort holds %s", async (_label, shape) => {
     const store = new PostgresRecalibrationCreditStore(sql);
-    const fixture = await seedActionableCohort();
+    const fixture = await seedActionableCohort(shape);
     const outsiderPairs = fixture.outsiderPairs.map((entry) => entry.pair);
-    const { cohortDefinition, cohortStatistics } = storedSnapshotJson({
-      targetId: fixture.targetId,
-      repositoryId: fixture.repositoryId,
-      selfWorkPairs: fixture.selfWorkPairs,
-      outsiderPairs: [...outsiderPairs, outsiderPairs[0]!],
-    });
-    await insertSubstantiatedAuditWithSnapshot({
-      targetId: fixture.targetId,
-      repositoryId: fixture.repositoryId,
-      cohortDefinition,
-      cohortStatistics,
-    });
+    const [first, second] = shape === "sharedSelfWorkPullRequest" ? fixture.selfWorkPairs : outsiderPairs;
+    expect([second!.proofSha256, second!.githubPullRequestId === first!.githubPullRequestId])
+      .toEqual([first!.proofSha256, shape !== "emptyDiffOutsiders"]);
+    await openSubstantiatedAudit(fixture);
 
-    const result = await store.applyRecalibrationCreditAdjustment({
-      actorId: fixture.moderatorId,
-      targetAccountId: fixture.targetId,
-      reason: "A snapshot listing a settlement twice is corrupt evidence.",
-      credential: null,
+    const preview = await store.loadRecalibrationPreview(fixture.targetId);
+    expect(preview.kind === "ok" ? preview.value.figure : preview).toEqual({ gapPerPair: 1, pairCount: 10, totalAmount: 10 });
+    const applied = await store.applyRecalibrationCreditAdjustment({
+      actorId: fixture.moderatorId, targetAccountId: fixture.targetId, reason: "Undercredited outsiders.", credential: null,
     });
-    expect(result).toEqual({
-      kind: "conflict",
-      detail: { cause: "SNAPSHOT_DRIFT", description: expect.stringMatching(/malformed/) },
-    });
-    await expect(sql<{ count: number }[]>`
-      select count(*)::integer as count
-      from moderation_credit_adjustments
-      where target_account_id = ${fixture.targetId}
-    `).resolves.toEqual([{ count: 0 }]);
+    if (applied.kind !== "ok") throw new Error(`Expected the adjustment to apply: ${JSON.stringify(applied)}`);
+    expect(applied.value.totalAmount).toBe(10);
+    expect(applied.value.lines.map((line) => line.settlementId).sort())
+      .toEqual(fixture.outsiderPairs.map((entry) => entry.settlementId).sort());
   });
 
-  it("refuses a stored snapshot that lists one self-work pair twice", async () => {
-    const store = new PostgresRecalibrationCreditStore(sql);
-    const fixture = await seedActionableCohort();
+  it.each([
+    ["the same contribution", {}, false],
+    ["the same contribution with another proof", { proofSha256: proofFor(2) }, false],
+    ["another repository", { githubRepositoryId: 9 }, true],
+    ["another issue", { githubIssueId: 9 }, true],
+    ["another pull request", { githubPullRequestId: 9 }, true],
+    ["its repository and issue swapped", { githubRepositoryId: 23, githubIssueId: 1 }, true],
+    ["its repository and issue digits regrouped", { githubRepositoryId: 12, githubIssueId: 3 }, true],
+  ] as const)("parses a stored cohort list repeating a pair as %s only when it names another contribution", (_label, change, accepted) => {
+    const first: CalibrationPair = {
+      githubRepositoryId: 1, githubIssueId: 23, githubPullRequestId: 45, mergedAt: SAMPLE_STARTED_AT,
+      proofSha256: proofFor(1), offeredDifficulty: 4, settledDifficulty: 4,
+    };
+    const pairs = [first, { ...first, ...change }];
     const { cohortDefinition, cohortStatistics } = storedSnapshotJson({
-      targetId: fixture.targetId,
-      repositoryId: fixture.repositoryId,
-      selfWorkPairs: [...fixture.selfWorkPairs, fixture.selfWorkPairs[0]!],
-      outsiderPairs: fixture.outsiderPairs.map((entry) => entry.pair),
+      targetId: randomUUID(), repositoryId: randomUUID(), selfWorkPairs: pairs, outsiderPairs: pairs,
     });
-    await insertSubstantiatedAuditWithSnapshot({
-      targetId: fixture.targetId,
-      repositoryId: fixture.repositoryId,
-      cohortDefinition,
-      cohortStatistics,
-    });
-
-    const result = await store.applyRecalibrationCreditAdjustment({
-      actorId: fixture.moderatorId,
-      targetAccountId: fixture.targetId,
-      reason: "A snapshot listing a self-work pair twice inflates its own cohort.",
-      credential: null,
-    });
-    expect(result).toEqual({
-      kind: "conflict",
-      detail: { cause: "SNAPSHOT_DRIFT", description: expect.stringMatching(/malformed/) },
-    });
-    await expect(sql<{ count: number }[]>`
-      select count(*)::integer as count
-      from moderation_credit_adjustments
-      where target_account_id = ${fixture.targetId}
-    `).resolves.toEqual([{ count: 0 }]);
+    const parsed = parseStoredSnapshot({ cohort_definition: cohortDefinition, cohort_statistics: cohortStatistics });
+    expect(parsed && [parsed.selfWorkPairs, parsed.outsiderSettlementPairs]).toEqual(accepted ? [pairs, pairs] : null);
   });
+
+  // Each row changes one thing the live lookup, its proof check or the parse
+  // keys on, for the first stored pair of one cohort list: the audit must refuse as drift.
+  it.each((["selfWork", "outsider"] as const).flatMap((list) => ([
+    ["names another repository", "githubRepositoryId", /^No live/],
+    ["names another issue", "githubIssueId", /^No live/],
+    ["names another pull request", "githubPullRequestId", /^No live/],
+    ["has a live proof that moved", "proofSha256", /no longer carries the stored proof fingerprint/],
+    ["names another account's row", "another account's row", /^No live/],
+    ["is listed twice", "listed twice", /malformed/],
+  ] as const).map(([label, change, description]) => [list, label, change, description] as const)))(
+    "refuses a stored %s pair that %s as drift, writing nothing",
+    async (list, _label, change, description) => {
+      const store = new PostgresRecalibrationCreditStore(sql);
+      const fixture = await seedActionableCohort();
+      const stored = { selfWork: [...fixture.selfWorkPairs], outsider: fixture.outsiderPairs.map((entry) => entry.pair) };
+      const pairs = stored[list];
+      if (change === "listed twice") {
+        pairs.push(pairs[0]!);
+      } else if (change === "another account's row") {
+        const other = await seedActionableCohort();
+        pairs[0] = list === "selfWork" ? other.selfWorkPairs[0]! : other.outsiderPairs[0]!.pair;
+      } else if (change === "proofSha256") {
+        // The live proof each cohort read takes moves; the stored pair keeps the old one.
+        await (list === "selfWork"
+          ? sql`update pull_requests set proof_sha256 = ${proofFor(nextExternalId())} where github_pull_request_id = ${pairs[0]!.githubPullRequestId}`
+          : sql`update settlements set proof_sha256 = ${proofFor(nextExternalId())} where id = ${fixture.outsiderPairs[0]!.settlementId}`);
+      } else {
+        pairs[0] = { ...pairs[0]!, [change]: nextExternalId() };
+      }
+      await insertSubstantiatedAuditWithSnapshot({
+        targetId: fixture.targetId,
+        repositoryId: fixture.repositoryId,
+        ...storedSnapshotJson({
+          targetId: fixture.targetId, repositoryId: fixture.repositoryId, selfWorkPairs: stored.selfWork, outsiderPairs: stored.outsider,
+        }),
+      });
+
+      await expect(store.applyRecalibrationCreditAdjustment({
+        actorId: fixture.moderatorId, targetAccountId: fixture.targetId, reason: "Drifted evidence.", credential: null,
+      })).resolves.toEqual({ kind: "conflict", detail: { cause: "SNAPSHOT_DRIFT", description: expect.stringMatching(description) } });
+      await expect(sql<{ count: number }[]>`
+        select count(*)::integer as count from moderation_credit_adjustments where target_account_id = ${fixture.targetId}
+      `).resolves.toEqual([{ count: 0 }]);
+    },
+  );
 
   it("refuses a snapshot whose stored counts disagree with the stored pairs", async () => {
     const store = new PostgresRecalibrationCreditStore(sql);
@@ -695,7 +722,14 @@ describe("PostgreSQL recalibration credit adjustments", () => {
   });
 });
 
-type SeededOutsiderPair = { pair: CalibrationPair; settlementId: string; creditorId: string };
+type SeededPullRequest = { id: string; githubPullRequestId: number; mergedAt: string; proofSha256: string };
+
+type SeededPair = { pair: CalibrationPair; pullRequest: SeededPullRequest };
+
+type SeededOutsiderPair = SeededPair & { settlementId: string; creditorId: string };
+
+/** Which two leading pairs of a cohort share evidence, as the fold writes it from ordinary repository activity. */
+type CohortShape = "sharedSelfWorkPullRequest" | "sharedOutsiderPullRequest" | "emptyDiffOutsiders";
 
 type CohortFixture = {
   moderatorId: string;
@@ -716,6 +750,7 @@ async function seedCohort(input: {
   outsiderDeltas: ReadonlyArray<readonly [number, number]>;
   /** Reuses one sponsor across cohorts, so a target can hold two audits. */
   targetId?: string;
+  shape?: CohortShape;
 }): Promise<CohortFixture> {
   const moderatorId = await insertUser("MODERATOR");
   const targetId = input.targetId ?? (await insertUser());
@@ -723,9 +758,10 @@ async function seedCohort(input: {
   const creditorAId = await insertUser();
   const creditorBId = await insertUser();
 
-  const selfWorkPairs: CalibrationPair[] = [];
-  for (const [offered, settled] of input.selfWorkDeltas) {
-    selfWorkPairs.push(await seedSelfWorkPair({ targetId, repositoryId, offered, settled }));
+  const selfWork: SeededPair[] = [];
+  for (const [index, [offered, settled]] of input.selfWorkDeltas.entries()) {
+    const pullRequest = index === 1 && input.shape === "sharedSelfWorkPullRequest" ? selfWork[0]!.pullRequest : undefined;
+    selfWork.push(await seedSelfWorkPair({ targetId, repositoryId, offered, settled, pullRequest }));
   }
   const outsiderPairs: SeededOutsiderPair[] = [];
   for (const [index, [offered, settled]] of input.outsiderDeltas.entries()) {
@@ -736,19 +772,88 @@ async function seedCohort(input: {
         creditorId: index < 6 ? creditorAId : creditorBId,
         offered,
         settled,
+        pullRequest: index === 1 && input.shape === "sharedOutsiderPullRequest" ? outsiderPairs[0]!.pullRequest : undefined,
+        proofSha256: index < 2 && input.shape === "emptyDiffOutsiders" ? EMPTY_DIFF_PROOF : undefined,
       }),
     );
   }
+  const selfWorkPairs = selfWork.map((entry) => entry.pair);
   return { moderatorId, targetId, repositoryId, creditorAId, creditorBId, selfWorkPairs, outsiderPairs };
 }
 
-async function seedActionableCohort(): Promise<CohortFixture> {
+async function seedActionableCohort(shape?: CohortShape): Promise<CohortFixture> {
   // Self work settles one point above its openings (mean delta 1); outsider
   // settlements land exactly on them (mean delta 0). Ten pairs each keeps both
   // floors met, six/four splits the outsider settlements across two creditors.
   const selfWorkDeltas = Array.from({ length: 10 }, () => [4, 5] as const);
   const outsiderDeltas = Array.from({ length: 10 }, () => [4, 4] as const);
-  return seedCohort({ selfWorkDeltas, outsiderDeltas });
+  return seedCohort({ selfWorkDeltas, outsiderDeltas, shape });
+}
+
+/**
+ * Seeds a closed issue and links it, as one closing reference, to the given
+ * pull request or to a new merged one by `authorId` carrying `proofSha256`
+ * (its own fingerprint by default).
+ */
+async function seedClosingIssue(input: {
+  repositoryId: string;
+  authorId: string;
+  offered: number;
+  settled: number;
+  pullRequest?: SeededPullRequest;
+  proofSha256?: string;
+}): Promise<{ issueId: string; pair: CalibrationPair; pullRequest: SeededPullRequest }> {
+  const githubIssueId = nextExternalId();
+  const [issue] = await sql<{ id: string }[]>`
+    insert into issues (
+      github_issue_id, repository_id, issue_number, title, body, url, state,
+      opening_label, opening_comparison_points, opening_reserve_points
+    )
+    values (
+      ${githubIssueId}, ${input.repositoryId}, ${nextExternalId()}, ${"An account calibration issue"},
+      ${"Issue evidence"}, ${`https://github.com/example/overflow/issues/${githubIssueId}`}, ${"CLOSED"},
+      ${"size/M"}, ${input.offered}, ${input.offered}
+    )
+    returning id
+  `;
+  const pullRequest = input.pullRequest ?? (await insertPullRequest({ ...input, issueId: issue.id }));
+  await sql`
+    insert into pull_request_issues (pull_request_id, issue_id, repository_id)
+    values (${pullRequest.id}, ${issue.id}, ${input.repositoryId})
+  `;
+  const pair: CalibrationPair = {
+    githubRepositoryId: await githubRepositoryIdFor(input.repositoryId),
+    githubIssueId,
+    githubPullRequestId: pullRequest.githubPullRequestId,
+    mergedAt: pullRequest.mergedAt,
+    proofSha256: pullRequest.proofSha256,
+    offeredDifficulty: input.offered,
+    settledDifficulty: input.settled,
+  };
+  return { issueId: issue.id, pair, pullRequest };
+}
+
+async function insertPullRequest(input: {
+  repositoryId: string;
+  authorId: string;
+  issueId: string;
+  proofSha256?: string;
+}): Promise<SeededPullRequest> {
+  const githubPullRequestId = nextExternalId();
+  const proofSha256 = input.proofSha256 ?? proofFor(githubPullRequestId);
+  const [pullRequest] = await sql<{ id: string; merged_at: string | Date }[]>`
+    insert into pull_requests (
+      github_pull_request_id, repository_id, issue_id, pull_request_number, url, title, body,
+      author_id, state, merged_at, proof_sha256
+    )
+    values (
+      ${githubPullRequestId}, ${input.repositoryId}, ${input.issueId}, ${nextExternalId()},
+      ${`https://github.com/example/overflow/pull/${githubPullRequestId}`}, ${"A merged contribution"},
+      ${"Pull request evidence"}, ${input.authorId}, ${"MERGED"}, now(), ${proofSha256}
+    )
+    returning id, merged_at
+  `;
+  return { id: pullRequest.id, githubPullRequestId, mergedAt: toIso(pullRequest.merged_at), proofSha256 };
 }
 
 async function seedSelfWorkPair(input: {
@@ -756,122 +861,50 @@ async function seedSelfWorkPair(input: {
   repositoryId: string;
   offered: number;
   settled: number;
-}): Promise<CalibrationPair> {
-  const githubIssueId = nextExternalId();
-  const [issue] = await sql<{ id: string }[]>`
-    insert into issues (
-      github_issue_id, repository_id, issue_number, title, body, url, state,
-      opening_label, opening_comparison_points, opening_reserve_points
-    )
-    values (
-      ${githubIssueId}, ${input.repositoryId}, ${nextExternalId()}, ${"An account calibration issue"},
-      ${"Issue evidence"}, ${`https://github.com/example/overflow/issues/${githubIssueId}`}, ${"CLOSED"},
-      ${"size/M"}, ${input.offered}, ${input.offered}
-    )
-    returning id
-  `;
-  const githubPullRequestId = nextExternalId();
-  const [pullRequest] = await sql<{ id: string; merged_at: string | Date }[]>`
-    insert into pull_requests (
-      github_pull_request_id, repository_id, issue_id, pull_request_number, url, title, body,
-      author_id, state, merged_at, proof_sha256
-    )
-    values (
-      ${githubPullRequestId}, ${input.repositoryId}, ${issue.id}, ${nextExternalId()},
-      ${`https://github.com/example/overflow/pull/${githubPullRequestId}`}, ${"A merged contribution"},
-      ${"Pull request evidence"}, ${input.targetId}, ${"MERGED"}, now(),
-      ${proofFor(githubPullRequestId)}
-    )
-    returning id, merged_at
-  `;
-  await sql`
-    insert into pull_request_issues (pull_request_id, issue_id, repository_id)
-    values (${pullRequest.id}, ${issue.id}, ${input.repositoryId})
-  `;
+  pullRequest?: SeededPullRequest;
+}): Promise<SeededPair> {
+  const { issueId, pair, pullRequest } = await seedClosingIssue({ ...input, authorId: input.targetId });
   await sql`
     insert into self_work_calibrations (
       pull_request_id, issue_id, user_id, opening_comparison_points, actual_points
     )
-    values (${pullRequest.id}, ${issue.id}, ${input.targetId}, ${input.offered}, ${input.settled})
+    values (${pullRequest.id}, ${issueId}, ${input.targetId}, ${input.offered}, ${input.settled})
   `;
-  return {
-    githubRepositoryId: await githubRepositoryIdFor(input.repositoryId),
-    githubIssueId,
-    githubPullRequestId,
-    mergedAt: toIso(pullRequest.merged_at),
-    proofSha256: proofFor(githubPullRequestId),
-    offeredDifficulty: input.offered,
-    settledDifficulty: input.settled,
-  };
+  return { pair, pullRequest };
 }
 
+/** Seeds an outsider settlement carrying its pull request's proof, as the fold writes it. */
 async function seedOutsiderPair(input: {
   targetId: string;
   repositoryId: string;
   creditorId: string;
   offered: number;
   settled: number;
+  pullRequest?: SeededPullRequest;
+  proofSha256?: string;
 }): Promise<SeededOutsiderPair> {
-  const githubIssueId = nextExternalId();
-  const [issue] = await sql<{ id: string }[]>`
-    insert into issues (
-      github_issue_id, repository_id, issue_number, title, body, url, state,
-      opening_label, opening_comparison_points, opening_reserve_points
-    )
-    values (
-      ${githubIssueId}, ${input.repositoryId}, ${nextExternalId()}, ${"An account calibration issue"},
-      ${"Issue evidence"}, ${`https://github.com/example/overflow/issues/${githubIssueId}`}, ${"CLOSED"},
-      ${"size/M"}, ${input.offered}, ${input.offered}
-    )
-    returning id
-  `;
-  const githubPullRequestId = nextExternalId();
-  const [pullRequest] = await sql<{ id: string; merged_at: string | Date }[]>`
-    insert into pull_requests (
-      github_pull_request_id, repository_id, issue_id, pull_request_number, url, title, body,
-      author_id, state, merged_at, proof_sha256
-    )
-    values (
-      ${githubPullRequestId}, ${input.repositoryId}, ${issue.id}, ${nextExternalId()},
-      ${`https://github.com/example/overflow/pull/${githubPullRequestId}`}, ${"A merged contribution"},
-      ${"Pull request evidence"}, ${input.creditorId}, ${"MERGED"}, now(),
-      ${proofFor(githubPullRequestId)}
-    )
-    returning id, merged_at
-  `;
-  await sql`
-    insert into pull_request_issues (pull_request_id, issue_id, repository_id)
-    values (${pullRequest.id}, ${issue.id}, ${input.repositoryId})
-  `;
+  const { issueId, pair, pullRequest } = await seedClosingIssue({ ...input, authorId: input.creditorId });
   const [settlement] = await sql<{ id: string }[]>`
     insert into settlements (
       pull_request_id, issue_id, creditor_id, debtor_id, opening_comparison_points,
       settled_points, review_rounds, credits, proof_sha256, status
     )
     values (
-      ${pullRequest.id}, ${issue.id}, ${input.creditorId}, ${input.targetId}, ${input.offered},
-      ${input.settled}, 0, ${input.settled}, ${proofFor(githubIssueId)}, ${"SETTLED"}
+      ${pullRequest.id}, ${issueId}, ${input.creditorId}, ${input.targetId}, ${input.offered},
+      ${input.settled}, 0, ${input.settled}, ${pullRequest.proofSha256}, ${"SETTLED"}
     )
     returning id
   `;
-  return {
-    pair: {
-      githubRepositoryId: await githubRepositoryIdFor(input.repositoryId),
-      githubIssueId,
-      githubPullRequestId,
-      mergedAt: toIso(pullRequest.merged_at),
-      proofSha256: proofFor(githubIssueId),
-      offeredDifficulty: input.offered,
-      settledDifficulty: input.settled,
-    },
-    settlementId: settlement.id,
-    creditorId: input.creditorId,
-  };
+  return { pair, pullRequest, settlementId: settlement.id, creditorId: input.creditorId };
 }
 
 async function openSubstantiatedAudit(fixture: CohortFixture): Promise<string> {
   const store = new PostgresModerationStore(sql);
   const outsiderSettlementPairs = fixture.outsiderPairs.map((entry) => entry.pair);
+  // The seeded pairs are the cohort the production read returns, so the audit stores what an opened audit would.
+  expect(await store.loadCalibrationCohort({
+    targetAccountId: fixture.targetId, repositoryId: fixture.repositoryId, sampleStartedAt: SAMPLE_STARTED_AT, sampleEndedAt: SAMPLE_ENDED_AT,
+  })).toEqual({ selfWorkPairs: fixture.selfWorkPairs, outsiderSettlementPairs });
   const opened = await store.openAccountAudit({
     credential: null,
     actorId: fixture.moderatorId,
