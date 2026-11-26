@@ -1107,10 +1107,6 @@
     979,
     2272
   ],
-  "tests/api/webhook.test.ts": [
-    5613,
-    34310
-  ],
   "tests/auth/account-deletion-sign-in-action.test.ts": [
     176,
     908
@@ -1476,8 +1472,8 @@
     8631
   ],
   "tests/github/webhook-schema.test.ts": [
-    1495,
-    6461
+    1064,
+    6198
   ],
   "tests/lib/display-instant-format.test.ts": [
     2260,
