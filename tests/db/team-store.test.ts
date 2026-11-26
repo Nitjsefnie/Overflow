@@ -158,8 +158,11 @@ describe("membership and distribution history", () => {
     const teamId = await team(lead, member);
     const otherTeamId = await team(other);
     const refusal = { message: "Team membership history is immutable" };
-    await expect(sql`update team_memberships set team_id = ${otherTeamId} where user_id = ${member.id}`).rejects.toMatchObject(refusal);
-    await expect(sql`update team_memberships set id = gen_random_uuid() where user_id = ${member.id}`).rejects.toMatchObject(refusal);
+    // Each beside a legal left_at, so only the column comparison refuses it.
+    await expect(sql`update team_memberships set team_id = ${otherTeamId}, left_at = now() where user_id = ${member.id}`)
+      .rejects.toMatchObject(refusal);
+    await expect(sql`update team_memberships set id = gen_random_uuid(), left_at = now() where user_id = ${member.id}`)
+      .rejects.toMatchObject(refusal);
     await expect(sql`delete from team_memberships where user_id = ${member.id}`).rejects.toMatchObject(refusal);
     await expect(sql`update team_memberships set joined_at = joined_at - interval '1 day' where user_id = ${member.id}`)
       .rejects.toMatchObject(refusal);
