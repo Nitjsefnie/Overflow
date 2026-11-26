@@ -190,6 +190,15 @@ src/app/api/settlements/[[]id[]]/*
 !src/app/api/tokens/
 src/app/api/tokens/*
 !src/app/api/tokens/*.ts
+!src/app/api/teams/
+src/app/api/teams/*
+!src/app/api/teams/*.ts
+!src/app/api/teams/members/
+src/app/api/teams/members/*
+!src/app/api/teams/members/*.ts
+!src/app/api/teams/distributions/
+src/app/api/teams/distributions/*
+!src/app/api/teams/distributions/*.ts
 !src/app/account-data/
 src/app/account-data/*
 !src/app/account-data/*.tsx
@@ -237,6 +246,9 @@ src/app/stats/*
 !src/app/terms/
 src/app/terms/*
 !src/app/terms/*.tsx
+!src/app/team/
+src/app/team/*
+!src/app/team/*.tsx
 !src/app/session/
 src/app/session/*
 !src/app/session/*.tsx

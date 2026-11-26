@@ -44,6 +44,9 @@ export function MembersStandingsContent({
           paid as a sponsor when their repositories' issues closed. Only accounts holding at least one
           ledger entry are listed.
         </p>
+        <p>
+          Credit for a member's merged work can land on a team instead: see <Link href="/team">your team</Link>.
+        </p>
       </section>
       {standings.length === 0 ? (
         <section className="empty-state" aria-labelledby="no-standings-heading">
