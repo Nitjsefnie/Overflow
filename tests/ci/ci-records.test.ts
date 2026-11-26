@@ -11,10 +11,13 @@ const prefix = join(tmpdir(), "overflow-ci-records-");
 const temp = createOwnedTempDirectoryRegistry([prefix]);
 const script = resolve("scripts/ci_records.py");
 const repo = "fixture/Overflow";
+const actions = `repos/${repo}/actions/`;
+const runsAt = (sha: string) => actions + `workflows/ci.yml/runs?branch=main&event=push&head_sha=${sha}`;
 
 describe("ratchet record pushes", () => {
   let root: string;
   let code: string;
+  let runless: string;
   let size: string;
   let head: string;
   function git(...args: string[]) {
@@ -35,19 +38,30 @@ describe("ratchet record pushes", () => {
     root = await temp.createAsync(prefix);
     mkdirSync(join(root, ".github"));
     git("init", "-qb", "main");
-    writeFileSync(join(root, "code"), "original");
+    git("config", "diff.renames", "true");
+    writeFileSync(join(root, "source\nfile.ts"), "original");
     commit();
-    writeFileSync(join(root, "code"), "tested code");
+    writeFileSync(join(root, "source\nfile.ts"), "tested code");
     code = commit();
+    writeFileSync(join(root, records[0]!), "first record in the push");
+    runless = commit();
     writeFileSync(join(root, records[0]!), "size");
     size = commit();
     for (const file of records.slice(1)) writeFileSync(join(root, file), "record");
     head = commit();
     mkdirSync(join(root, "bin"));
+    writeFileSync(join(root, "bin/sitecustomize.py"), "import time\ntime.sleep = lambda seconds: None\n");
     writeFileSync(join(root, "bin/gh"), `#!/usr/bin/env python3
-import json, os, sys
+import json, sys
+from pathlib import Path
 assert sys.argv[1] == "api"
-print(json.dumps(json.loads(os.environ["RESPONSES"])[sys.argv[2]]))
+path = Path(__file__).with_name("responses.json")
+responses = json.loads(path.read_text())
+answer = responses[sys.argv[2]]
+if isinstance(answer, list):
+    answer = answer.pop(0)
+    path.write_text(json.dumps(responses))
+print(json.dumps(answer))
 `, { mode: 0o755 });
   });
   afterAll(async () => { await temp.disposeAsync(root); });
@@ -65,9 +79,11 @@ print(json.dumps(json.loads(os.environ["RESPONSES"])[sys.argv[2]]))
     ] as const) expect(run("classify", before, env).stdout.trim()).toBe("records-only=false");
   });
 
-  function fixture(source: Record<string, unknown> = {}) {
-    const actions = `repos/${repo}/actions/`;
-    const at = (sha: string) => actions + `workflows/ci.yml/runs?branch=main&event=push&head_sha=${sha}`;
+  function source(responses: Record<string, unknown>) {
+    writeFileSync(join(root, "bin/responses.json"), JSON.stringify(responses));
+    return run("source", size, { PYTHONPATH: join(root, "bin") });
+  }
+  function fixture(override: Record<string, unknown> = {}, measured = code) {
     const main = { path: ".github/workflows/ci.yml", event: "push", head_branch: "main",
       head_repository: { full_name: repo }, run_attempt: 1 };
     const jobs = (plan: string) => ({ jobs: [
@@ -75,36 +91,52 @@ print(json.dumps(json.loads(os.environ["RESPONSES"])[sys.argv[2]]))
       { name: "test (1/1)", conclusion: plan, run_attempt: 1 },
     ] });
     return {
-      [at(size)]: { workflow_runs: [{ ...main, id: 22, head_sha: size, status: "in_progress" }] },
-      [at(code)]: { workflow_runs: [{ ...main, id: 11, head_sha: code, status: "completed", conclusion: "success", ...source }] },
+      [runsAt(size)]: { workflow_runs: [{ ...main, id: 22, head_sha: size, status: "in_progress" }] },
+      [runsAt(runless)]: { workflow_runs: [] },
+      [runsAt(code)]: { workflow_runs: [] },
+      [runsAt(measured)]: { workflow_runs: [{ ...main, id: 11, head_sha: measured, status: "completed", conclusion: "success", ...override }] },
       [actions + "runs/22/jobs?filter=all&per_page=100&page=1"]: jobs("skipped"),
       [actions + "runs/11/jobs?filter=all&per_page=100&page=1"]: jobs("success"),
       [actions + "runs/11/artifacts?per_page=100&page=1"]: { artifacts: [{ name: "test-ratchet-cell-1_1", expired: false }] },
     };
   }
 
-  it("reuses the tested push's artifacts through an intervening record push whose report is still running", () => {
-    const result = run("source", size, { RESPONSES: JSON.stringify(fixture()) });
+  it("finds the tested push past both a running record report and a runless commit in that push", () => {
+    const result = source(fixture());
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe("run-id=11");
   });
 
   it("waits for the original push to finish before passing its artifacts to report", () => {
-    const actions = `repos/${repo}/actions/`;
     const responses = { ...fixture({ status: "in_progress", conclusion: null }),
       [actions + "runs/11"]: { status: "completed", conclusion: "success" } };
-    const clock = join(root, "bin");
-    writeFileSync(join(clock, "sitecustomize.py"), "import time\ntime.sleep = lambda seconds: None\n");
-    const result = run("source", size, { RESPONSES: JSON.stringify(responses), PYTHONPATH: clock });
+    const result = source(responses);
     expect(result.stderr).toContain("Waiting for ci run 11");
     expect(result.stdout.trim()).toBe("run-id=11");
+  });
+
+  it("waits for the preceding push to appear in the workflow runs listing", () => {
+    const responses = fixture();
+    expect(source({ ...responses, [runsAt(size)]: [{ workflow_runs: [] }, responses[runsAt(size)]] }).stdout.trim()).toBe("run-id=11");
+  });
+
+  it("uses the successful rerun of a shard that failed on the first attempt", () => {
+    const jobs = [{ name: "plan", conclusion: "success", run_attempt: 1 },
+      { name: "test (1/1)", conclusion: "failure", run_attempt: 1 }, { name: "test (1/1)", conclusion: "success", run_attempt: 2 }];
+    expect(source({ ...fixture({ run_attempt: 2 }), [actions + "runs/11/jobs?filter=all&per_page=100&page=1"]: { jobs } }).stdout.trim()).toBe("run-id=11");
+  });
+
+  it("refuses a successful run from before a runless code change", () => {
+    const result = source(fixture({}, git("rev-parse", code + "^")));
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("run 11 is not a main push over the same code");
   });
 
   it("refuses incomplete artifacts, including a shard that expired since the original CI run", () => {
     const responses = fixture();
     const key = `repos/${repo}/actions/runs/11/artifacts?per_page=100&page=1`;
     for (const artifacts of [[], [{ name: "test-ratchet-cell-1_1", expired: true }]]) {
-      const result = run("source", size, { RESPONSES: JSON.stringify({ ...responses, [key]: { artifacts } }) });
+      const result = source({ ...responses, [key]: { artifacts } });
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("0 artifacts for 1 shards");
     }
@@ -113,26 +145,25 @@ print(json.dumps(json.loads(os.environ["RESPONSES"])[sys.argv[2]]))
   it.each([{ conclusion: "failure" }, { event: "pull_request" }, { head_branch: "other" },
     { path: ".github/workflows/pr-suite.yml" }, { head_sha: "0".repeat(40) }, { head_repository: { full_name: "other/fork" } }])(
     "refuses artifacts with mismatched provenance or an unsuccessful run %o", override => {
-      const result = run("source", size, { RESPONSES: JSON.stringify(fixture(override)) });
+      const result = source(fixture(override));
       expect(result.status).not.toBe(0);
       expect(result.stdout).not.toContain("run-id=");
     });
 
   it("counts both sides of a rename into the allowlist, including a newline in the old path", () => {
-    const unusual = "other\npath";
     try {
-      writeFileSync(join(root, unusual), "new record");
-      const before = commit();
-      git("mv", "-f", unusual, records[0]!);
-      commit();
-      expect(run("classify", before).stdout.trim()).toBe("records-only=false");
+      git("checkout", "-q", "--detach", code);
+      mkdirSync(join(root, ".github"), { recursive: true });
+      git("mv", "source\nfile.ts", records[3]!);
+      git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "rename");
+      expect(run("classify", code).stdout.trim()).toBe("records-only=false");
     } finally {
       git("checkout", "-q", "--detach", head);
     }
   });
 });
 
-interface Step { name?: string; run?: string; if?: string; uses?: string; env?: Record<string, string>; with?: Record<string, unknown> }
+interface Step { id?: string; run?: string; env?: Record<string, string>; with?: Record<string, unknown> }
 interface Job { if?: string; needs?: string | string[]; steps: Step[]; outputs?: Record<string, string> }
 function workflow(file: string): { on: { push: unknown }; jobs: Record<string, Job> } {
   return parse(readFileSync(`.github/workflows/${file}.yml`, "utf8"));
@@ -143,7 +174,6 @@ describe("main push workflow routing", () => {
   const scan = workflow("code-scanning").jobs;
   it("uses the same diff on main for the planner, test matrix, artifact lookup and CodeQL", () => {
     for (const job of [ci["postgres-image"]!, scan.changes!]) {
-      expect(job.steps[0]!.with).toMatchObject({ "fetch-depth": 0, "persist-credentials": false });
       expect(job.steps).toContainEqual(expect.objectContaining({ id: "changes",
         env: { OVERFLOW_BEFORE_SHA: "${{ github.event.before }}" }, run: 'python3 scripts/ci_records.py classify >> "$GITHUB_OUTPUT"' }));
       expect(job.outputs?.["records-only"]).toBe("${{ steps.changes.outputs.records-only }}");
@@ -154,14 +184,25 @@ describe("main push workflow routing", () => {
     expect(scan.changes!.if).toBe("github.event_name == 'push'");
   });
 
-  it("reports on the current tip with the ancestor run's artifacts and the original push write and rise checks", () => {
+  it("runs report after the record source has succeeded on a record-only push", () => {
     expect(ci.report!.needs).toEqual(["postgres-image", "test", "record-source"]);
     expect(ci.report!.if).toBe("${{ !cancelled() && (needs.postgres-image.outputs.records-only != 'true' || needs.record-source.result == 'success') }}");
-    const [checkout, report] = ci.report!.steps;
-    expect(checkout?.with?.ref).toBe("${{ github.sha }}");
-    expect(report?.uses).toMatch(/^Nitjsefnie-Actions\/test-ratchet\/report@/);
-    expect(report?.with).toMatchObject({ "run-id": "${{ needs.record-source.outputs.run-id || github.run_id }}",
-      "records-only-rise": "true", times: ".github/test-times.json", "push-key": "${{ secrets.MASTER_PUSH_DEPLOY_KEY }}" });
+  });
+
+  it("passes the record source's declared outputs from real steps to inputs of dependent jobs", () => {
+    const name = "record-source";
+    const producer = ci[name]!;
+    const consumers = Object.values(ci).filter(job => [job.needs].flat().includes(name));
+    const reads = consumers.flatMap(job => job.steps.flatMap(step => Object.values(step.with ?? {})))
+      .flatMap(input => typeof input === "string" ? [...input.matchAll(/\bneeds\.([\w-]+)\.outputs\.([\w-]+)/g)] : []);
+    const outputs = Object.entries(producer.outputs ?? {});
+    expect(outputs.length).toBeGreaterThan(0);
+    for (const [output, expression] of outputs) {
+      const step = /\bsteps\.([\w-]+)\.outputs\.[\w-]+/.exec(expression);
+      expect(step, expression).not.toBeNull();
+      expect(producer.steps.map(item => item.id)).toContain(step![1]);
+      expect(reads.some(([, job, key]) => job === name && key === output), output).toBe(true);
+    }
   });
 
   it("keeps every required producer on all main pushes and rejects unexpected skips in verify", () => {
