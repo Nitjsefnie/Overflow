@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DashboardContent } from "@/app/dashboard/page";
 import { emptyDashboard } from "../support/empty-dashboard";
 import { pinnedRule, rem } from "../support/stylesheet-rules";
-import type { RegisteredRepositoryProjection } from "@/lib/dashboard/queries";
+import type { DashboardProjection, RegisteredRepositoryProjection } from "@/lib/dashboard/queries";
 import { AppShell } from "@/components/app-shell";
 import { BalanceCard } from "@/components/balance-card";
 import { AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN } from "@/lib/github/types";
@@ -25,24 +25,13 @@ vi.mock("@/lib/auth/account-deletion-sign-in-action", () => ({ confirmSignInForA
 
 describe("member dashboard", () => {
   it("shows independently calculated ledger totals and reserved headroom", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 12,
-          earnedTotal: 19,
-          givenTotal: 7,
-          reservedPoints: 4,
-          availableHeadroom: 8,
-          recentSettlements: [],
-          openClaims: [],
-          registeredRepositories: [],
-          enforcementNotices: [],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard({
+      settledBalance: 12,
+      earnedTotal: 19,
+      givenTotal: 7,
+      reservedPoints: 4,
+      availableHeadroom: 8,
+    });
 
     expect(screen.getByRole("heading", { name: "Ledger position" })).toBeVisible();
     expect(screen.getByText("+12")).toBeVisible();
@@ -51,40 +40,30 @@ describe("member dashboard", () => {
   });
 
   it("makes each recent settlement proof discoverable from the ledger", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 12,
-          earnedTotal: 19,
-          givenTotal: 7,
-          reservedPoints: 4,
-          availableHeadroom: 8,
-          recentSettlements: [
-            {
-              id: "settlement-9",
-              status: "SETTLED",
-              repositoryName: "co-op/harbour",
-              issueNumber: 9,
-              issueTitle: "Close the lock",
-              issueUrl: "https://github.com/co-op/harbour/issues/9",
-              pullRequestNumber: 12,
-              pullRequestTitle: "Seal the lock",
-              pullRequestUrl: "https://github.com/co-op/harbour/pull/12",
-              proofSha256: "a".repeat(64),
-              credits: 4,
-              reviewRounds: 3,
-              settledAt: "2026-09-03T00:00:00.000Z",
-            },
-          ],
-          openClaims: [],
-          registeredRepositories: [],
-          enforcementNotices: [],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard({
+      settledBalance: 12,
+      earnedTotal: 19,
+      givenTotal: 7,
+      reservedPoints: 4,
+      availableHeadroom: 8,
+      recentSettlements: [
+        {
+          id: "settlement-9",
+          status: "SETTLED",
+          repositoryName: "co-op/harbour",
+          issueNumber: 9,
+          issueTitle: "Close the lock",
+          issueUrl: "https://github.com/co-op/harbour/issues/9",
+          pullRequestNumber: 12,
+          pullRequestTitle: "Seal the lock",
+          pullRequestUrl: "https://github.com/co-op/harbour/pull/12",
+          proofSha256: "a".repeat(64),
+          credits: 4,
+          reviewRounds: 3,
+          settledAt: "2026-09-03T00:00:00.000Z",
+        },
+      ],
+    });
 
     expect(screen.getByRole("heading", { name: "Recent settlement proofs" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Issue #9: Close the lock" })).toHaveAttribute(
@@ -103,95 +82,75 @@ describe("member dashboard", () => {
   });
 
   it("reads each settlement proof's credit count with the plural its count takes", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 12,
-          earnedTotal: 19,
-          givenTotal: 7,
-          reservedPoints: 4,
-          availableHeadroom: 8,
-          recentSettlements: [
-            {
-              id: "settlement-6",
-              status: "SETTLED",
-              repositoryName: "co-op/harbour",
-              issueNumber: 6,
-              issueTitle: "Close the lock",
-              issueUrl: "https://github.com/co-op/harbour/issues/6",
-              pullRequestNumber: 11,
-              pullRequestTitle: "Seal the lock",
-              pullRequestUrl: "https://github.com/co-op/harbour/pull/11",
-              proofSha256: "a".repeat(64),
-              credits: 1,
-              reviewRounds: 2,
-              settledAt: "2026-09-04T00:00:00.000Z",
-            },
-            {
-              id: "settlement-5",
-              status: "SETTLED",
-              repositoryName: "co-op/harbour",
-              issueNumber: 5,
-              issueTitle: "Chart the shoal",
-              issueUrl: "https://github.com/co-op/harbour/issues/5",
-              pullRequestNumber: 10,
-              pullRequestTitle: "Buoy the shoal",
-              pullRequestUrl: "https://github.com/co-op/harbour/pull/10",
-              proofSha256: "b".repeat(64),
-              credits: 2,
-              reviewRounds: 1,
-              settledAt: "2026-09-05T00:00:00.000Z",
-            },
-          ],
-          openClaims: [],
-          registeredRepositories: [],
-          enforcementNotices: [],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard({
+      settledBalance: 12,
+      earnedTotal: 19,
+      givenTotal: 7,
+      reservedPoints: 4,
+      availableHeadroom: 8,
+      recentSettlements: [
+        {
+          id: "settlement-6",
+          status: "SETTLED",
+          repositoryName: "co-op/harbour",
+          issueNumber: 6,
+          issueTitle: "Close the lock",
+          issueUrl: "https://github.com/co-op/harbour/issues/6",
+          pullRequestNumber: 11,
+          pullRequestTitle: "Seal the lock",
+          pullRequestUrl: "https://github.com/co-op/harbour/pull/11",
+          proofSha256: "a".repeat(64),
+          credits: 1,
+          reviewRounds: 2,
+          settledAt: "2026-09-04T00:00:00.000Z",
+        },
+        {
+          id: "settlement-5",
+          status: "SETTLED",
+          repositoryName: "co-op/harbour",
+          issueNumber: 5,
+          issueTitle: "Chart the shoal",
+          issueUrl: "https://github.com/co-op/harbour/issues/5",
+          pullRequestNumber: 10,
+          pullRequestTitle: "Buoy the shoal",
+          pullRequestUrl: "https://github.com/co-op/harbour/pull/10",
+          proofSha256: "b".repeat(64),
+          credits: 2,
+          reviewRounds: 1,
+          settledAt: "2026-09-05T00:00:00.000Z",
+        },
+      ],
+    });
 
     expect(screen.getByText("1 credit · review deduction 2")).toBeVisible();
     expect(screen.getByText("2 credits · review deduction 1")).toBeVisible();
   });
 
   it("does not present an unclaimed settlement's credits as moved", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 12,
-          earnedTotal: 19,
-          givenTotal: 7,
-          reservedPoints: 4,
-          availableHeadroom: 8,
-          recentSettlements: [
-            {
-              id: "settlement-7",
-              status: "UNCLAIMED",
-              repositoryName: "co-op/harbour",
-              issueNumber: 7,
-              issueTitle: "Dredge the channel",
-              issueUrl: "https://github.com/co-op/harbour/issues/7",
-              pullRequestNumber: 8,
-              pullRequestTitle: "Dredge it yourself",
-              pullRequestUrl: "https://github.com/co-op/harbour/pull/8",
-              proofSha256: "a".repeat(64),
-              credits: 6,
-              reviewRounds: 0,
-              settledAt: "2026-09-01T00:00:00.000Z",
-            },
-          ],
-          openClaims: [],
-          registeredRepositories: [],
-          enforcementNotices: [],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard({
+      settledBalance: 12,
+      earnedTotal: 19,
+      givenTotal: 7,
+      reservedPoints: 4,
+      availableHeadroom: 8,
+      recentSettlements: [
+        {
+          id: "settlement-7",
+          status: "UNCLAIMED",
+          repositoryName: "co-op/harbour",
+          issueNumber: 7,
+          issueTitle: "Dredge the channel",
+          issueUrl: "https://github.com/co-op/harbour/issues/7",
+          pullRequestNumber: 8,
+          pullRequestTitle: "Dredge it yourself",
+          pullRequestUrl: "https://github.com/co-op/harbour/pull/8",
+          proofSha256: "a".repeat(64),
+          credits: 6,
+          reviewRounds: 0,
+          settledAt: "2026-09-01T00:00:00.000Z",
+        },
+      ],
+    });
 
     expect(screen.getByText(/Awaiting a claim/)).toBeVisible();
     expect(screen.getByText(/credits pending claim/)).toBeVisible();
@@ -216,24 +175,14 @@ describe("member dashboard", () => {
       reviewRounds: 1,
       settledAt: "2026-09-05T00:00:00.000Z",
     };
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 12,
-          earnedTotal: 19,
-          givenTotal: 7,
-          reservedPoints: 4,
-          availableHeadroom: 8,
-          recentSettlements: [paid, { ...paid, id: "settlement-4", status: "DONATED", issueNumber: 4 }],
-          openClaims: [],
-          registeredRepositories: [],
-          enforcementNotices: [],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard({
+      settledBalance: 12,
+      earnedTotal: 19,
+      givenTotal: 7,
+      reservedPoints: 4,
+      availableHeadroom: 8,
+      recentSettlements: [paid, { ...paid, id: "settlement-4", status: "DONATED", issueNumber: 4 }],
+    });
 
     const [paidFigures, donatedFigures] = screen.getAllByRole("article").map(
       (article) => [...article.querySelectorAll(".mono-meta")].at(-1)?.textContent,
@@ -244,51 +193,43 @@ describe("member dashboard", () => {
   });
 
   it("shows the dashboard operational queues and renders external text as text", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: -2,
-          earnedTotal: 3,
-          givenTotal: 5,
-          reservedPoints: 7,
-          availableHeadroom: -9,
-          recentSettlements: [],
-          openClaims: [{
-            id: "claim-1",
-            repositoryName: "co-op/harbour",
-            issueNumber: 17,
-            title: "<script>untrusted claim</script>",
-            url: "https://github.com/co-op/harbour/issues/17",
-            assigneeGitHubLogin: "mira",
-            openingName: "Offer band",
-            openingLabel: "shoal",
-            reservePoints: 7,
-          }],
-          registeredRepositories: [{
-            id: "repo-1",
-            ownerName: "co-op/harbour",
-            visibility: "PUBLIC",
-            active: true,
-            openingName: "Offer band",
-            actualName: "Delivered band",
-            openingLabels: ["shoal"],
-            unavailableReason: null,
-            reconciliationState: "IDLE",
-            reconciliationLastFailureAt: null,
-          }],
-          enforcementNotices: [{
-            id: "notice-1",
-            priorState: "UNDER_AUDIT",
-            newState: "WARNED",
-            reason: "Cohort review completed.",
-            createdAt: "2026-09-03T00:00:00.000Z",
-          }],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard({
+      settledBalance: -2,
+      earnedTotal: 3,
+      givenTotal: 5,
+      reservedPoints: 7,
+      availableHeadroom: -9,
+      openClaims: [{
+        id: "claim-1",
+        repositoryName: "co-op/harbour",
+        issueNumber: 17,
+        title: "<script>untrusted claim</script>",
+        url: "https://github.com/co-op/harbour/issues/17",
+        assigneeGitHubLogin: "mira",
+        openingName: "Offer band",
+        openingLabel: "shoal",
+        reservePoints: 7,
+      }],
+      registeredRepositories: [{
+        id: "repo-1",
+        ownerName: "co-op/harbour",
+        visibility: "PUBLIC",
+        active: true,
+        openingName: "Offer band",
+        actualName: "Delivered band",
+        openingLabels: ["shoal"],
+        unavailableReason: null,
+        reconciliationState: "IDLE",
+        reconciliationLastFailureAt: null,
+      }],
+      enforcementNotices: [{
+        id: "notice-1",
+        priorState: "UNDER_AUDIT",
+        newState: "WARNED",
+        reason: "Cohort review completed.",
+        createdAt: "2026-09-03T00:00:00.000Z",
+      }],
+    });
 
     expect(screen.getByRole("heading", { name: "Open claims" })).toBeVisible();
     expect(
@@ -304,25 +245,10 @@ describe("member dashboard", () => {
   });
 
   it("announces an open audit in its own section whatever the enforcement state and notices say", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 0,
-          earnedTotal: 0,
-          givenTotal: 0,
-          reservedPoints: 0,
-          availableHeadroom: 0,
-          recentSettlements: [],
-          openClaims: [],
-          registeredRepositories: [],
-          enforcementState: "BANNED",
-          enforcementNotices: [],
-          openAudit: { id: "audit-9", openedAt: "2026-09-04T00:00:00.000Z" },
-        }}
-      />,
-    );
+    renderDashboard({
+      enforcementState: "BANNED",
+      openAudit: { id: "audit-9", openedAt: "2026-09-04T00:00:00.000Z" },
+    });
 
     // Located structurally: the section carries its own heading id, and the
     // date the audit opened is shown. The section renders even though the
@@ -342,30 +268,16 @@ describe("member dashboard", () => {
   });
 
   it("announces the open audit with no enforcement state present and notices standing", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 0,
-          earnedTotal: 0,
-          givenTotal: 0,
-          reservedPoints: 0,
-          availableHeadroom: 0,
-          recentSettlements: [],
-          openClaims: [],
-          registeredRepositories: [],
-          enforcementNotices: [{
-            id: "notice-2",
-            priorState: "ACTIVE",
-            newState: "BANNED",
-            reason: "Sustained overestimate pattern.",
-            createdAt: "2026-09-02T00:00:00.000Z",
-          }],
-          openAudit: { id: "audit-7", openedAt: "2026-09-05T00:00:00.000Z" },
-        }}
-      />,
-    );
+    renderDashboard({
+      enforcementNotices: [{
+        id: "notice-2",
+        priorState: "ACTIVE",
+        newState: "BANNED",
+        reason: "Sustained overestimate pattern.",
+        createdAt: "2026-09-02T00:00:00.000Z",
+      }],
+      openAudit: { id: "audit-7", openedAt: "2026-09-05T00:00:00.000Z" },
+    });
 
     // No enforcementState key at all, and a standing notice: the section's
     // presence still rides the open audit alone.
@@ -381,57 +293,27 @@ describe("member dashboard", () => {
   });
 
   it("renders no audit section when no audit is open on the account", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 0,
-          earnedTotal: 0,
-          givenTotal: 0,
-          reservedPoints: 0,
-          availableHeadroom: 0,
-          recentSettlements: [],
-          openClaims: [],
-          registeredRepositories: [],
-          enforcementNotices: [],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard();
 
     expect(document.querySelector('section[aria-labelledby="account-audit-heading"]')).toBeNull();
   });
 
   it("reads an ambiguous claim assignee as a phrase, never the reserved sentinel login", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 0,
-          earnedTotal: 0,
-          givenTotal: 0,
-          reservedPoints: 6,
-          availableHeadroom: -6,
-          recentSettlements: [],
-          openClaims: [{
-            id: "claim-2",
-            repositoryName: "co-op/harbour",
-            issueNumber: 21,
-            title: "Chart the double crew",
-            url: "https://github.com/co-op/harbour/issues/21",
-            assigneeGitHubLogin: AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN,
-            openingName: "Offer band",
-            openingLabel: "shoal",
-            reservePoints: 6,
-          }],
-          registeredRepositories: [],
-          enforcementNotices: [],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard({
+      reservedPoints: 6,
+      availableHeadroom: -6,
+      openClaims: [{
+        id: "claim-2",
+        repositoryName: "co-op/harbour",
+        issueNumber: 21,
+        title: "Chart the double crew",
+        url: "https://github.com/co-op/harbour/issues/21",
+        assigneeGitHubLogin: AMBIGUOUS_CLAIM_ASSIGNEE_LOGIN,
+        openingName: "Offer band",
+        openingLabel: "shoal",
+        reservePoints: 6,
+      }],
+    });
 
     expect(cellValue("open-claims-heading", "Chart the double crew", "Assignee")).toBe(
       "assignment ambiguous",
@@ -440,47 +322,32 @@ describe("member dashboard", () => {
   });
 
   it("prints a perception catalog's name once in the claim row and still prefixes a numeric label", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 0,
-          earnedTotal: 0,
-          givenTotal: 0,
-          reservedPoints: 0,
-          availableHeadroom: 0,
-          recentSettlements: [],
-          openClaims: [
-            {
-              id: "claim-3",
-              repositoryName: "co-op/harbour",
-              issueNumber: 23,
-              title: "Chart the perceived catalog",
-              url: "https://github.com/co-op/harbour/issues/23",
-              assigneeGitHubLogin: "mira",
-              openingName: "perceived difficulty",
-              openingLabel: "perceived difficulty: 3",
-              reservePoints: 5,
-            },
-            {
-              id: "claim-4",
-              repositoryName: "co-op/harbour",
-              issueNumber: 24,
-              title: "Chart the numeric catalog",
-              url: "https://github.com/co-op/harbour/issues/24",
-              assigneeGitHubLogin: "mira",
-              openingName: "Offer band",
-              openingLabel: "3",
-              reservePoints: 4,
-            },
-          ],
-          registeredRepositories: [],
-          enforcementNotices: [],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard({
+      openClaims: [
+        {
+          id: "claim-3",
+          repositoryName: "co-op/harbour",
+          issueNumber: 23,
+          title: "Chart the perceived catalog",
+          url: "https://github.com/co-op/harbour/issues/23",
+          assigneeGitHubLogin: "mira",
+          openingName: "perceived difficulty",
+          openingLabel: "perceived difficulty: 3",
+          reservePoints: 5,
+        },
+        {
+          id: "claim-4",
+          repositoryName: "co-op/harbour",
+          issueNumber: 24,
+          title: "Chart the numeric catalog",
+          url: "https://github.com/co-op/harbour/issues/24",
+          assigneeGitHubLogin: "mira",
+          openingName: "Offer band",
+          openingLabel: "3",
+          reservePoints: 4,
+        },
+      ],
+    });
 
     // A perception catalog's stored label already carries the name prefix, so
     // the cell must not concatenate it a second time.
@@ -495,29 +362,14 @@ describe("member dashboard", () => {
   });
 
   it("names why each unavailable repository went dark and says nothing extra for an available one", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 0,
-          earnedTotal: 0,
-          givenTotal: 0,
-          reservedPoints: 0,
-          availableHeadroom: 0,
-          recentSettlements: [],
-          openClaims: [],
-          registeredRepositories: [
-            { ...registered("repo-1", "co-op/harbour"), unavailableReason: "NOT_FOUND" },
-            { ...registered("repo-2", "co-op/lighthouse"), unavailableReason: "NOT_PUBLIC" },
-            { ...registered("repo-3", "co-op/breakwater"), unavailableReason: "IDENTITY_MISMATCH" },
-            registered("repo-4", "co-op/seawall"),
-          ],
-          enforcementNotices: [],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard({
+      registeredRepositories: [
+        { ...registered("repo-1", "co-op/harbour"), unavailableReason: "NOT_FOUND" },
+        { ...registered("repo-2", "co-op/lighthouse"), unavailableReason: "NOT_PUBLIC" },
+        { ...registered("repo-3", "co-op/breakwater"), unavailableReason: "IDENTITY_MISMATCH" },
+        registered("repo-4", "co-op/seawall"),
+      ],
+    });
 
     const repos = "registered-repositories-heading";
     expect(cellValue(repos, "co-op/harbour", "Status")).toBe(
@@ -531,26 +383,11 @@ describe("member dashboard", () => {
   });
 
   it("keeps an unrecognized unavailability reason from reaching the sponsor as a raw value", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 0,
-          earnedTotal: 0,
-          givenTotal: 0,
-          reservedPoints: 0,
-          availableHeadroom: 0,
-          recentSettlements: [],
-          openClaims: [],
-          registeredRepositories: [
-            { ...registered("repo-1", "co-op/harbour"), unavailableReason: "ARCHIVED_UPSTREAM" },
-          ],
-          enforcementNotices: [],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard({
+      registeredRepositories: [
+        { ...registered("repo-1", "co-op/harbour"), unavailableReason: "ARCHIVED_UPSTREAM" },
+      ],
+    });
 
     expect(cellValue("registered-repositories-heading", "co-op/harbour", "Status")).toBe(
       "unavailable",
@@ -559,24 +396,9 @@ describe("member dashboard", () => {
   });
 
   it("renders no GitHub App offer row on a registered repository's facts grid", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 0,
-          earnedTotal: 0,
-          givenTotal: 0,
-          reservedPoints: 0,
-          availableHeadroom: 0,
-          recentSettlements: [],
-          openClaims: [],
-          registeredRepositories: [registered("repo-offer", "co-op/beacon")],
-          enforcementNotices: [],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard({
+      registeredRepositories: [registered("repo-offer", "co-op/beacon")],
+    });
 
     // The install offer left with the OAuth-only fold and stays gone. The
     // repository's own Repository cell stands first, so the two absence
@@ -590,43 +412,28 @@ describe("member dashboard", () => {
 
   it("tells the sponsor which repositories the queue is behind on and stays silent about the rest", () => {
     const failedAt = new Date("2026-09-04T11:00:00.000Z");
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 0,
-          earnedTotal: 0,
-          givenTotal: 0,
-          reservedPoints: 0,
-          availableHeadroom: 0,
-          recentSettlements: [],
-          openClaims: [],
-          registeredRepositories: [
-            {
-              ...registered("repo-1", "co-op/harbour"),
-              reconciliationState: "FAILED",
-              reconciliationLastFailureAt: failedAt,
-            },
-            {
-              ...registered("repo-2", "co-op/lighthouse"),
-              reconciliationState: "RUNNING",
-              reconciliationLastFailureAt: failedAt,
-            },
-            {
-              ...registered("repo-3", "co-op/breakwater"),
-              reconciliationState: "PENDING",
-              reconciliationLastFailureAt: failedAt,
-            },
-            { ...registered("repo-4", "co-op/jetty"), reconciliationState: "RUNNING" },
-            { ...registered("repo-5", "co-op/quay"), reconciliationState: "PENDING" },
-            registered("repo-6", "co-op/seawall"),
-          ],
-          enforcementNotices: [],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard({
+      registeredRepositories: [
+        {
+          ...registered("repo-1", "co-op/harbour"),
+          reconciliationState: "FAILED",
+          reconciliationLastFailureAt: failedAt,
+        },
+        {
+          ...registered("repo-2", "co-op/lighthouse"),
+          reconciliationState: "RUNNING",
+          reconciliationLastFailureAt: failedAt,
+        },
+        {
+          ...registered("repo-3", "co-op/breakwater"),
+          reconciliationState: "PENDING",
+          reconciliationLastFailureAt: failedAt,
+        },
+        { ...registered("repo-4", "co-op/jetty"), reconciliationState: "RUNNING" },
+        { ...registered("repo-5", "co-op/quay"), reconciliationState: "PENDING" },
+        registered("repo-6", "co-op/seawall"),
+      ],
+    });
 
     const repos = "registered-repositories-heading";
     expect(cellValue(repos, "co-op/harbour", "Reconciliation")).toBe(
@@ -646,31 +453,16 @@ describe("member dashboard", () => {
   });
 
   it("shows both the unavailability and the reconciliation clause on one repository's line", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 0,
-          earnedTotal: 0,
-          givenTotal: 0,
-          reservedPoints: 0,
-          availableHeadroom: 0,
-          recentSettlements: [],
-          openClaims: [],
-          registeredRepositories: [
-            {
-              ...registered("repo-1", "co-op/harbour"),
-              unavailableReason: "NOT_FOUND",
-              reconciliationState: "FAILED",
-              reconciliationLastFailureAt: new Date("2026-09-04T11:00:00.000Z"),
-            },
-          ],
-          enforcementNotices: [],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard({
+      registeredRepositories: [
+        {
+          ...registered("repo-1", "co-op/harbour"),
+          unavailableReason: "NOT_FOUND",
+          reconciliationState: "FAILED",
+          reconciliationLastFailureAt: new Date("2026-09-04T11:00:00.000Z"),
+        },
+      ],
+    });
 
     const repos = "registered-repositories-heading";
     expect(cellValue(repos, "co-op/harbour", "Status")).toBe(
@@ -682,26 +474,11 @@ describe("member dashboard", () => {
   });
 
   it("keeps a failing repository readable when the queue holds no time for the failure", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 0,
-          earnedTotal: 0,
-          givenTotal: 0,
-          reservedPoints: 0,
-          availableHeadroom: 0,
-          recentSettlements: [],
-          openClaims: [],
-          registeredRepositories: [
-            { ...registered("repo-1", "co-op/harbour"), reconciliationState: "FAILED" },
-          ],
-          enforcementNotices: [],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard({
+      registeredRepositories: [
+        { ...registered("repo-1", "co-op/harbour"), reconciliationState: "FAILED" },
+      ],
+    });
 
     expect(cellValue("registered-repositories-heading", "co-op/harbour", "Reconciliation")).toBe(
       "reconciliation is failing; Overflow keeps retrying",
@@ -711,45 +488,30 @@ describe("member dashboard", () => {
 
   it("promises no retry for a failing repository that is no longer active", () => {
     const failedAt = new Date("2026-09-04T11:00:00.000Z");
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 0,
-          earnedTotal: 0,
-          givenTotal: 0,
-          reservedPoints: 0,
-          availableHeadroom: 0,
-          recentSettlements: [],
-          openClaims: [],
-          registeredRepositories: [
-            {
-              ...registered("repo-1", "co-op/harbour"),
-              active: false,
-              reconciliationState: "FAILED",
-              reconciliationLastFailureAt: failedAt,
-            },
-            {
-              ...registered("repo-2", "co-op/lighthouse"),
-              active: true,
-              reconciliationState: "FAILED",
-              reconciliationLastFailureAt: failedAt,
-            },
-            // A queued job still drains for an inactive repository, because claiming one does not
-            // consult `active`; only the sweep's revival of a FAILED job does.
-            { ...registered("repo-3", "co-op/breakwater"), active: false, reconciliationState: "PENDING" },
-            {
-              ...registered("repo-4", "co-op/seawall"),
-              active: false,
-              reconciliationState: "FAILED",
-            },
-          ],
-          enforcementNotices: [],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard({
+      registeredRepositories: [
+        {
+          ...registered("repo-1", "co-op/harbour"),
+          active: false,
+          reconciliationState: "FAILED",
+          reconciliationLastFailureAt: failedAt,
+        },
+        {
+          ...registered("repo-2", "co-op/lighthouse"),
+          active: true,
+          reconciliationState: "FAILED",
+          reconciliationLastFailureAt: failedAt,
+        },
+        // A queued job still drains for an inactive repository, because claiming one does not
+        // consult `active`; only the sweep's revival of a FAILED job does.
+        { ...registered("repo-3", "co-op/breakwater"), active: false, reconciliationState: "PENDING" },
+        {
+          ...registered("repo-4", "co-op/seawall"),
+          active: false,
+          reconciliationState: "FAILED",
+        },
+      ],
+    });
 
     // Only the sweep revives a FAILED job and it enqueues active repositories only, so promising
     // a retry here would be a plain untruth on a line that already reads "Inactive".
@@ -768,40 +530,27 @@ describe("member dashboard", () => {
   });
 
   it("lays every dashboard list section out as labelled grids of terms above values", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 0,
-          earnedTotal: 0,
-          givenTotal: 0,
-          reservedPoints: 0,
-          availableHeadroom: 0,
-          recentSettlements: [],
-          openClaims: [{
-            id: "claim-1",
-            repositoryName: "co-op/harbour",
-            issueNumber: 17,
-            title: "Close the lock",
-            url: "https://github.com/co-op/harbour/issues/17",
-            assigneeGitHubLogin: "mira",
-            openingName: "Offer band",
-            openingLabel: "shoal",
-            reservePoints: 7,
-          }],
-          registeredRepositories: [registered("repo-1", "co-op/harbour")],
-          enforcementNotices: [{
-            id: "notice-1",
-            priorState: "ACTIVE",
-            newState: "BANNED",
-            reason: "Sustained overestimate pattern.",
-            createdAt: "2026-09-02T00:00:00.000Z",
-          }],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard({
+      openClaims: [{
+        id: "claim-1",
+        repositoryName: "co-op/harbour",
+        issueNumber: 17,
+        title: "Close the lock",
+        url: "https://github.com/co-op/harbour/issues/17",
+        assigneeGitHubLogin: "mira",
+        openingName: "Offer band",
+        openingLabel: "shoal",
+        reservePoints: 7,
+      }],
+      registeredRepositories: [registered("repo-1", "co-op/harbour")],
+      enforcementNotices: [{
+        id: "notice-1",
+        priorState: "ACTIVE",
+        newState: "BANNED",
+        reason: "Sustained overestimate pattern.",
+        createdAt: "2026-09-02T00:00:00.000Z",
+      }],
+    });
 
     // Every list in the three sections is a grid: each list item's cells pair
     // exactly one term above its value — the bordered-grid treatment the
@@ -851,28 +600,13 @@ describe("member dashboard", () => {
   });
 
   it("offers an unregister control on every registered repository's row, inactive ones included", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 0,
-          earnedTotal: 0,
-          givenTotal: 0,
-          reservedPoints: 0,
-          availableHeadroom: 0,
-          recentSettlements: [],
-          openClaims: [],
-          registeredRepositories: [
-            registered("repo-1", "co-op/harbour"),
-            { ...registered("repo-2", "co-op/lighthouse"), active: false },
-            registered("repo-3", "co-op/breakwater"),
-          ],
-          enforcementNotices: [],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard({
+      registeredRepositories: [
+        registered("repo-1", "co-op/harbour"),
+        { ...registered("repo-2", "co-op/lighthouse"), active: false },
+        registered("repo-3", "co-op/breakwater"),
+      ],
+    });
 
     // Every row carries the control (the DELETE is idempotent, so an inactive
     // row's control is a no-op rather than a trap), as a dt/dd cell in the
@@ -887,27 +621,12 @@ describe("member dashboard", () => {
   });
 
   it("shows repository visibility as display text, never the stored form", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 0,
-          earnedTotal: 0,
-          givenTotal: 0,
-          reservedPoints: 0,
-          availableHeadroom: 0,
-          recentSettlements: [],
-          openClaims: [],
-          registeredRepositories: [
-            registered("repo-1", "co-op/harbour"),
-            { ...registered("repo-2", "co-op/lighthouse"), visibility: "PRIVATE" },
-          ],
-          enforcementNotices: [],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard({
+      registeredRepositories: [
+        registered("repo-1", "co-op/harbour"),
+        { ...registered("repo-2", "co-op/lighthouse"), visibility: "PRIVATE" },
+      ],
+    });
 
     const repos = "registered-repositories-heading";
     expect(cellValue(repos, "co-op/harbour", "Visibility")).toBe("Public");
@@ -916,40 +635,28 @@ describe("member dashboard", () => {
   });
 
   it("renders the Account audit section beside the three list grids when an audit is open", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 0,
-          earnedTotal: 0,
-          givenTotal: 0,
-          reservedPoints: 0,
-          availableHeadroom: 0,
-          recentSettlements: [],
-          openClaims: [{
-            id: "claim-1",
-            repositoryName: "co-op/harbour",
-            issueNumber: 17,
-            title: "Close the lock",
-            url: "https://github.com/co-op/harbour/issues/17",
-            assigneeGitHubLogin: "mira",
-            openingName: "Offer band",
-            openingLabel: "shoal",
-            reservePoints: 7,
-          }],
-          registeredRepositories: [registered("repo-1", "co-op/harbour")],
-          enforcementNotices: [{
-            id: "notice-1",
-            priorState: "RECALIBRATING",
-            newState: "ACTIVE",
-            reason: "Sustained overestimate pattern.",
-            createdAt: "2026-09-02T00:00:00.000Z",
-          }],
-          openAudit: { id: "audit-1", openedAt: "2026-09-06T00:00:00.000Z" },
-        }}
-      />,
-    );
+    renderDashboard({
+      openClaims: [{
+        id: "claim-1",
+        repositoryName: "co-op/harbour",
+        issueNumber: 17,
+        title: "Close the lock",
+        url: "https://github.com/co-op/harbour/issues/17",
+        assigneeGitHubLogin: "mira",
+        openingName: "Offer band",
+        openingLabel: "shoal",
+        reservePoints: 7,
+      }],
+      registeredRepositories: [registered("repo-1", "co-op/harbour")],
+      enforcementNotices: [{
+        id: "notice-1",
+        priorState: "RECALIBRATING",
+        newState: "ACTIVE",
+        reason: "Sustained overestimate pattern.",
+        createdAt: "2026-09-02T00:00:00.000Z",
+      }],
+      openAudit: { id: "audit-1", openedAt: "2026-09-06T00:00:00.000Z" },
+    });
 
     // The audit section's presence rides the open audit alone; the three
     // grids render beside it, and the audit keeps its own heading.
@@ -958,24 +665,7 @@ describe("member dashboard", () => {
   });
 
   it("keeps the three list sections' empty states rendering without any list item", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 0,
-          earnedTotal: 0,
-          givenTotal: 0,
-          reservedPoints: 0,
-          availableHeadroom: 0,
-          recentSettlements: [],
-          openClaims: [],
-          registeredRepositories: [],
-          enforcementNotices: [],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard();
 
     // Structurally: each section still stands, carries its rendered empty
     // copy, and holds no grid rows.
@@ -1106,24 +796,7 @@ describe("member dashboard", () => {
   });
 
   it("places the account controls after the forge identities panel", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={{
-          settledBalance: 0,
-          earnedTotal: 0,
-          givenTotal: 0,
-          reservedPoints: 0,
-          availableHeadroom: 0,
-          recentSettlements: [],
-          openClaims: [],
-          registeredRepositories: [],
-          enforcementNotices: [],
-          openAudit: null,
-        }}
-      />,
-    );
+    renderDashboard();
 
     const forge = sectionFor("forge-identities-heading");
     const controls = document.querySelector('section[aria-labelledby="account-controls-heading"]');
@@ -1149,24 +822,7 @@ describe("member dashboard", () => {
         } }, { status: 403 }))
         : new Promise<Response>(() => {})));
     try {
-      render(
-        <DashboardContent
-          memberName="Ada Lovelace"
-          isModerator={false}
-          dashboard={{
-            settledBalance: 0,
-            earnedTotal: 0,
-            givenTotal: 0,
-            reservedPoints: 0,
-            availableHeadroom: 0,
-            recentSettlements: [],
-            openClaims: [],
-            registeredRepositories: [],
-            enforcementNotices: [],
-            openAudit: null,
-          }}
-        />,
-      );
+      renderDashboard();
       const controls = sectionFor("account-controls-heading");
       fireEvent.change(within(controls).getByLabelText("Type your GitHub login to confirm"), {
         target: { value: "Ada" },
@@ -1203,17 +859,18 @@ describe("member dashboard", () => {
   });
 
   it("shows no moderator warning on the dashboard for an ordinary account", () => {
-    render(
-      <DashboardContent
-        memberName="Ada Lovelace"
-        isModerator={false}
-        dashboard={emptyDashboard()}
-      />,
-    );
+    renderDashboard();
 
     expect(within(sectionFor("account-controls-heading")).queryByRole("status")).not.toBeInTheDocument();
   });
 });
+
+/** Renders the member's dashboard over the empty ledger, with only the fields a test states changed. */
+function renderDashboard(overrides: Partial<DashboardProjection> = {}) {
+  return render(
+    <DashboardContent memberName="Ada Lovelace" isModerator={false} dashboard={{ ...emptyDashboard(), ...overrides }} />,
+  );
+}
 
 function ledgerTotalTerms(): string[] {
   return Array.from(document.querySelectorAll("dl.ledger-totals dt")).map((dt) => dt.textContent);
