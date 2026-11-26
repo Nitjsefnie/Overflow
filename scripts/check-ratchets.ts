@@ -27,6 +27,7 @@ import { round2 } from "./check-coverage-floor.ts";
 
 export const COVERAGE_PATH = "scripts/coverage.json";
 export const PERF_BUDGET_PATH = "scripts/perf-budget.json";
+export const THRESHOLDS_PATH = ".github/ci-thresholds.json";
 
 // Workloads are a closed set. No existing cap may rise or disappear. A new
 // positive integer key caps a new workload without changing any existing cap;
@@ -115,9 +116,39 @@ const COVERAGE_DIRECTIONS = new Map<string, "up" | "down">([
   ["hysteresis", "down"],
 ]);
 
-export function coverageRelaxations(base: unknown, head: unknown): string[] {
+// The test-ratchet adoption moves the floor into the thresholds file under
+// coverage.javascript; a head without the coverage document is waived only
+// when that record holds the merge base's floor and measured or more.
+export function movedCoverageRelaxations(base: unknown, headThresholds: unknown): string[] {
+  const was = isObject(base) && isObject(base.languages) ? base.languages.typescript : undefined;
+  const wasFloor = isObject(was) ? was.floor : undefined;
+  const wasMeasured = isObject(was) ? was.measured : undefined;
+  const now =
+    isObject(headThresholds) && isObject(headThresholds.coverage)
+      ? headThresholds.coverage.javascript
+      : undefined;
+  const nowFloor = isObject(now) ? now.floor : undefined;
+  const nowMeasured = isObject(now) ? now.measured : undefined;
+  if (
+    isFiniteNumber(wasFloor) &&
+    isFiniteNumber(wasMeasured) &&
+    isFiniteNumber(nowFloor) &&
+    isFiniteNumber(nowMeasured) &&
+    nowFloor >= wasFloor &&
+    nowMeasured >= wasMeasured
+  ) {
+    return [];
+  }
+  const why = `the document was deleted, and ${THRESHOLDS_PATH} coverage.javascript does not carry its floor and measured`;
+  return [
+    finding(COVERAGE_PATH, "languages.typescript.floor", wasFloor, nowFloor, why),
+    finding(COVERAGE_PATH, "languages.typescript.measured", wasMeasured, nowMeasured, why),
+  ];
+}
+
+export function coverageRelaxations(base: unknown, head: unknown, headThresholds: unknown = null): string[] {
   if (base === null || base === undefined) return [];
-  if (head === null || head === undefined) return [deleted(COVERAGE_PATH)];
+  if (head === null || head === undefined) return movedCoverageRelaxations(base, headThresholds);
   const out: string[] = [];
   const before = leaves(base);
   const after = leaves(head);
@@ -274,6 +305,13 @@ export function readDocument(cwd: string, commit: string, path: string): unknown
   }
 }
 
+// The head's thresholds file, or null when it is absent or not a regular
+// file: either way it waives nothing.
+function headThresholds(cwd: string, head: string): unknown {
+  if (entryKind(cwd, head, THRESHOLDS_PATH) !== REGULAR_FILE) return null;
+  return readDocument(cwd, head, THRESHOLDS_PATH);
+}
+
 export function checkRatchets(
   cwd: string,
   baseRev: string,
@@ -296,7 +334,10 @@ export function checkRatchets(
       findings.push(finding(path, "(document)", REGULAR_FILE, kind, "not a regular file"));
       continue;
     }
-    findings.push(...relaxations(readDocument(cwd, fork, path), readDocument(cwd, head, path)));
+    const thresholds = path === COVERAGE_PATH ? headThresholds(cwd, head) : null;
+    findings.push(
+      ...relaxations(readDocument(cwd, fork, path), readDocument(cwd, head, path), thresholds),
+    );
   }
   return { mergeBase: fork, findings };
 }

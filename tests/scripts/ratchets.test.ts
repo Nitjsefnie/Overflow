@@ -8,6 +8,7 @@ import { calibration } from "../../scripts/calibrate-coverage.ts";
 import {
   COVERAGE_PATH,
   PERF_BUDGET_PATH,
+  THRESHOLDS_PATH,
   perfBudgetRelaxations,
   checkRatchets,
   coverageRelaxations,
@@ -199,9 +200,37 @@ describe("coverage ratchet relaxations", () => {
     }
   });
 
-  it("refuses a deleted document", () => {
-    expect(coverageRelaxations(coverage(), null)).toEqual([
-      expect.stringContaining(COVERAGE_PATH),
+  const thresholds = (floor: unknown, measured: unknown): Json => ({
+    schema_version: 1,
+    gap: 1,
+    hysteresis: 0.5,
+    coverage: { javascript: { floor, measured } },
+  });
+
+  it("waives a deleted document whose floor and measured moved to the thresholds file", () => {
+    expect(coverageRelaxations(coverage(), null, thresholds(91.89, 92.89))).toEqual([]);
+    expect(coverageRelaxations(coverage(), null, thresholds(92, 93))).toEqual([]);
+  });
+
+  it.each([
+    ["a lower floor", thresholds(91.88, 92.89), "91.88"],
+    ["a lower measured", thresholds(91.89, 92.88), "92.88"],
+    ["no javascript record", { schema_version: 1, coverage: {} }, "absent"],
+    ["a non-numeric floor", thresholds("91.89", 92.89), '"91.89"'],
+    ["no thresholds file", null, "absent"],
+  ])("refuses a deleted document with %s, naming the values", (_label, head, shown) => {
+    const findings = coverageRelaxations(coverage(), null, head);
+    expect(findings).toHaveLength(2);
+    expect(findings.join("\n")).toContain(COVERAGE_PATH);
+    expect(findings.join("\n")).toContain("91.89");
+    expect(findings.join("\n")).toContain("92.89");
+    expect(findings.join("\n")).toContain(shown);
+    expect(findings.join("\n")).toContain(THRESHOLDS_PATH);
+  });
+
+  it("keeps refusing a lowered floor while the document stays, whatever the thresholds file holds", () => {
+    expect(coverageRelaxations(coverage(), coverage({ floor: 90 }), thresholds(99, 99))).toEqual([
+      expect.stringContaining("languages.typescript.floor"),
     ]);
   });
 
@@ -331,6 +360,47 @@ describe("ratchet check against a real git repository", () => {
 
   it("exits 1 when the branch deletes a ratchet document", () => {
     seed(() => git("rm", "-q", COVERAGE_PATH));
+    const result = run("main", "feature");
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(COVERAGE_PATH);
+  });
+
+  const writeThresholds = (content: unknown) => {
+    mkdirSync(join(root, ".github"), { recursive: true });
+    writeFileSync(join(root, THRESHOLDS_PATH), `${JSON.stringify(content, null, 2)}\n`);
+  };
+
+  it("exits 0 when the branch moves the floor into the thresholds file", () => {
+    seed(() => {
+      git("rm", "-q", COVERAGE_PATH);
+      writeThresholds({ schema_version: 1, coverage: { javascript: { floor: 91.89, measured: 92.89 } } });
+    });
+    const result = run("main", "feature");
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+  });
+
+  it("exits 1 when the branch moves a lowered floor into the thresholds file", () => {
+    seed(() => {
+      git("rm", "-q", COVERAGE_PATH);
+      writeThresholds({ schema_version: 1, coverage: { javascript: { floor: 90, measured: 92.89 } } });
+    });
+    const result = run("main", "feature");
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("merge base 91.89, head 90");
+  });
+
+  it("exits 1 when the thresholds file at head is a symlink", () => {
+    seed(() => {
+      git("rm", "-q", COVERAGE_PATH);
+      mkdirSync(join(root, ".github"), { recursive: true });
+      writeFileSync(
+        join(root, ".github", "real.json"),
+        JSON.stringify({ schema_version: 1, coverage: { javascript: { floor: 99, measured: 99 } } }),
+      );
+      symlinkSync("real.json", join(root, THRESHOLDS_PATH));
+    });
     const result = run("main", "feature");
     expect(result.status).toBe(1);
     expect(result.stdout).toContain(COVERAGE_PATH);
