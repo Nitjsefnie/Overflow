@@ -155,7 +155,7 @@ export async function loadExistingSettlements(
     select
       settlements.id, settlements.fold_revision, settlements.issue_id, settlements.pull_request_id,
       issues.github_issue_id, pull_requests.github_pull_request_id,
-      settlements.creditor_id, settlements.creditor_github_login, settlements.creditor_github_user_id, settlements.debtor_id,
+      settlements.creditor_id, settlements.creditor_github_login, settlements.creditor_github_user_id, settlements.debtor_id, settlements.team_id,
       settlements.opening_comparison_points, settlements.settled_points, settlements.review_rounds,
       settlements.credits, settlements.proof_sha256, settlements.status, settlements.donation_comment_id,
       issues.settled_label, issues.settled_label_event_id, issues.settled_label_actor_login,
@@ -179,13 +179,14 @@ async function insertSettlement(
     insert into settlements (
       pull_request_id, issue_id, creditor_id, creditor_github_login, creditor_github_user_id, debtor_id,
       opening_comparison_points, settled_points, review_rounds, credits, proof_sha256, status, fold_revision,
-      provider, instance_url, donation_comment_id
+      provider, instance_url, donation_comment_id, team_id
     )
     values (
       ${pullRequestId}, ${issueId}, ${settlement.creditorId}, ${settlement.creditorGitHubLogin}, ${settlement.creditorGitHubUserId}, ${settlement.debtorId},
       ${settlement.openingComparisonPoints}, ${settlement.settledPoints}, ${settlement.reviewRounds},
       ${settlement.credits}, ${settlement.proofSha256}, ${settlement.status}, ${FOLD_REVISION},
-      ${settlement.provider ?? "github"}, ${settlement.instanceUrl ?? null}, ${settlement.donationCommentId ?? null}
+      ${settlement.provider ?? "github"}, ${settlement.instanceUrl ?? null}, ${settlement.donationCommentId ?? null},
+      ${settlement.teamId ?? null}
     )
   `;
 }
@@ -205,7 +206,7 @@ async function updateSettlement(
         review_rounds = ${settlement.reviewRounds}, credits = ${settlement.credits}, proof_sha256 = ${settlement.proofSha256},
         status = ${settlement.status}, fold_revision = ${FOLD_REVISION},
         provider = ${settlement.provider ?? "github"}, instance_url = ${settlement.instanceUrl ?? null},
-        donation_comment_id = ${settlement.donationCommentId ?? null}
+        donation_comment_id = ${settlement.donationCommentId ?? null}, team_id = ${settlement.teamId ?? null}
     where issue_id = ${issueId}
   `;
 }
@@ -419,6 +420,8 @@ function settlementState(settlement: FoldSettlement): JSONValue {
     creditorId: settlement.creditorId,
     creditorGitHubLogin: settlement.creditorGitHubLogin,
     creditorGitHubUserId: settlement.creditorGitHubUserId,
+    // Present only for a team settlement, so a teamless row's recorded state is unchanged.
+    ...(settlement.teamId !== undefined && { teamId: settlement.teamId }),
     debtorId: settlement.debtorId,
     openingComparisonPoints: settlement.openingComparisonPoints,
     settledLabel: settlement.settledLabel,
@@ -446,6 +449,7 @@ function settlementStateFromRow(row: SettlementRow): JSONValue {
     creditorId: row.creditor_id,
     creditorGitHubLogin: row.creditor_github_login,
     creditorGitHubUserId: row.creditor_github_user_id === null ? null : toSafeInteger(row.creditor_github_user_id),
+    ...(row.team_id !== null && { teamId: row.team_id }),
     debtorId: row.debtor_id,
     openingComparisonPoints: row.opening_comparison_points,
     settledLabel: row.settled_label,
