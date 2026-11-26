@@ -61,10 +61,7 @@ describe("foldRepository", () => {
       settledPoints: null,
       settledLabelEventId: null,
     });
-    expect(result.issues.find((issue) => issue.githubIssueId === 101)).toMatchObject({
-      settledLabel: "delivered/6",
-      settledPoints: 6,
-    });
+    expect(result.issues.find((issue) => issue.githubIssueId === 101)).toMatchObject({ settledLabel: "delivered/6", settledPoints: 6 });
   });
 
   it("folds an open issue marked unreadable without a closure", () => {
@@ -328,12 +325,8 @@ describe("foldRepository", () => {
 
     const result = foldRepository(snapshot);
 
-    expect.soft(result.pullRequests[0]?.reviewRounds).toEqual([
-      { githubReviewId: 301, submittedAt: "2026-09-01T11:59:59.999Z" },
-    ]);
-    expect(result.settlements).toEqual([
-      expect.objectContaining({ settledPoints: 6, reviewRounds: 1, credits: 5 }),
-    ]);
+    expect.soft(result.pullRequests[0]?.reviewRounds).toEqual([{ githubReviewId: 301, submittedAt: "2026-09-01T11:59:59.999Z" }]);
+    expect(result.settlements).toEqual([expect.objectContaining({ settledPoints: 6, reviewRounds: 1, credits: 5 })]);
   });
 
   it("uses the configured S/M/L catalog rather than inferring a label's points", () => {
@@ -343,11 +336,7 @@ describe("foldRepository", () => {
 
     const result = foldRepository(snapshot);
 
-    expect(result.settlements[0]).toMatchObject({
-      openingComparisonPoints: 2,
-      settledPoints: 7,
-      credits: 7,
-    });
+    expect(result.settlements[0]).toMatchObject({ openingComparisonPoints: 2, settledPoints: 7, credits: 7 });
   });
 
   it("preserves the owner-applied opening event after labels change and reports a policy violation", () => {
@@ -366,22 +355,13 @@ describe("foldRepository", () => {
 
     const result = foldRepository(snapshot);
 
-    expect(result.issues[0]).toMatchObject({
-      openingLabel: "M",
-      openingComparisonPoints: 5,
-      openingReservePoints: 5,
-    });
-    expect(result.policyViolations).toEqual([
-      expect.objectContaining({ code: "OPENING_LABEL_MUTATED", githubIssueId: 101 }),
-    ]);
+    expect(result.issues[0]).toMatchObject({ openingLabel: "M", openingComparisonPoints: 5, openingReservePoints: 5 });
+    expect(result.policyViolations).toEqual([expect.objectContaining({ code: "OPENING_LABEL_MUTATED", githubIssueId: 101 })]);
   });
 
   it("does not infer opening labels applied by a bot or after the first assignment", () => {
     const missing = outsiderFixture();
-    missing.issues[0]!.history[0] = {
-      ...missing.issues[0]!.history[0]!,
-      actorLogin: "automation-bot",
-    };
+    missing.issues[0]!.history[0] = { ...missing.issues[0]!.history[0]!, actorLogin: "automation-bot" };
     const postAssignment = outsiderFixture();
     postAssignment.issues[0]!.history.unshift({
       kind: "ASSIGNED",
@@ -407,10 +387,7 @@ describe("foldRepository", () => {
 
     const result = foldRepository(snapshot);
 
-    expect(result.settlements[0]).toMatchObject({
-      creditorId: "contributor",
-      debtorId: "sponsor",
-    });
+    expect(result.settlements[0]).toMatchObject({ creditorId: "contributor", debtorId: "sponsor" });
   });
 
   it("retains a zero-credit outsider settlement and proof without emitting a ledger entry", () => {
@@ -422,9 +399,7 @@ describe("foldRepository", () => {
 
     const result = foldRepository(snapshot);
 
-    expect(result.settlements).toEqual([
-      expect.objectContaining({ status: "SETTLED", credits: 0, proofSha256: sha256("diff") }),
-    ]);
+    expect(result.settlements).toEqual([expect.objectContaining({ status: "SETTLED", credits: 0, proofSha256: sha256("diff") })]);
     expect(result.ledgerEntries).toEqual([]);
   });
 
@@ -514,15 +489,11 @@ describe("foldRepository", () => {
     snapshot.issues[0]!.closingPullRequests[0]!.authorLogin = "release-bot[bot]";
     snapshot.issues[0]!.closingPullRequests[0]!.authorGitHubUserId = null;
     // Exercise malformed runtime input too; null is deliberately outside FoldUser's type.
-    snapshot.users.push({
-      id: "sentinel", githubUserId, githubLogin: "sentinel", enforcementState: "ACTIVE",
-    } as unknown as FoldUser);
+    snapshot.users.push({ id: "sentinel", githubUserId, githubLogin: "sentinel", enforcementState: "ACTIVE" } as unknown as FoldUser);
 
     const result = foldRepository(snapshot);
 
-    expect(result.settlements[0]).toMatchObject({
-      status: "UNCLAIMED", creditorId: null, creditorGitHubUserId: null,
-    });
+    expect(result.settlements[0]).toMatchObject({ status: "UNCLAIMED", creditorId: null, creditorGitHubUserId: null });
     expect(result.pullRequests[0]).toMatchObject({ authorId: null, authorGitHubUserId: null });
     expect(result.ledgerEntries).toEqual([]);
   });
@@ -535,9 +506,7 @@ describe("foldRepository", () => {
     const result = foldRepository(snapshot);
 
     expect(result.selfWorkCalibrations).toEqual([]);
-    expect(result.settlements[0]).toMatchObject({
-      status: "SETTLED", creditorId: "contributor", creditorGitHubUserId: 2001, credits: 6,
-    });
+    expect(result.settlements[0]).toMatchObject({ status: "SETTLED", creditorId: "contributor", creditorGitHubUserId: 2001, credits: 6 });
     expect(result.pullRequests[0]).toMatchObject({ authorId: "contributor", authorGitHubUserId: 2001 });
     expect(result.ledgerEntries).toEqual([
       { accountId: "contributor", counterpartyId: "sponsor", amount: 6 },
@@ -599,9 +568,7 @@ describe("foldRepository", () => {
 
     const result = foldRepository(snapshot);
 
-    expect(result.settlements).toEqual([
-      expect.objectContaining({ githubPullRequestId: 201, githubIssueId: 101 }),
-    ]);
+    expect(result.settlements).toEqual([expect.objectContaining({ githubPullRequestId: 201, githubIssueId: 101 })]);
   });
 
   it.each([
@@ -620,12 +587,7 @@ describe("foldRepository", () => {
     const result = foldRepository(snapshot);
 
     expect(result.settlements).toEqual([
-      expect.objectContaining({
-        status: "SETTLED",
-        creditorId: "contributor",
-        debtorId: "sponsor",
-        credits: 6,
-      }),
+      expect.objectContaining({ status: "SETTLED", creditorId: "contributor", debtorId: "sponsor", credits: 6 }),
     ]);
     expect(result.ledgerEntries).toHaveLength(2);
   });
@@ -674,9 +636,7 @@ describe("foldRepository", () => {
 
     const result = foldRepository(snapshot);
 
-    expect(result.settlements).toEqual([
-      expect.objectContaining({ status: "SETTLED", creditorId: "contributor", credits: 6 }),
-    ]);
+    expect(result.settlements).toEqual([expect.objectContaining({ status: "SETTLED", creditorId: "contributor", credits: 6 })]);
   });
 });
 
@@ -728,9 +688,7 @@ function selfWorkFixture(): RepositoryFoldSnapshot {
 function restTimelineTrapFixture(): RepositoryFoldSnapshot {
   const snapshot = outsiderFixture();
   snapshot.issues[0]!.closingPullRequests = [];
-  snapshot.issues[0]!.restTimeline = [
-    { source: "REST", pullRequestNumber: 201, authorLogin: "contributor" },
-  ];
+  snapshot.issues[0]!.restTimeline = [{ source: "REST", pullRequestNumber: 201, authorLogin: "contributor" }];
   return snapshot;
 }
 
@@ -749,14 +707,9 @@ function twoReviewRoundsFixture(): RepositoryFoldSnapshot {
 function outsiderFixture(): RepositoryFoldSnapshot {
   return {
     repository: {
-      id: "repository",
-      githubRepositoryId: 5001,
-      ownerName: "octo/example",
-      active: true,
-      registeredAt: "2026-01-01T00:00:00.000Z",
+      id: "repository", githubRepositoryId: 5001, ownerName: "octo/example", active: true, registeredAt: "2026-01-01T00:00:00.000Z",
       sponsor: { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE", moderationEvents: [] },
-      difficultyScheme: difficultyScheme(),
-      difficultySchemeVersions: [],
+      difficultyScheme: difficultyScheme(), difficultySchemeVersions: [],
     },
     users: [
       { id: "sponsor", githubUserId: 1001, githubLogin: "sponsor", enforcementState: "ACTIVE", moderationEvents: [] },
@@ -764,63 +717,26 @@ function outsiderFixture(): RepositoryFoldSnapshot {
     ],
     issues: [
       {
-        id: 101,
-        number: 1,
-        title: "Issue",
-        url: "https://github.com/octo/example/issues/1",
-        state: "CLOSED",
-        stateReason: "COMPLETED",
-        createdAt: "2026-08-30T09:00:00.000Z",
-        updatedAt: "2026-09-01T12:05:00.000Z",
-        closedAt: "2026-09-01T12:05:00.000Z",
-        authorLogin: "sponsor",
-        authorGitHubUserId: null,
-        labels: ["M", "delivered/6"],
+        id: 101, number: 1, title: "Issue", url: "https://github.com/octo/example/issues/1", state: "CLOSED", stateReason: "COMPLETED",
+        createdAt: "2026-08-30T09:00:00.000Z", updatedAt: "2026-09-01T12:05:00.000Z", closedAt: "2026-09-01T12:05:00.000Z",
+        authorLogin: "sponsor", authorGitHubUserId: null, labels: ["M", "delivered/6"],
         history: [
-          {
-            kind: "LABELED",
-            id: "opening-1",
-            actorLogin: "sponsor",
-            actorGitHubUserId: null,
-            label: "M",
-            createdAt: "2026-08-30T10:00:00.000Z",
-          },
-          {
-            kind: "LABELED",
-            id: "actual-1",
-            actorLogin: "sponsor",
-            actorGitHubUserId: null,
-            label: "delivered/6",
-            createdAt: "2026-09-01T11:00:00.000Z",
-          },
+          { kind: "LABELED", id: "opening-1", actorLogin: "sponsor", actorGitHubUserId: null, label: "M",
+            createdAt: "2026-08-30T10:00:00.000Z" },
+          { kind: "LABELED", id: "actual-1", actorLogin: "sponsor", actorGitHubUserId: null, label: "delivered/6",
+            createdAt: "2026-09-01T11:00:00.000Z" },
         ],
         comments: [
-          {
-            id: "comment-1",
-            databaseId: 401,
-            authorLogin: "sponsor",
-            authorGitHubUserId: null,
-            body: "Settled as delivered/6 after reviewing the final diff.",
-            createdAt: "2026-09-01T11:30:00.000Z",
-            lastEditedAt: null,
-          },
+          { id: "comment-1", databaseId: 401, authorLogin: "sponsor", authorGitHubUserId: null,
+            body: "Settled as delivered/6 after reviewing the final diff.", createdAt: "2026-09-01T11:30:00.000Z", lastEditedAt: null },
         ],
         closingPullRequests: [
           {
-            id: 201,
-            number: 11,
-            title: "Pull request",
-            url: "https://github.com/octo/example/pull/11",
-            state: "MERGED",
+            id: 201, number: 11, title: "Pull request", url: "https://github.com/octo/example/pull/11", state: "MERGED",
             mergedAt: "2026-09-01T12:00:00.000Z",
             mergeCommitOid: "0123456789abcdef0123456789abcdef01234567",
-            finalCommitAt: "2026-09-01T10:00:00.000Z",
-            authorLogin: "contributor",
-            authorGitHubUserId: 2001,
-            repositoryGitHubId: 5001,
-            repositoryNameWithOwner: "octo/example",
-            reviews: [],
-            rawDiff: "diff",
+            finalCommitAt: "2026-09-01T10:00:00.000Z", authorLogin: "contributor", authorGitHubUserId: 2001,
+            repositoryGitHubId: 5001, repositoryNameWithOwner: "octo/example", reviews: [], rawDiff: "diff",
           },
         ],
       },
@@ -895,10 +811,7 @@ describe("rejected settlement closure records", () => {
   it("records the earliest later actual label application from unordered history", () => {
     const snapshot = outsiderFixture();
     setActualLabelAppliedAt(snapshot, "2026-09-01T12:40:00.000Z");
-    reapplyActualLabel(snapshot, {
-      unlabeledAt: "2026-09-01T12:18:00.000Z",
-      relabeledAt: "2026-09-01T12:20:00.000Z",
-    });
+    reapplyActualLabel(snapshot, { unlabeledAt: "2026-09-01T12:18:00.000Z", relabeledAt: "2026-09-01T12:20:00.000Z" });
     snapshot.issues[0]!.history.push({
       kind: "LABELED", id: "unconfigured", actorLogin: "sponsor", actorGitHubUserId: null,
       label: "unconfigured", createdAt: "2026-09-01T12:16:00.000Z",
@@ -974,10 +887,7 @@ describe("rejected settlement closure records", () => {
   // predicate enforce the same property.
   it("accepts a nonblank sponsor rationale that never states the label text", () => {
     const snapshot = outsiderFixture();
-    snapshot.issues[0]!.comments[0] = {
-      ...snapshot.issues[0]!.comments[0]!,
-      body: "Settled at 6 points after reviewing the final diff.",
-    };
+    snapshot.issues[0]!.comments[0] = { ...snapshot.issues[0]!.comments[0]!, body: "Settled at 6 points after reviewing the final diff." };
 
     const result = foldRepository(snapshot);
 
@@ -987,10 +897,7 @@ describe("rejected settlement closure records", () => {
 
   it("rejects a label-bearing sponsor comment posted outside the window", () => {
     const snapshot = outsiderFixture();
-    snapshot.issues[0]!.comments[0] = {
-      ...snapshot.issues[0]!.comments[0]!,
-      body: "delivered/6 was applied by the sponsor.",
-    };
+    snapshot.issues[0]!.comments[0] = { ...snapshot.issues[0]!.comments[0]!, body: "delivered/6 was applied by the sponsor." };
     setRationaleCommentAt(snapshot, "2026-09-01T12:20:00.000Z");
 
     expect(foldRepository(snapshot).unwritableClosures).toEqual([{
@@ -1178,10 +1085,7 @@ describe("settlement evidence timing grace", () => {
 describe("settlement rationale pairing", () => {
   it("records a reapplied label against the rationale written for it", () => {
     const snapshot = outsiderFixture();
-    reapplyActualLabel(snapshot, {
-      unlabeledAt: "2026-09-01T11:35:00.000Z",
-      relabeledAt: "2026-09-01T11:40:00.000Z",
-    });
+    reapplyActualLabel(snapshot, { unlabeledAt: "2026-09-01T11:35:00.000Z", relabeledAt: "2026-09-01T11:40:00.000Z" });
     snapshot.issues[0]!.comments.push({
       id: "comment-2",
       databaseId: 402,
@@ -1213,10 +1117,7 @@ describe("settlement rationale pairing", () => {
       lastEditedAt: null,
     });
 
-    expect(foldRepository(snapshot).issues[0]).toMatchObject({
-      settledLabelEventId: "actual-1",
-      settledRationaleCommentId: "comment-2",
-    });
+    expect(foldRepository(snapshot).issues[0]).toMatchObject({ settledLabelEventId: "actual-1", settledRationaleCommentId: "comment-2" });
   });
 
   it("prefers a rationale exactly at the label over earlier and later rationales", () => {
@@ -1243,9 +1144,7 @@ describe("settlement rationale pairing", () => {
       },
     );
 
-    expect(foldRepository(snapshot).issues[0]).toMatchObject({
-      settledRationaleCommentId: "comment-2",
-    });
+    expect(foldRepository(snapshot).issues[0]).toMatchObject({ settledRationaleCommentId: "comment-2" });
   });
 
   it("keeps the earliest rationale when several follow the label", () => {
@@ -1260,17 +1159,12 @@ describe("settlement rationale pairing", () => {
       lastEditedAt: null,
     });
 
-    expect(foldRepository(snapshot).issues[0]).toMatchObject({
-      settledRationaleCommentId: "comment-1",
-    });
+    expect(foldRepository(snapshot).issues[0]).toMatchObject({ settledRationaleCommentId: "comment-1" });
   });
 
   it("falls back to a rationale inside the grace window before a reapplied label when nothing later qualifies", () => {
     const snapshot = outsiderFixture();
-    reapplyActualLabel(snapshot, {
-      unlabeledAt: "2026-09-01T11:35:00.000Z",
-      relabeledAt: "2026-09-01T11:40:00.000Z",
-    });
+    reapplyActualLabel(snapshot, { unlabeledAt: "2026-09-01T11:35:00.000Z", relabeledAt: "2026-09-01T11:40:00.000Z" });
 
     expect(foldRepository(snapshot).issues[0]).toMatchObject({
       settledLabelEventId: "actual-2",
@@ -1282,10 +1176,7 @@ describe("settlement rationale pairing", () => {
 
   it("skips an edited rationale at the reapplied label and prefers the first valid later one over the grace fallback", () => {
     const snapshot = outsiderFixture();
-    reapplyActualLabel(snapshot, {
-      unlabeledAt: "2026-09-01T11:35:00.000Z",
-      relabeledAt: "2026-09-01T11:40:00.000Z",
-    });
+    reapplyActualLabel(snapshot, { unlabeledAt: "2026-09-01T11:35:00.000Z", relabeledAt: "2026-09-01T11:40:00.000Z" });
     const issue = snapshot.issues[0]!;
     issue.comments.push(
       {
@@ -1295,18 +1186,8 @@ describe("settlement rationale pairing", () => {
         createdAt: "2026-09-01T11:40:00.000Z",
         lastEditedAt: "2026-09-01T12:15:00.001Z",
       },
-      {
-        ...issue.comments[0]!,
-        id: "comment-4",
-        databaseId: 404,
-        createdAt: "2026-09-01T11:45:00.000Z",
-      },
-      {
-        ...issue.comments[0]!,
-        id: "comment-3",
-        databaseId: 403,
-        createdAt: "2026-09-01T11:41:00.000Z",
-      },
+      { ...issue.comments[0]!, id: "comment-4", databaseId: 404, createdAt: "2026-09-01T11:45:00.000Z" },
+      { ...issue.comments[0]!, id: "comment-3", databaseId: 403, createdAt: "2026-09-01T11:41:00.000Z" },
     );
 
     const result = foldRepository(snapshot);
@@ -1325,10 +1206,7 @@ describe("settlement rationale pairing", () => {
     { fallback: "edited after close", lastEditedAt: "2026-09-01T12:15:00.001Z", accepted: false },
   ])("handles a $fallback grace fallback when the reapplied label's own rationale was edited after close", ({ lastEditedAt, accepted }) => {
     const snapshot = outsiderFixture();
-    reapplyActualLabel(snapshot, {
-      unlabeledAt: "2026-09-01T11:35:00.000Z",
-      relabeledAt: "2026-09-01T11:40:00.000Z",
-    });
+    reapplyActualLabel(snapshot, { unlabeledAt: "2026-09-01T11:35:00.000Z", relabeledAt: "2026-09-01T11:40:00.000Z" });
     const issue = snapshot.issues[0]!;
     issue.comments[0]!.lastEditedAt = lastEditedAt;
     issue.comments.push({
@@ -1380,14 +1258,7 @@ function reapplyActualLabel(
       label: "delivered/6",
       createdAt: times.unlabeledAt,
     },
-    {
-      kind: "LABELED",
-      id: "actual-2",
-      actorLogin: "sponsor",
-      actorGitHubUserId: null,
-      label: "delivered/6",
-      createdAt: times.relabeledAt,
-    },
+    { kind: "LABELED", id: "actual-2", actorLogin: "sponsor", actorGitHubUserId: null, label: "delivered/6", createdAt: times.relabeledAt },
   );
 }
 
@@ -1408,10 +1279,7 @@ describe("opening evidence timing grace", () => {
     assignAt(snapshot, "2026-08-30T09:44:00.000Z");
 
     expect(foldRepository(snapshot).issues).toHaveLength(0);
-    expect(foldRepository(snapshot).policyViolations).toContainEqual({
-      code: "OPENING_LABEL_MISSING",
-      githubIssueId: 101,
-    });
+    expect(foldRepository(snapshot).policyViolations).toContainEqual({ code: "OPENING_LABEL_MISSING", githubIssueId: 101 });
   });
 
   it("still resolves an opening label applied before any assignment", () => {
@@ -1439,14 +1307,7 @@ describe("versioned difficulty catalogs", () => {
   function versionedSnapshot(versions: DifficultySchemeVersion[]): RepositoryFoldSnapshot {
     const snapshot = outsiderFixture();
     const v2 = repricedScheme(difficultyScheme());
-    return {
-      ...snapshot,
-      repository: {
-        ...snapshot.repository,
-        difficultyScheme: v2,
-        difficultySchemeVersions: versions,
-      },
-    };
+    return { ...snapshot, repository: { ...snapshot.repository, difficultyScheme: v2, difficultySchemeVersions: versions } };
   }
 
   function versionsWithSecondEffectiveAt(effectiveFrom: string): DifficultySchemeVersion[] {
@@ -1463,9 +1324,7 @@ describe("versioned difficulty catalogs", () => {
 
     // The window closed at 12:15, before v2 began governing, so the appended
     // repricing of delivered/6 (6 -> 7) must not touch this settled figure.
-    expect(result.settlements).toEqual([
-      expect.objectContaining({ githubIssueId: 101, status: "SETTLED", settledPoints: 6, credits: 6 }),
-    ]);
+    expect(result.settlements).toEqual([expect.objectContaining({ githubIssueId: 101, status: "SETTLED", settledPoints: 6, credits: 6 })]);
   });
 
   it("prices a closure whose evidence window closed at or after the change by the appended catalog", () => {
@@ -1473,9 +1332,7 @@ describe("versioned difficulty catalogs", () => {
 
     const result = foldRepository(snapshot);
 
-    expect(result.settlements).toEqual([
-      expect.objectContaining({ githubIssueId: 101, status: "SETTLED", settledPoints: 7 }),
-    ]);
+    expect(result.settlements).toEqual([expect.objectContaining({ githubIssueId: 101, status: "SETTLED", settledPoints: 7 })]);
   });
 
   it("resolves the opening by the catalog governing the issue's creation, pricing the closure by the window's catalog", () => {
@@ -1500,9 +1357,7 @@ describe("versioned difficulty catalogs", () => {
     // the change began governing, so the appended catalog resolves the opening
     // and prices the closure too.
     expect(result.issues[0]).toMatchObject({ openingLabel: "XL", openingComparisonPoints: 10 });
-    expect(result.settlements).toEqual([
-      expect.objectContaining({ githubIssueId: 101, status: "SETTLED", settledPoints: 7 }),
-    ]);
+    expect(result.settlements).toEqual([expect.objectContaining({ githubIssueId: 101, status: "SETTLED", settledPoints: 7 })]);
   });
 
   it("lets the current catalog govern every closure while no version history is loaded", () => {
@@ -1510,9 +1365,7 @@ describe("versioned difficulty catalogs", () => {
 
     const result = foldRepository(snapshot);
 
-    expect(result.settlements).toEqual([
-      expect.objectContaining({ githubIssueId: 101, status: "SETTLED", settledPoints: 7 }),
-    ]);
+    expect(result.settlements).toEqual([expect.objectContaining({ githubIssueId: 101, status: "SETTLED", settledPoints: 7 })]);
   });
 });
 
