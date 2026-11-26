@@ -1157,7 +1157,7 @@ zero.
 | 403 | `FORBIDDEN` | `The request origin is not allowed.` | Session writes: missing or foreign `Origin`. |
 | 403 | `FORBIDDEN` | `A member account is required.` | The credential's account no longer exists. |
 | 403 | `FORBIDDEN` | `Only the team's lead can do that.` | The caller leads no team. |
-| 404 | `NOT_FOUND` | `No active account matches.` | The login matches no live account, or more than one. |
+| 404 | `NOT_FOUND` | `No active account matches.` | Adding: the login matches no live account, or more than one. Creating: the caller's own account was deleted after the sign-in check. |
 | 404 | `NOT_FOUND` | `That account is not a current member of your team.` | A removal or distribution names an account that is not a current member. |
 | 409 | `CONFLICT` | `Another team already has that name.` | Choose another name. |
 | 409 | `CONFLICT` | `An account belongs to at most one team.` | The caller, or the added account, is already in a team. |

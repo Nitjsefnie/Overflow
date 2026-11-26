@@ -1,5 +1,5 @@
 import { AppShell } from "@/components/app-shell";
-import { AddMemberForm, CreateTeamForm, DistributeForm, RemoveMemberButton } from "@/components/team-forms";
+import { AddMemberForm, CreateTeamForm, DistributeForm, TeamMemberList } from "@/components/team-forms";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
 import { formatInstant } from "@/lib/format-instant";
 import { PostgresTeamStore, type TeamView } from "@/lib/teams/store";
@@ -49,17 +49,7 @@ export function TeamContent({ memberName, isModerator, viewerId, team }: TeamCon
           </section>
           <section className="surface" aria-labelledby="team-members-heading">
             <h2 id="team-members-heading">Members</h2>
-            <ul className="override-history" aria-label="Team members">
-              {team.members.map((member) => (
-                <li key={member.userId}>
-                  <p>
-                    {member.githubLogin}{member.userId === team.leadId ? " (lead)" : ""}
-                  </p>
-                  <p className="mono-meta">Joined {formatInstant(member.joinedAt)}</p>
-                  {isLead && member.userId !== team.leadId ? <RemoveMemberButton member={member} /> : null}
-                </li>
-              ))}
-            </ul>
+            <TeamMemberList members={team.members} leadId={team.leadId} isLead={isLead} />
           </section>
           {isLead ? (
             <>

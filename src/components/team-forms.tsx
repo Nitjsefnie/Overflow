@@ -1,7 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { formatInstant } from "@/lib/format-instant";
 import type { TeamMember } from "@/lib/teams/store";
 
 type Feedback = { kind: "error" | "success"; message: string };
@@ -85,14 +86,29 @@ export function AddMemberForm() {
   );
 }
 
-export function RemoveMemberButton({ member }: { member: TeamMember }) {
+/**
+ * The member list, with the lead's Remove buttons. The one feedback line sits
+ * under the list, not in a row: a removed member's row unmounts on the refresh,
+ * and a status line inside it could vanish before a screen reader announces it.
+ */
+export function TeamMemberList({ members, leadId, isLead }: { members: readonly TeamMember[]; leadId: string; isLead: boolean }) {
   const { pending, feedback, send } = useTeamRequest();
   return (
     <>
-      <button className="quiet-button" type="button" disabled={pending} aria-label={`Remove ${member.githubLogin}`}
-        onClick={() => void send("DELETE", "/api/teams/members", { memberId: member.userId }, `${member.githubLogin} is removed.`)}>
-        Remove
-      </button>
+      <ul className="override-history" aria-label="Team members">
+        {members.map((member) => (
+          <li key={member.userId}>
+            <p>{member.githubLogin}{member.userId === leadId ? " (lead)" : ""}</p>
+            <p className="mono-meta">Joined {formatInstant(member.joinedAt)}</p>
+            {isLead && member.userId !== leadId ? (
+              <button className="quiet-button" type="button" disabled={pending} aria-label={`Remove ${member.githubLogin}`}
+                onClick={() => void send("DELETE", "/api/teams/members", { memberId: member.userId }, `${member.githubLogin} is removed.`)}>
+                Remove
+              </button>
+            ) : null}
+          </li>
+        ))}
+      </ul>
       <FeedbackLine feedback={feedback} />
     </>
   );
@@ -102,6 +118,12 @@ export function DistributeForm({ members }: { members: readonly TeamMember[] }) 
   const { pending, feedback, send } = useTeamRequest();
   const [memberId, setMemberId] = useState(members[0]?.userId ?? "");
   const [points, setPoints] = useState("");
+  // The server owns the member list: a refresh after a removal can swap the
+  // props under this form, so a selection the new list lacks follows the list
+  // rather than submitting a removed account's id.
+  useEffect(() => {
+    if (!members.some((member) => member.userId === memberId)) setMemberId(members[0]?.userId ?? "");
+  }, [members, memberId]);
   const whole = /^[1-9][0-9]*$/.test(points.trim());
   async function distribute() {
     if (await send("POST", "/api/teams/distributions", { memberId, points: Number(points) }, "The points are distributed.")) {

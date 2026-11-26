@@ -2,6 +2,7 @@ import { describe, expect, it, vi, type Mock } from "vitest";
 import {
   expectNoDependencyCall,
   guardedRequests,
+  foreignOrigin,
   useTrustedOrigin,
 } from "../support/trusted-origin";
 
@@ -142,6 +143,30 @@ describe.each(cases)("$label", (route) => {
     expect(response.status).toBe(route.success.status);
     expect(deps.store[route.act].mock.calls[0]![0]).toBe(tokenAccount);
     expect(deps.getSession).not.toHaveBeenCalled();
+  });
+
+  it("lets a bearer token skip the origin check, which only a cookie request owes", async () => {
+    const deps = dependencies(undefined, {
+      findAccountByTokenHash: vi.fn().mockResolvedValue({ id: leadId, tokenId: "token-1" }),
+    });
+    const response = await route.call(deps)(
+      json(route.valid, route.method, { origin: foreignOrigin, authorization: `Bearer ovf_${"r".repeat(43)}` }),
+    );
+
+    expect(response.status).toBe(route.success.status);
+  });
+
+  it("holds a request with a non-bearer authorization header to the origin check", async () => {
+    const deps = dependencies();
+    const response = await route.call(deps)(
+      json(route.valid, route.method, { origin: foreignOrigin, authorization: "Basic abc" }),
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "FORBIDDEN", message: "The request origin is not allowed." },
+    });
+    expectNoDependencyCall({ getSession: deps.getSession, createStore: deps.createStore });
   });
 
   it("refuses an anonymous request before the store is built", async () => {
