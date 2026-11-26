@@ -67,8 +67,8 @@ export const TERMS_REVISION: LegalRevision = {
 
 export const ACCOUNT_DATA_REVISION: LegalRevision = {
   document: "account-data",
-  version: "1.19",
-  effectiveDate: "2026-11-07",
+  version: "1.20",
+  effectiveDate: "2026-11-26",
 };
 
 // The rules page is a legal document too, and a stronger one for disputes: the

@@ -248,7 +248,7 @@ export function AccountDataNotice() {
             its author&apos;s login and numeric user id; and the title and author of each pull request that
             closes it. For each of those closing pull requests that was merged in the registered repository, the
             cache also keeps its diff and its reviews — without the reviewer&apos;s login or text — because
-            settlement proofs are computed from them: the proof is a SHA-256 of the diff
+            settlement proofs are computed from them: the proof is a SHA-256 of the diff with its blob ids shortened
           </li>
           <li>a change log recording logins and titles as those records change</li>
           <li>moderation notes, which can name the account that applied a label</li>
