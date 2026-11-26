@@ -19,7 +19,7 @@
 # sha256 does not match, so tampered or attacker-served wheel content fails
 # the install, never the parse.
 #
-# pyyaml==6.0.3 has no transitive runtime dependencies on PyPI, so the file is
+# pyyaml==6.0.4 has no transitive runtime dependencies on PyPI, so the file is
 # the one pin. Two hashes: the manylinux_2_17 x86_64 wheel for the runner's
 # CPython 3.12 (ubuntu-latest), and the sdist, which covers every other
 # CPython — pip falls back to it wherever the wheel does not resolve, so the
@@ -33,4 +33,4 @@
 #     | "--hash=sha256:" + .digests.sha256'
 # then write `pyyaml==<version>` followed by those values, joined onto ONE line
 # with single spaces, as committed here.
-pyyaml==6.0.3 --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc --hash=sha256:d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f
+pyyaml==6.0.4 --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc --hash=sha256:d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f
