@@ -560,7 +560,6 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
       continue;
     }
 
-    // A teammate's work records the sponsor's calibration: its user feeds the sponsor's cohort.
     if (isSelfWorkAt(author, sponsor, pullRequest.mergedAt)) {
       selfWorkCalibrations.push({
         githubIssueId: issue.id,

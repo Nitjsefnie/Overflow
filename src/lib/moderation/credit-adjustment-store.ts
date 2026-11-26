@@ -280,7 +280,6 @@ export class PostgresRecalibrationCreditStore implements RecalibrationCreditStor
         throw new Error("Credit adjustment insert returned no row.");
       }
 
-      // Each line copies its settlement's team, so it books where the settlement's credit landed.
       const lines = [...evaluation.lines].sort(bySettlementId);
       for (const line of lines) {
         await transaction`
