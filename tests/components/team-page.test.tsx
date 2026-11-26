@@ -134,6 +134,34 @@ describe("team page", () => {
     }));
   });
 
+  it("distributes to the first remaining member once the selected member leaves the list", async () => {
+    const fetchMock = mockResponse({ distribution: {} }, 201);
+    const { rerender } = renderPage(leadId, team);
+    fireEvent.change(screen.getByLabelText("Member"), { target: { value: memberId } });
+
+    rerender(<TeamContent memberName="Ada" isModerator={false} viewerId={leadId} team={{ ...team, members: [team.members[0]!] }} />);
+    fireEvent.change(screen.getByLabelText("Points (whole)"), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Distribute the points" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(fetchMock).toHaveBeenCalledWith("/api/teams/distributions", expect.objectContaining({
+      body: JSON.stringify({ memberId: leadId, points: 2 }),
+    }));
+  });
+
+  it("announces a removal in a status line that outlives the removed member's row", async () => {
+    mockResponse({ removed: true });
+    const { rerender } = renderPage(leadId, team);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove mira" }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("mira is removed."));
+
+    rerender(<TeamContent memberName="Ada" isModerator={false} viewerId={leadId} team={{ ...team, members: [team.members[0]!] }} />);
+
+    expect(screen.queryByRole("button", { name: "Remove mira" })).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("mira is removed.");
+  });
+
   it("shows the route's refusal message and does not refresh", async () => {
     mockResponse({ error: { code: "CONFLICT", message: "The team's balance cannot cover that distribution." } }, 409);
     renderPage(leadId, team);
