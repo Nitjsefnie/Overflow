@@ -416,7 +416,6 @@ scripts/*
 !scripts/page-geometry-fixtures.mjs
 !scripts/mcp-surface-snapshot.json
 !scripts/http-surface-snapshot.json
-!scripts/coverage.json
 !scripts/perf-budget.json
 !scripts/perf-node-setup.mjs
 
