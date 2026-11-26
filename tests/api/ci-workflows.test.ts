@@ -744,10 +744,9 @@ cp .github/workflows/*.yml .github/workflows-pr/
       // caught the misplacement.
       env: {
         COREPACK_ENABLE_PROJECT_SPEC: "0",
-        npm_config_registry: "https://registry.npmjs.org/",
-        npm_config_strict_ssl: "true",
-        npm_config_cafile: "/etc/ssl/certs/ca-certificates.crt",
-        npm_config_audit_level: "low",
+        pnpm_config_registry: "https://registry.npmjs.org/",
+        pnpm_config_strict_ssl: "true",
+        pnpm_config_audit_level: "low",
       },
       steps: [
         {},

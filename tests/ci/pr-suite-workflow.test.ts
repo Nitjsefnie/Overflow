@@ -432,7 +432,7 @@ describe("the pull request suite workflow", () => {
     expect(indices).toEqual([...indices].sort((a, b) => a - b));
     expect(suite.env).toEqual(expect.objectContaining({
       COREPACK_ENABLE_PROJECT_SPEC: "0",
-      npm_config_registry: "https://registry.npmjs.org/",
+      pnpm_config_registry: "https://registry.npmjs.org/",
       OVERFLOW_DATABASE_URL: "postgresql://overflow:overflow@127.0.0.1:5432/overflow_ci",
     }));
     // The job's environment is an exact SET, for the same reason the step's keys
@@ -466,7 +466,7 @@ describe("the pull request suite workflow", () => {
       "OVERFLOW_GITHUB_WEBHOOK_URL",
       "OVERFLOW_MODERATOR_GITHUB_USER_IDS",
       "OVERFLOW_TOKEN_ENCRYPTION_KEY",
-      "npm_config_registry",
+      "pnpm_config_registry",
     ]);
   });
 

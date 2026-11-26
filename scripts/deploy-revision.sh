@@ -642,7 +642,7 @@ if [ "$serving_release" != absent ] && [ -f "$serving_release/REVISION" ]; then
     exit 0
   fi
 fi
-npm_config_package_import_method=copy pnpm install --frozen-lockfile
+pnpm_config_package_import_method=copy pnpm install --frozen-lockfile
 # This read and both reports use systemd-env-file.sh from the deployed tree:
 # systemd v257's EnvironmentFile= parser ported (no-op COMMENT_ESCAPE folded
 # in), so the file never runs. Each name it sets is exported over a caller's; a

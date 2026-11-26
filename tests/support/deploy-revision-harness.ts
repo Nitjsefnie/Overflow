@@ -411,7 +411,7 @@ exit 0
   pnpm: {
     envKeys: [
       "OVERFLOW_NEXT_DIST_DIR",
-      "npm_config_package_import_method",
+      "pnpm_config_package_import_method",
       "OVERFLOW_FIXTURE_ENV_MARKER",
       "OVERFLOW_DEPLOY_MIGRATION_ACK",
     ],

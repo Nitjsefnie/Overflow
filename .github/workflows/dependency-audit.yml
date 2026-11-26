@@ -44,13 +44,13 @@ jobs:
 
     # Job scope carries these controls through setup and audit alike.
     env:
-      # `corepack install --global pnpm@10.33.0` sets corepack's DEFAULT and
+      # `corepack install --global pnpm@12.23.0` sets corepack's DEFAULT and
       # nothing more: when the `pnpm` shim runs, corepack otherwise reads
       # `packageManager` from the nearest package.json and downloads THAT
       # version. On this file's legs the checkout is main's own tree, so the
-      # pin's work is to hold the audit at the measured 10.33.0 whatever
+      # pin's work is to hold the audit at the measured 12.23.0 whatever
       # `packageManager` main's package.json names — "verified against pnpm
-      # 10.33.0" describes a version this repository chose, not one a manifest
+      # 12.23.0" describes a version this repository chose, not one a manifest
       # edit picked. The pull-request-facing measurement (a pull request
       # picking the binary through its own packageManager) is recorded
       # identically on pr-gates.yml, job dependency-audit's copy of this block.
@@ -58,42 +58,31 @@ jobs:
       # This has to reach the step that runs `pnpm audit` and not merely the
       # one that installs pnpm, which is why it is here rather than on either
       # step. Set at job level, the audit step resolves a `pnpm@9.15.9` tree to
-      # 10.33.0; set on the install step alone it resolves to 9.15.9.
+      # 12.23.0; set on the install step alone it resolves to 9.15.9.
       COREPACK_ENABLE_PROJECT_SPEC: "0"
-      # pnpm reads `.npmrc` from the working directory, and a `registry=` there
-      # redirects the advisory endpoint. On this file's legs the checkout is
-      # main's own tree, so the pin holds the audit at the registry this
-      # repository chose even if a future edit to main's `.npmrc` names
-      # another one; the pull-request-facing threat (a pull request pointing
-      # the audit at a registry it controls) lives on pr-gates.yml, job dependency-audit,
-      # which materializes no `.npmrc` at all and carries the same pin.
-      # Measured on pnpm 10.33.0: a project `.npmrc` does redirect `pnpm
-      # config get registry`, and this variable outranks it. corepack does not
-      # read `.npmrc` at all, so the audit step is the only one with this
-      # exposure — at job level it costs the install step nothing.
-      npm_config_registry: "https://registry.npmjs.org/"
-      # The transport half of the same attack. A project `.npmrc` `proxy=` or
-      # `https-proxy=` is honoured by the audit's own HTTP agent, and an env
-      # value cannot neutralise it: measured on pnpm 10.33.0, a non-empty
-      # `npm_config_proxy`/`npm_config_https_proxy` is honoured and an EMPTY one
-      # does NOT beat `.npmrc`, so no proxy pin exists — a pull request can
-      # still choose the network path the audit request takes. What it cannot
-      # choose is what the audit TRUSTS at the end of that path. Measured on
-      # pnpm 10.33.0 against a local TLS endpoint: a project `strict-ssl=false`
-      # accepts a self-signed certificate the default configuration rejects,
-      # and `npm_config_strict_ssl` at `true` outranks it, so an intercepted
-      # connection fails closed (red run) instead of reporting the
-      # intercepting server's answer. The same measurement with a project
-      # `cafile=` showed the cafile REPLACES the whole trust store — one
-      # attacker-chosen CA would launder any interception — and the non-empty
-      # `npm_config_cafile` outranks it, so the pin below holds the store at
-      # the runner's system bundle. Both probe runs under the empty env values
-      # left the project's attack in place, which is why these are values and
-      # not empty strings.
-      npm_config_strict_ssl: "true"
-      npm_config_cafile: "/etc/ssl/certs/ca-certificates.crt"
+      # pnpm 12 does not read npm_config_*. Measured on pnpm 12.23.0: a project
+      # `.npmrc` `registry=` redirects `pnpm config get registry` and the audit
+      # POST, `npm_config_registry` does not outrank it, and `pnpm_config_registry`
+      # does. On this file's legs the checkout is main's own tree, so the pin
+      # holds the audit at the registry this repository chose even if a future
+      # edit to main's `.npmrc` names another one.
+      pnpm_config_registry: "https://registry.npmjs.org/"
+      # The transport half. Measured on pnpm 12.23.0 against a local TLS
+      # endpoint: `.npmrc` `proxy=` and `https-proxy=` are not read; workspace
+      # `proxy`/`httpsProxy` are, a non-empty `pnpm_config_proxy` outranks them,
+      # and an empty one does not, so no proxy pin exists. `.npmrc`
+      # `strict-ssl=false` plus `cafile=` of that endpoint's certificate makes
+      # the audit POST reach the intercepting server. `pnpm_config_strict_ssl`
+      # at `true` outranks that and the connection fails closed.
+      # `pnpm_config_cafile` does not outrank `.npmrc` `cafile=` (`pnpm config
+      # get cafile` still reports the file, and the POST still arrives), so
+      # there is no env pin for the trust store — the file comparison below is
+      # the control for `cafile`.
+      pnpm_config_strict_ssl: "true"
       # low is pnpm's lowest reportable severity; a higher bar hides findings.
-      npm_config_audit_level: "low"
+      # Measured on pnpm 12.23.0: `.npmrc` `audit-level` is not read, workspace
+      # `auditLevel` is, and `pnpm_config_audit_level` outranks it.
+      pnpm_config_audit_level: "low"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -118,15 +107,17 @@ jobs:
           ws_file=pnpm-workspace.yaml
           npmrc_file=.npmrc
           
-          # Two more suppression surfaces, measured on pnpm 10.33.0 with a real advisory
-          # carrying its github_advisory_id (the invalid-first-leg lesson applied): the
-          # audit honours auditConfig, auditLevel and the registries mapping from
-          # pnpm-workspace.yaml — the mapping BEATS a pinned npm_config_registry, so it
-          # redirects the advisory endpoint — and audit-level, registry, strict-ssl,
-          # cafile, proxy and https-proxy from .npmrc. Both files are therefore compared
-          # alongside package.json; absent compares equal to a file carrying none of the
-          # audited keys, and an unparseable CHANGED file is a refusal, never a silent
-          # pass.
+          # Two more suppression surfaces, measured on pnpm 12.23.0 with a real advisory
+          # POST to a local TLS endpoint: the audit honours auditConfig and auditLevel
+          # from pnpm-workspace.yaml. A pinned pnpm_config_registry outranks .npmrc
+          # registry= and the workspace registries mapping, so the mapping does not
+          # redirect the advisory endpoint. .npmrc strict-ssl=false plus cafile= of
+          # that endpoint's certificate lets the POST arrive; pnpm_config_strict_ssl
+          # at true fails it closed, and pnpm_config_cafile does not outrank cafile=.
+          # .npmrc audit-level, proxy and https-proxy are not read. Both files are
+          # therefore compared alongside package.json; absent compares equal to a
+          # file carrying none of the audited keys, and an unparseable CHANGED file
+          # is a refusal, never a silent pass.
           
           # Reads a commit's package.json as git objects with the ls-tree single-blob
           # discipline: exactly one mode-100644 blob entry at package.json, or refuse.
@@ -480,7 +471,7 @@ jobs:
       - name: Enable the pinned package manager
         run: |
           corepack enable
-          corepack install --global pnpm@10.33.0
+          corepack install --global pnpm@12.23.0
           pnpm --version
 
       # Reads pnpm-lock.yaml directly — no pnpm install, no build — and is the

@@ -280,7 +280,7 @@ exit 0
     const [install] = byCommand("pnpm").filter((entry) => entry.args[0] === "install");
     const [migrate] = byCommand("pnpm").filter((entry) => entry.args[0] === "db:migrate");
     const [build] = byCommand("pnpm").filter((entry) => entry.args[0] === "build");
-    expect(install!.env.npm_config_package_import_method).toBe("copy");
+    expect(install!.env.pnpm_config_package_import_method).toBe("copy");
     expect(install!.env.OVERFLOW_FIXTURE_ENV_MARKER).toBe("");
     expect(migrate!.env.OVERFLOW_FIXTURE_ENV_MARKER).toBe("loaded");
     expect(build!.env.OVERFLOW_NEXT_DIST_DIR).toBe(release);
@@ -1860,7 +1860,7 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     // untouched; before the install, so a skip mutates nothing. The esac that
     // matters is the CI-gate's own closing line, found searching back from
     // the install so the skip block's own text cannot confuse the pin.
-    const atInstall = source.indexOf("npm_config_package_import_method=copy pnpm install");
+    const atInstall = source.indexOf("pnpm_config_package_import_method=copy pnpm install");
     const atEsac = source.lastIndexOf("esac", atInstall);
     const atSkip = source.indexOf("Already serving");
     expect(atEsac, "the CI-gate esac present").toBeGreaterThan(-1);

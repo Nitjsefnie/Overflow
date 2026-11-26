@@ -92,11 +92,11 @@ not reach and root's default `PATH` does.
 ```bash
 ln -sfn /usr/local/lib/nodejs/node-v24.22.3/bin/corepack /usr/local/sbin/corepack
 corepack enable --install-directory /usr/local/sbin
-corepack prepare pnpm@10.33.0 --activate
+corepack prepare pnpm@12.23.0 --activate
 pnpm --version
 ```
 
-The last command must print `10.33.0`, the version `package.json` pins.
+The last command must print `12.23.0`, the version `package.json` pins.
 
 ## 4. Create the environment file
 
@@ -279,7 +279,7 @@ instead of running the block below if a migration fails it.
 set -e
 git clone https://github.com/Nitjsefnie/Overflow.git /srv/overflow
 cd /srv/overflow
-npm_config_package_import_method=copy pnpm install --frozen-lockfile
+pnpm_config_package_import_method=copy pnpm install --frozen-lockfile
 . /srv/overflow/scripts/systemd-env-file.sh; export_env_file /etc/overflow/overflow.env
 pnpm db:migrate
 release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=7 HEAD)"
@@ -362,7 +362,7 @@ chmod -R u=rwX,g=rX,o= /srv/overflow
 ```
 
 The install commands here and in section 10 set
-`npm_config_package_import_method=copy` for each invocation, importing package
+`pnpm_config_package_import_method=copy` for each invocation, importing package
 files into private inodes instead of hardlinking the shared store.
 Ownership and mode resets therefore leave the store and unrelated checkouts'
 package files untouched. Existing deployments must first complete section 10's
@@ -1310,7 +1310,7 @@ if [ "${serving_release}" != absent ] && [ -f "${serving_release}/REVISION" ]; t
     exit 0
   fi
 fi
-npm_config_package_import_method=copy pnpm install --frozen-lockfile
+pnpm_config_package_import_method=copy pnpm install --frozen-lockfile
 . /srv/overflow/scripts/systemd-env-file.sh; export_env_file /etc/overflow/overflow.env
 pnpm db:migrate
 release=".next-release-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=7 HEAD)"
@@ -1360,7 +1360,7 @@ removal in routine deploys.
 set -e
 cd /srv/overflow
 rm -rf -- node_modules
-npm_config_package_import_method=copy pnpm install --frozen-lockfile
+pnpm_config_package_import_method=copy pnpm install --frozen-lockfile
 ```
 
 This breaks the deployment's links to the shared store; it does not repair
