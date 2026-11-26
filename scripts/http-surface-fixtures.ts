@@ -330,6 +330,9 @@ function fixtureAccountExportDocument(): AccountExport {
     moderationCreditAdjustmentLines: [row()],
     disputeCreditAdjustments: [row()],
     disputeCreditAdjustmentLines: [row()],
+    teamsLed: [row()],
+    teamMemberships: [row()],
+    teamDistributions: [row()],
   };
 }
 

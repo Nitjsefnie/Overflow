@@ -27,6 +27,12 @@ the security reason and the change.
 
 **Version history:**
 
+- 2.1.0: `POST /api/account/export` adds `teamsLed` (the team the account
+  leads), `teamMemberships` (the account's team membership history) and
+  `teamDistributions` (the team points distributed to the account). Each
+  settlement row and each `moderationCreditAdjustmentLines` row adds
+  `team_id`, the team the credit landed on (`null` when it landed on the
+  account itself).
 - 2.0.0: `POST /api/account/export` no longer carries `account.avatarUrl`
   (removed after its 1.1.0 deprecation), and its `formatVersion`
   moves from `1` to `2`.

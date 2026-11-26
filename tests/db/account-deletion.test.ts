@@ -708,6 +708,9 @@ describe("account deletion as pseudonymisation", () => {
       insert into dispute_credit_adjustment_lines (adjustment_id, creditor_id, amount)
       values (${disputeAdjustment!.id}, ${exporter.id}, 2)
     `;
+    const [team] = await sql<{ id: string }[]>`insert into teams (lead_id, name) values (${exporter.id}, 'Export fixture team') returning id`;
+    await sql`insert into team_memberships (team_id, user_id) values (${team!.id}, ${exporter.id})`;
+    await sql`insert into team_distributions (team_id, member_id, points) values (${team!.id}, ${exporter.id}, 1)`;
 
     await sql`
       insert into contributor_work_mail_subscriptions (user_id, address, confirm_token_hash, confirm_expires_at,

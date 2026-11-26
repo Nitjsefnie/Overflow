@@ -1,6 +1,6 @@
 {
   "snapshotFormat": 2,
-  "httpServerVersion": "2.0.0",
+  "httpServerVersion": "2.1.0",
   "errorEnvelope": {
     "error": {
       "code": "string",
@@ -255,6 +255,18 @@
         "ownerName": "string",
         "provider": "string",
         "unregisteredAt": "null"
+      },
+      "teamDistributions": {
+        "createdAt": "string",
+        "id": "string"
+      },
+      "teamMemberships": {
+        "createdAt": "string",
+        "id": "string"
+      },
+      "teamsLed": {
+        "createdAt": "string",
+        "id": "string"
       },
       "workMail": {
         "address": "string",

@@ -99,6 +99,9 @@ export type AccountExport = {
   moderationCreditAdjustmentLines: AccountExportRow[];
   disputeCreditAdjustments: AccountExportRow[];
   disputeCreditAdjustmentLines: AccountExportRow[];
+  teamsLed: AccountExportRow[];
+  teamMemberships: AccountExportRow[];
+  teamDistributions: AccountExportRow[];
 };
 
 /**
@@ -198,6 +201,9 @@ export const userForeignKeyExports: readonly UserForeignKeyExportEntry[] = [
   { table: "dispute_credit_adjustments", column: "target_account_id", path: "disputeCreditAdjustments", kind: "jsonb", orderBy: ["created_at", "id"] },
   { table: "dispute_credit_adjustment_lines", column: "creditor_id", path: "disputeCreditAdjustmentLines", kind: "jsonb", orderBy: ["adjustment_id", "id"] },
   { table: "contributor_work_mail_confirmations", column: "user_id", path: "workMailConfirmations", kind: "jsonb", orderBy: ["sent_at", "id"] },
+  { table: "teams", column: "lead_id", path: "teamsLed", kind: "jsonb", orderBy: ["created_at", "id"] },
+  { table: "team_memberships", column: "user_id", path: "teamMemberships", kind: "jsonb", orderBy: ["joined_at", "id"] },
+  { table: "team_distributions", column: "member_id", path: "teamDistributions", kind: "jsonb", orderBy: ["created_at", "id"] },
 ];
 
 function iso(value: Date): string {
@@ -427,6 +433,9 @@ export async function exportAccount(
         moderationCreditAdjustmentLines: [],
         disputeCreditAdjustments: [],
         disputeCreditAdjustmentLines: [],
+        teamsLed: [],
+        teamMemberships: [],
+        teamDistributions: [],
       };
 
       // The loader is selected on the entry's declared kind. An explicit-kind
