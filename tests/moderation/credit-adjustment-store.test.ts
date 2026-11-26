@@ -504,14 +504,17 @@ describe("PostgreSQL recalibration credit adjustments", () => {
   });
 
   it.each([
-    ["the same contribution", {}, false],
-    ["the same contribution with another proof", { proofSha256: proofFor(2) }, false],
-    ["another repository", { githubRepositoryId: 9 }, true],
-    ["another issue", { githubIssueId: 9 }, true],
-    ["another pull request", { githubPullRequestId: 9 }, true],
-    ["its repository and issue swapped", { githubRepositoryId: 23, githubIssueId: 1 }, true],
-    ["its repository and issue digits regrouped", { githubRepositoryId: 12, githubIssueId: 3 }, true],
-  ] as const)("parses a stored cohort list repeating a pair as %s only when it names another contribution", (_label, change, accepted) => {
+    ["is the same contribution", {}, false],
+    ["is the same contribution with another proof", { proofSha256: proofFor(2) }, false],
+    ["names another repository", { githubRepositoryId: 9 }, true],
+    ["names another issue", { githubIssueId: 9 }, true],
+    ["names another pull request", { githubPullRequestId: 9 }, true],
+    ["swaps the repository and issue", { githubRepositoryId: 23, githubIssueId: 1 }, true],
+    ["regroups the repository and issue digits", { githubRepositoryId: 12, githubIssueId: 3 }, true],
+    ["swaps the issue and pull request", { githubIssueId: 45, githubPullRequestId: 23 }, true],
+    ["regroups the issue and pull request digits", { githubIssueId: 2, githubPullRequestId: 345 }, true],
+  ] as const)("parses a repeated stored pair that %s, accepting it only as another contribution", (_label, change, accepted) => {
+    // (1, 23, 45): every boundary of the identity key has a row that collides under a key that drops or reorders it.
     const first: CalibrationPair = {
       githubRepositoryId: 1, githubIssueId: 23, githubPullRequestId: 45, mergedAt: SAMPLE_STARTED_AT,
       proofSha256: proofFor(1), offeredDifficulty: 4, settledDifficulty: 4,
