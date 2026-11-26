@@ -89,7 +89,7 @@ describe("webhook delivery classification", () => {
 
   it.each([
     undefined, { state: null }, { state: {} }, { state: { from: "started" } },
-    { state_reason: null }, { state_reason: { from: 1 } },
+    { state_reason: null }, { state_reason: { from: 1 } }, { state_reason: {} }, null,
   ])("rejects malformed issues/status_changed changes %j", (changes) => {
     expect(parseGitHubWebhookDeliveryDetailed("issues", "delivery", {
       action: "status_changed", repository: { id: 42, full_name: "octo/example" }, issue, changes,
