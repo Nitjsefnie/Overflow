@@ -3,9 +3,10 @@ import type { FoldUser } from "@/lib/fold/repository-fold";
 
 export type FoldTeamMembership = { teamId: string; joinedAt: string; leftAt: string | null };
 
-/** The team credited for the account's work merged at `at`, or null; of two overlapping rows the later join wins. */
+/** The team credited for work merged at `at`, or null. Overlap: latest join, then greatest team id (as identity-claims' SQL). */
 export function teamAt(user: FoldUser | undefined, at: string): string | null {
-  return coveringMemberships(user, at).sort((left, right) => (left.joined > right.joined ? -1 : 1))[0]?.teamId ?? null;
+  return coveringMemberships(user, at).sort((left, right) => left.joined !== right.joined
+    ? (left.joined > right.joined ? -1 : 1) : (left.teamId > right.teamId ? -1 : 1))[0]?.teamId ?? null;
 }
 
 /** Self-work: the author is the sponsor, or the sponsor was in the author's team at `at`. */

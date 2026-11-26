@@ -23,6 +23,8 @@ create table team_memberships (
 
 create unique index team_memberships_one_open_per_account on team_memberships (user_id) where left_at is null;
 create index team_memberships_team_idx on team_memberships (team_id);
+-- Every membership lookup is by account, ordered or bounded by joined_at.
+create index team_memberships_user_idx on team_memberships (user_id, joined_at);
 
 create or replace function reject_team_membership_change()
 returns trigger
