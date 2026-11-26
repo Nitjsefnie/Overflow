@@ -706,7 +706,7 @@ export async function listSettlementHistory(
       settlements.review_rounds,
       settlements.created_at as settled_at,
       case
-        when settlements.status = 'SETTLED' and settlements.creditor_id = ${accountId} then settlements.credits
+        when settlements.status = 'SETTLED' and settlements.creditor_id = ${accountId} and settlements.team_id is null then settlements.credits
         when settlements.status = 'SETTLED' and settlements.debtor_id = ${accountId} then -settlements.credits
         else 0
       end::integer as balance_effect
@@ -767,7 +767,7 @@ export async function getSettlementProof(
       settlements.credits,
       settlements.created_at as settled_at,
       case
-        when settlements.status = 'SETTLED' and settlements.creditor_id = ${accountId} then settlements.credits
+        when settlements.status = 'SETTLED' and settlements.creditor_id = ${accountId} and settlements.team_id is null then settlements.credits
         when settlements.status = 'SETTLED' and settlements.debtor_id = ${accountId} then -settlements.credits
         else 0
       end::integer as balance_effect

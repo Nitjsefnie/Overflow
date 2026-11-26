@@ -3,6 +3,7 @@ import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
+import { getSettlementProof, listSettlementHistory } from "@/lib/dashboard/queries";
 import { claimForgeIdentity, claimGitHubIdentity, reResolveIdentityClaims } from "@/lib/fold/identity-claims";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository } from "@/lib/fold/reconcile";
@@ -171,6 +172,21 @@ describe("a reconciled settlement of a team member's merged closing pull request
       values (${outsider.id}, ${closed.id}, ${teamSettlement.issue_id}, ${teamSettlement.pull_request_id}, 'My work landed.',
         'DECIDED', 'GRANTED', ${moderator.id}, 'Copied.', '2026-10-01T00:00:00Z', 6, 6)`;
     expect(await balancesOf(sql, teamId, member.id)).toEqual([-2, 2]);
+  });
+
+  it("shows the author no balance effect for a team settlement, and the credits for any other", async () => {
+    const [sponsor, lead, member, outsider] = await Promise.all(Array.from({ length: 4 }, account));
+    const teamId = await team(lead, [member, "2026-08-01T00:00:00Z"]);
+    const repo = await repository(sponsor);
+    const prs = [member, outsider].map((author) => pullRequest(repo, author));
+    await reconcile(repo, prs.map((pr) => closedIssue(repo, pr)));
+
+    expect(await balancesOf(sql, teamId, member.id, outsider.id)).toEqual([6, 0, 6]);
+    for (const [author, pr, effect] of [[member, prs[0]!, 0], [outsider, prs[1]!, 6]] as const) {
+      const settlement = (await settlementOf(pr))!;
+      expect((await listSettlementHistory(author.id, { sql })).map((row) => row.balanceEffect)).toEqual([effect]);
+      expect(await getSettlementProof(author.id, settlement.id, { sql })).toMatchObject({ balanceEffect: effect });
+    }
   });
 
   it("settles as self-work in a teammate's repository, and to the team in any other sponsor's", async () => {
