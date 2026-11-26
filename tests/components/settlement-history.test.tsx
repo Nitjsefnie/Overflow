@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { DashboardContent } from "@/app/dashboard/page";
 import { SettlementHistoryContent } from "@/app/settlements/page";
 import { AppShell } from "@/components/app-shell";
-import type { SettlementHistoryProjection } from "@/lib/dashboard/queries";
+import type { SettlementHistoryProjection } from "@/lib/dashboard/settlement-calibration";
 
 const settled: SettlementHistoryProjection = {
   id: "settlement-9",

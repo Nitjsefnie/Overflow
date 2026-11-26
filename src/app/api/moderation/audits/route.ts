@@ -8,7 +8,7 @@ import {
   type ModerationRouteSession,
 } from "@/lib/moderation/route-auth";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
-import { listOpenAudits, type OpenAuditProjection } from "@/lib/dashboard/queries";
+import { listOpenAudits, type OpenAuditProjection } from "@/lib/dashboard/settlement-calibration";
 import { PostgresApiTokenStore } from "@/lib/tokens/postgres-store";
 
 export type ModerationAuditsRouteDependencies = {

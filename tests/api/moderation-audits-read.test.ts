@@ -4,7 +4,7 @@ import {
   GET as productionGet,
   type ModerationAuditsRouteDependencies,
 } from "@/app/api/moderation/audits/route";
-import type { OpenAuditProjection } from "@/lib/dashboard/queries";
+import type { OpenAuditProjection } from "@/lib/dashboard/settlement-calibration";
 
 vi.mock("@/auth", () => ({ auth: vi.fn().mockResolvedValue(null) }));
 

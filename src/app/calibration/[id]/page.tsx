@@ -24,7 +24,7 @@ export default async function CalibrationProofPage({ params }: CalibrationProofP
   const session = await requireMemberPageSession();
   const { id } = await params;
   try {
-    const { getSelfWorkCalibrationProof } = await import("@/lib/dashboard/queries");
+    const { getSelfWorkCalibrationProof } = await import("@/lib/dashboard/settlement-calibration");
     const calibration = await getSelfWorkCalibrationProof(session.user.id, id);
     if (calibration === null) {
       return (

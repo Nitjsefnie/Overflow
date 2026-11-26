@@ -9,13 +9,12 @@ import type { BannedAccountProjection } from "@/lib/moderation/banned-accounts";
 import type { OpenContestRequestProjection } from "@/lib/moderation/sanction-contest-service";
 import type { CreditIssuedProjection, PickupProjection } from "@/lib/dashboard/ledger-panels";
 import type {
-  AuditCandidateProjection,
   EnforcementHistoryProjection,
   ModerationRepositoryProjection,
-  OpenAuditProjection,
   RecalibratingAccountProjection,
   UnwritableClosureQueues,
 } from "@/lib/dashboard/queries";
+import type { AuditCandidateProjection, OpenAuditProjection } from "@/lib/dashboard/settlement-calibration";
 import {
   isModeratorSession,
   requireMemberPageSession,
@@ -84,11 +83,8 @@ export default async function ModerationPage() {
     pickup = null;
   }
   try {
-    const {
-      listEnforcementHistory,
-      listOpenAudits,
-      listRecalibratingAccounts,
-    } = await import("@/lib/dashboard/queries");
+    const { listEnforcementHistory, listRecalibratingAccounts } = await import("@/lib/dashboard/queries");
+    const { listOpenAudits } = await import("@/lib/dashboard/settlement-calibration");
     const { listBannedAccounts } = await import("@/lib/moderation/banned-accounts");
     const { PostgresModerationStore } = await import("@/lib/moderation/postgres-store");
     const { PostgresSanctionContestStore } = await import("@/lib/moderation/sanction-contest-store");
@@ -104,7 +100,7 @@ export default async function ModerationPage() {
     audits = null;
   }
   try {
-    const { listAuditCandidates } = await import("@/lib/dashboard/queries");
+    const { listAuditCandidates } = await import("@/lib/dashboard/settlement-calibration");
     auditCandidates = await listAuditCandidates();
   } catch {
     auditCandidates = null;

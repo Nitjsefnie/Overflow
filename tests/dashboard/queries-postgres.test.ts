@@ -4,7 +4,8 @@ import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
-import { getDashboard, listAuditCandidates, listModerationRepositories } from "@/lib/dashboard/queries";
+import { getDashboard, listModerationRepositories } from "@/lib/dashboard/queries";
+import { listAuditCandidates } from "@/lib/dashboard/settlement-calibration";
 
 let container: StartedTestContainer | undefined;
 let sql: Sql;

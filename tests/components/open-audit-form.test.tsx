@@ -5,7 +5,8 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import ModerationPage from "@/app/moderation/page";
 import { OpenAuditForm } from "@/components/open-audit-form";
 import { MINIMUM_CALIBRATION_SAMPLE_SIZE } from "@/lib/calibration/statistics";
-import type { AuditCandidateProjection, ModerationRepositoryProjection } from "@/lib/dashboard/queries";
+import type { ModerationRepositoryProjection } from "@/lib/dashboard/queries";
+import type { AuditCandidateProjection } from "@/lib/dashboard/settlement-calibration";
 import { MAX_REASON_LENGTH } from "@/lib/validation/reason";
 
 // Bind the page/route graph to this file's mocks and release it afterward.

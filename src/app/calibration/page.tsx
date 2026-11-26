@@ -1,14 +1,14 @@
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { CalibrationPanel, SelfWorkCalibrationList } from "@/components/calibration-panel";
-import type { SelfWorkCalibrationProjection } from "@/lib/dashboard/queries";
+import type { SelfWorkCalibrationProjection } from "@/lib/dashboard/settlement-calibration";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
 
 export default async function CalibrationPage() {
   const session = await requireMemberPageSession();
   try {
     const { loadCalibrationCohorts, getCalibrationComparison, getCalibrationComparisonByRepository } =
-      await import("@/lib/dashboard/queries");
+      await import("@/lib/dashboard/settlement-calibration");
     // The breakdown shares the comparison's arm: it is the same measurement read
     // per repository, so a page that lost it would show a pooled mean over two
     // opening scales with nothing saying so. Both views derive from one cohort
@@ -51,7 +51,7 @@ export default async function CalibrationPage() {
  */
 async function listCalibrations(accountId: string): Promise<SelfWorkCalibrationProjection[] | null> {
   try {
-    const { listSelfWorkCalibrations } = await import("@/lib/dashboard/queries");
+    const { listSelfWorkCalibrations } = await import("@/lib/dashboard/settlement-calibration");
     return await listSelfWorkCalibrations(accountId);
   } catch {
     return null;

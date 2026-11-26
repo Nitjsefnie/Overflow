@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
-import { SETTLEMENT_HISTORY_LIMIT, type SettlementHistoryProjection, type SettlementStatus } from "@/lib/dashboard/queries";
+import { type SettlementStatus } from "@/lib/dashboard/queries";
+import { SETTLEMENT_HISTORY_LIMIT, type SettlementHistoryProjection } from "@/lib/dashboard/settlement-calibration";
 import { isModeratorSession, requireMemberPageSession } from "@/lib/dashboard/session";
 import { formatInstant } from "@/lib/format-instant";
 import { formatSigned } from "@/lib/format-signed";
@@ -70,7 +71,7 @@ export function SettlementHistoryContent({ memberName, isModerator, settlements 
 export default async function SettlementHistoryPage() {
   const session = await requireMemberPageSession();
   try {
-    const { listSettlementHistory } = await import("@/lib/dashboard/queries");
+    const { listSettlementHistory } = await import("@/lib/dashboard/settlement-calibration");
     const settlements = await listSettlementHistory(session.user.id);
     return (
       <SettlementHistoryContent

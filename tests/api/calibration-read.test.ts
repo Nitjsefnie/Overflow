@@ -7,7 +7,7 @@ import type {
   CalibrationComparison,
   RepositoryCalibrationEntry,
 } from "@/lib/calibration/statistics";
-import type { CalibrationCohorts, SelfWorkCalibrationProjection } from "@/lib/dashboard/queries";
+import type { CalibrationCohorts, SelfWorkCalibrationProjection } from "@/lib/dashboard/settlement-calibration";
 
 const memberId = "00000000-0000-4000-8000-000000000001";
 

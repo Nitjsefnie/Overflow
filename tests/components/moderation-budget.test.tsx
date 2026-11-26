@@ -34,13 +34,12 @@ vi.mock("@/lib/dashboard/session", () => ({
   isModeratorSession: (session: { user: { role: string } }) => session.user.role === "MODERATOR",
 }));
 vi.mock("@/lib/dashboard/queries", () => ({
-  listOpenAudits: loaders.audits,
   listEnforcementHistory: loaders.history,
   listRecalibratingAccounts: loaders.recalibrating,
-  listAuditCandidates: loaders.candidates,
   listModerationRepositories: loaders.repositories,
   listUnwritableClosures: loaders.closures,
 }));
+vi.mock("@/lib/dashboard/settlement-calibration", () => ({ listOpenAudits: loaders.audits, listAuditCandidates: loaders.candidates }));
 vi.mock("@/lib/dashboard/ledger-panels", () => ({ listCreditIssued: loaders.creditIssued, listPickup: loaders.pickup }));
 vi.mock("@/lib/moderation/banned-accounts", () => ({ listBannedAccounts: loaders.banned }));
 vi.mock("@/lib/moderation/sanction-contest-store", () => ({

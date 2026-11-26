@@ -37,6 +37,7 @@ import { createSettlementOverridePatchHandler } from "@/app/api/overrides/[id]/r
 import {
   listEligibleIssues,
 } from "@/lib/dashboard/eligible-issues";
+import { getDashboard, listUnwritableClosures } from "@/lib/dashboard/queries";
 import {
   listSettlementHistory,
   getSettlementProof,
@@ -44,10 +45,8 @@ import {
   getCalibrationComparisonByRepository,
   listSelfWorkCalibrations,
   loadCalibrationCohorts,
-  getDashboard,
   listOpenAudits,
-  listUnwritableClosures,
-} from "@/lib/dashboard/queries";
+} from "@/lib/dashboard/settlement-calibration";
 
 /**
  * The registry hands a wrapped handler an optional generic params context;

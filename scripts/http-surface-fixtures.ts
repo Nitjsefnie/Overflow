@@ -39,10 +39,8 @@ import type {
   CalibrationPair,
 } from "../src/lib/calibration/statistics.ts";
 import type { SqlClient } from "../src/lib/db/types.ts";
-import type {
-  OpenAuditProjection,
-  UnwritableClosureProjection,
-} from "../src/lib/dashboard/queries.ts";
+import type { UnwritableClosureProjection } from "../src/lib/dashboard/queries.ts";
+import type { OpenAuditProjection } from "../src/lib/dashboard/settlement-calibration.ts";
 import type {
   OutstandingRederivationRequest,
   RederivationOverview,

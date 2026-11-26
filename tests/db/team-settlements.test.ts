@@ -3,7 +3,7 @@ import type { Sql } from "postgres";
 import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
-import { getSettlementProof, listSettlementHistory } from "@/lib/dashboard/queries";
+import { getSettlementProof, listSettlementHistory } from "@/lib/dashboard/settlement-calibration";
 import { claimForgeIdentity, claimGitHubIdentity, reResolveIdentityClaims } from "@/lib/fold/identity-claims";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { reconcileRepository } from "@/lib/fold/reconcile";
