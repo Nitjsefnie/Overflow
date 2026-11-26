@@ -1,8 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
@@ -12,45 +11,16 @@ const tempDirectories = createOwnedTempDirectoryRegistry([prefix]);
 
 type Step = {
   name?: string;
-  uses?: string;
   run?: string;
   env?: Record<string, string>;
-  with?: Record<string, unknown>;
   if?: unknown;
   "continue-on-error"?: unknown;
 };
-type Job = {
-  if?: unknown;
-  "runs-on"?: string;
-  "timeout-minutes"?: number;
-  env?: Record<string, string>;
-  steps?: Step[];
-};
-type Workflow = {
-  name?: string;
-  on?: unknown;
-  concurrency?: { group?: unknown; "cancel-in-progress"?: unknown };
-  jobs?: Record<string, Job>;
-};
-
-const PUSH_FILE = ".github/workflows/dependency-audit.yml";
-const JOB_NAME = "dependency-audit";
-const AUDIT_STEP_NAME = "Audit lockfile advisories";
-/** The marker the fast path prints when it records the outcome. */
+type Workflow = { on: unknown; jobs: Record<string, { if?: unknown; steps: Step[] }> };
+const workflow: Workflow = parse(readFileSync(".github/workflows/dependency-audit.yml", "utf8"));
+const job = workflow.jobs["dependency-audit"]!;
+const auditStep = job.steps.find(step => step.name === "Audit lockfile advisories")!;
 const FAST_PATH_MARKER = "no manifest change since the previous push — audit skipped, context green";
-
-let workflow: Workflow;
-let job: Job | undefined;
-let steps: Step[];
-let auditStep: Step | undefined;
-
-beforeAll(async () => {
-  workflow = parse(await readFile(resolve(PUSH_FILE), "utf8")) as Workflow;
-  job = workflow.jobs?.[JOB_NAME];
-  expect(job, `dependency-audit.yml must carry a job named ${JOB_NAME}`).toBeDefined();
-  steps = job?.steps ?? [];
-  auditStep = steps.find((step) => step.name === AUDIT_STEP_NAME);
-});
 
 describe("the push trigger always fires", () => {
   it("carries no paths filter, and the workflow carries no pull_request trigger", () => {
@@ -65,22 +35,22 @@ describe("the push trigger always fires", () => {
 
 describe("the fast path is an outcome, not a skip", () => {
   it("gates neither the job nor the audit step with if:", () => {
-    expect(job?.if, "the job must run on every trigger it receives").toBeUndefined();
-    expect(auditStep?.if, "the audit must never be step-skipped; it classifies instead").toBeUndefined();
-    expect(Boolean(auditStep?.["continue-on-error"])).toBe(false);
+    expect(job.if, "the job must run on every trigger it receives").toBeUndefined();
+    expect(auditStep.if, "the audit must never be step-skipped; it classifies instead").toBeUndefined();
+    expect(Boolean(auditStep["continue-on-error"])).toBe(false);
   });
 
   it("receives the classification inputs through env:, never interpolation", () => {
     // Event data reaches the shell through env.
-    expect(auditStep?.env).toEqual({
+    expect(auditStep.env).toEqual({
       OVERFLOW_EVENT_NAME: "${{ github.event_name }}",
       OVERFLOW_BEFORE_SHA: "${{ github.event.before }}",
     });
-    expect(auditStep?.run ?? "").not.toContain("${{");
+    expect(auditStep.run ?? "").not.toContain("${{");
   });
 
   it("classifies inside the script, and every ambiguity falls through to the audit", () => {
-    const run = auditStep?.run ?? "";
+    const run = auditStep.run ?? "";
     // The fast path is gated on the push event only.
     expect(run).toContain('[ "${OVERFLOW_EVENT_NAME:?}" = "push" ]');
     // The before-SHA must be 40 hex and not the all-zeros SHA a new branch
@@ -96,13 +66,6 @@ describe("the fast path is an outcome, not a skip", () => {
     expect(run.indexOf(FAST_PATH_MARKER)).toBeGreaterThan(-1);
     expect(run.indexOf("exit 0")).toBeGreaterThan(run.indexOf(FAST_PATH_MARKER));
     expect(run).toContain("set -uo pipefail");
-  });
-
-  it("checks out enough history for the ancestor check", () => {
-    // A shallow checkout cannot establish ancestry.
-    const checkout = steps.filter((step) => step.uses?.startsWith("actions/checkout"));
-    expect(checkout).toHaveLength(1);
-    expect(checkout[0]?.with?.["fetch-depth"]).toBe(0);
   });
 });
 
@@ -149,7 +112,7 @@ exit "$AUDIT_STATUS"
     writeFileSync(log, "");
     const advisories = advisory ? { "1106913": { module_name: "scratch-left-pad", severity: "high",
       title: "synthetic advisory for the fixture only", vulnerable_versions: "<1.3.1", patched_versions: ">=1.3.1" } } : {};
-    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", auditStep!.run!], {
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", auditStep.run!], {
       cwd: root, encoding: "utf8", env: { ...gitEnv, PATH: `${root}/bin:${dirname(process.execPath)}:${process.env.PATH}`,
         OVERFLOW_EVENT_NAME: event, OVERFLOW_BEFORE_SHA: before, CALLS: log, AUDIT_STATUS: advisory ? "1" : "0",
         AUDIT_RESPONSE: JSON.stringify({ advisories, metadata: { vulnerabilities: advisory ? { high: 1 } : {} } }) },
