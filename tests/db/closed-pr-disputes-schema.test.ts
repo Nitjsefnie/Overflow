@@ -91,7 +91,7 @@ describe("closed PR dispute schema", () => {
       // again before the upgrade runs, the schema is 073's exactly.
       await sql`alter table issues add column asks_outside_repository boolean not null default false, add column done_when text`;
       await sql`alter table unwritable_closures add column unlabelled_self_work boolean not null default false`;
-      await sql`alter table settlements add column donation_comment_id text`;
+      await sql`alter table settlements add column donation_comment_id text, add column team_id uuid`;
       await sql`alter table registered_repositories add column first_listed_issue_id bigint,
         add column second_issue_listed boolean not null default false,
         add column contributor_review_received boolean not null default false`;
@@ -107,7 +107,7 @@ describe("closed PR dispute schema", () => {
       }
       await sql`alter table issues drop column asks_outside_repository, drop column done_when`;
       await sql`alter table unwritable_closures drop column unlabelled_self_work`;
-      await sql`alter table settlements drop column donation_comment_id`;
+      await sql`alter table settlements drop column donation_comment_id, drop column team_id`;
       await sql`alter table registered_repositories drop column first_listed_issue_id,
         drop column second_issue_listed, drop column contributor_review_received`;
       await expect(runMigrations()).rejects.toThrow(
