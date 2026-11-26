@@ -500,11 +500,11 @@ type ResolvedStoredPairs = {
 type ResolvedOutsiderSettlement = { settlementId: string; creditorId: string };
 
 /**
- * Resolves every stored pair to its live row and verifies it unchanged: an
- * outsider pair by the settlement's unique proof fingerprint (same debtor,
- * status SETTLED, unchanged points and contribution identity), a self-work
- * pair by the pull request's proof and the sponsor's calibration row. Any
- * drift refuses the whole resolution — the result the service maps to CONFLICT.
+ * Resolves each stored pair to its live row by contribution identity
+ * (repository, issue, pull request), never by proof, which pairs may share,
+ * and verifies it unchanged: an outsider pair to the SETTLED settlement the
+ * account owes, a self-work pair to its calibration row, with the stored
+ * points, merge time and proof. Any drift refuses the whole resolution.
  */
 async function resolveStoredPairs(
   sql: SqlClient | TransactionClient,
@@ -541,40 +541,27 @@ async function resolveOutsiderSettlement(
       settlements.status::text as status,
       settlements.opening_comparison_points,
       settlements.settled_points,
-      registered_repositories.github_repository_id,
-      issues.github_issue_id,
-      pull_requests.github_pull_request_id,
+      settlements.proof_sha256,
       pull_requests.merged_at
     from settlements
     join pull_requests on pull_requests.id = settlements.pull_request_id
     join issues on issues.id = settlements.issue_id
     join registered_repositories on registered_repositories.id = issues.repository_id
-    where settlements.proof_sha256 = ${pair.proofSha256}
+    where ${contributionPredicate(sql, pair)}
       and settlements.debtor_id = ${targetAccountId}
     limit 2
   `;
   if (rows.length === 0) {
-    return `No live settlement carries the stored proof fingerprint ${proofPrefix(pair.proofSha256)}.`;
+    return `No live settlement matches ${storedContribution(pair)}.`;
   }
   if (rows.length > 1) {
-    return `The stored proof fingerprint ${proofPrefix(pair.proofSha256)} resolves to more than one settlement.`;
+    return `More than one settlement matches ${storedContribution(pair)}.`;
   }
   const row = rows[0]!;
   if (row.status !== "SETTLED") {
-    return `The settlement with proof fingerprint ${proofPrefix(pair.proofSha256)} is no longer SETTLED.`;
+    return `The settlement for ${storedContribution(pair)} is no longer SETTLED.`;
   }
-  const drift = storedPairDrift(
-    pair,
-    {
-      opening_comparison_points: row.opening_comparison_points,
-      settled_points: row.settled_points,
-      github_repository_id: row.github_repository_id,
-      github_issue_id: row.github_issue_id,
-      github_pull_request_id: row.github_pull_request_id,
-      merged_at: row.merged_at,
-    },
-    `The settlement with proof fingerprint ${proofPrefix(pair.proofSha256)}`,
-  );
+  const drift = storedPairDrift(pair, row, `The settlement for ${storedContribution(pair)}`);
   if (drift !== null) {
     return drift;
   }
@@ -589,37 +576,34 @@ async function verifySelfWorkPair(
   const rows = await sql<SelfWorkResolutionRow[]>`
     select
       self_work_calibrations.opening_comparison_points,
-      self_work_calibrations.actual_points,
-      registered_repositories.github_repository_id,
-      issues.github_issue_id,
-      pull_requests.github_pull_request_id,
+      self_work_calibrations.actual_points as settled_points,
+      pull_requests.proof_sha256,
       pull_requests.merged_at
     from self_work_calibrations
     join pull_requests on pull_requests.id = self_work_calibrations.pull_request_id
     join issues on issues.id = self_work_calibrations.issue_id
     join registered_repositories on registered_repositories.id = issues.repository_id
-    where pull_requests.proof_sha256 = ${pair.proofSha256}
+    where ${contributionPredicate(sql, pair)}
       and self_work_calibrations.user_id = ${targetAccountId}
     limit 2
   `;
   if (rows.length === 0) {
-    return `No live self-work calibration carries the stored proof fingerprint ${proofPrefix(pair.proofSha256)}.`;
+    return `No live self-work calibration matches ${storedContribution(pair)}.`;
   }
   if (rows.length > 1) {
-    return `The stored proof fingerprint ${proofPrefix(pair.proofSha256)} resolves to more than one self-work calibration.`;
+    return `More than one self-work calibration matches ${storedContribution(pair)}.`;
   }
-  return storedPairDrift(
-    pair,
-    {
-      opening_comparison_points: rows[0]!.opening_comparison_points,
-      settled_points: rows[0]!.actual_points,
-      github_repository_id: rows[0]!.github_repository_id,
-      github_issue_id: rows[0]!.github_issue_id,
-      github_pull_request_id: rows[0]!.github_pull_request_id,
-      merged_at: rows[0]!.merged_at,
-    },
-    `The self-work calibration with proof fingerprint ${proofPrefix(pair.proofSha256)}`,
-  );
+  return storedPairDrift(pair, rows[0]!, `The self-work calibration for ${storedContribution(pair)}`);
+}
+
+function contributionPredicate(sql: SqlClient | TransactionClient, pair: CalibrationPair) {
+  return sql`registered_repositories.github_repository_id = ${pair.githubRepositoryId}
+      and issues.github_issue_id = ${pair.githubIssueId}
+      and pull_requests.github_pull_request_id = ${pair.githubPullRequestId}`;
+}
+
+function storedContribution(pair: CalibrationPair): string {
+  return `the stored contribution (repository ${pair.githubRepositoryId}, issue ${pair.githubIssueId}, pull request ${pair.githubPullRequestId})`;
 }
 
 function storedPairDrift(
@@ -627,9 +611,7 @@ function storedPairDrift(
   observed: {
     opening_comparison_points: number | string;
     settled_points: number | string | null;
-    github_repository_id: number | string;
-    github_issue_id: number | string;
-    github_pull_request_id: number | string;
+    proof_sha256: string | null;
     merged_at: string | Date;
   },
   subject: string,
@@ -640,12 +622,8 @@ function storedPairDrift(
   if (observed.settled_points === null || toSafeInteger(observed.settled_points) !== pair.settledDifficulty) {
     return `${subject} no longer carries the stored settled difficulty ${pair.settledDifficulty}.`;
   }
-  if (
-    toSafeInteger(observed.github_repository_id) !== pair.githubRepositoryId ||
-    toSafeInteger(observed.github_issue_id) !== pair.githubIssueId ||
-    toSafeInteger(observed.github_pull_request_id) !== pair.githubPullRequestId
-  ) {
-    return `${subject} no longer resolves to the stored contribution.`;
+  if (observed.proof_sha256 !== pair.proofSha256) {
+    return `${subject} no longer carries the stored proof fingerprint ${proofPrefix(pair.proofSha256)}.`;
   }
   if (toIsoTimestamp(observed.merged_at) !== pair.mergedAt) {
     return `${subject} no longer carries the stored merge time.`;
@@ -776,26 +754,14 @@ type LineRow = {
 
 type AdjustmentLineRow = LineRow & { adjustment_id: string };
 
-type OutsiderResolutionRow = {
-  settlement_id: string;
-  creditor_id: string;
-  status: string;
+type SelfWorkResolutionRow = {
   opening_comparison_points: number | string;
   settled_points: number | string | null;
-  github_repository_id: number | string;
-  github_issue_id: number | string;
-  github_pull_request_id: number | string;
+  proof_sha256: string | null;
   merged_at: string | Date;
 };
 
-type SelfWorkResolutionRow = {
-  opening_comparison_points: number | string;
-  actual_points: number | string | null;
-  github_repository_id: number | string;
-  github_issue_id: number | string;
-  github_pull_request_id: number | string;
-  merged_at: string | Date;
-};
+type OutsiderResolutionRow = SelfWorkResolutionRow & { settlement_id: string; creditor_id: string; status: string };
 
 function isUniqueViolation(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "23505";

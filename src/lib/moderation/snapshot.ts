@@ -64,7 +64,7 @@ function parseStoredPairs(value: unknown): CalibrationPair[] | null {
     return null;
   }
   const pairs: CalibrationPair[] = [];
-  const seenProofs = new Set<string>();
+  const seenContributions = new Set<string>();
   for (const entry of value) {
     if (typeof entry !== "object" || entry === null) {
       return null;
@@ -84,13 +84,16 @@ function parseStoredPairs(value: unknown): CalibrationPair[] | null {
     ) {
       return null;
     }
-    // A repeated proof inside one cohort list would compensate one settlement
-    // twice (or inflate a self cohort it does not belong to), so a snapshot
-    // carrying one is malformed evidence, refused before anything computes.
-    if (seenProofs.has(proofSha256)) {
+    // A contribution listed twice in one cohort list would compensate one
+    // settlement twice (or weight one self-work pair twice), so it is malformed
+    // evidence. A repeated proof is not: one pull request closing two issues,
+    // or two folded with the empty diff, share one. The live lookup keys on
+    // this same identity, so two pairs that both resolve name two live rows.
+    const contribution = `${pair["githubRepositoryId"]}/${pair["githubIssueId"]}/${pair["githubPullRequestId"]}`;
+    if (seenContributions.has(contribution)) {
       return null;
     }
-    seenProofs.add(proofSha256);
+    seenContributions.add(contribution);
     pairs.push({
       githubRepositoryId: pair["githubRepositoryId"],
       githubIssueId: pair["githubIssueId"],
