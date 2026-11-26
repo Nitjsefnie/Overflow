@@ -255,7 +255,8 @@
         0.0
       ],
       "tests/ci/verify-pr-tree.test.ts": [
-        8.02
+        8.02,
+        4.99
       ],
       "tests/ci/verify-step-reachability.test.ts": [
         0.02
@@ -354,7 +355,8 @@
         0.24
       ],
       "tests/components/repository-form.test.tsx": [
-        8.1
+        8.1,
+        10.83
       ],
       "tests/components/repository-registration-gate.test.tsx": [
         1.1
@@ -483,7 +485,8 @@
         0.1
       ],
       "tests/db/api-token-delivery-window.test.ts": [
-        3.26
+        3.26,
+        1.49
       ],
       "tests/db/api-token-expiry.test.ts": [
         0.69
@@ -528,7 +531,8 @@
         3.49
       ],
       "tests/db/closed-pr-disputes-schema.test.ts": [
-        3.71
+        3.71,
+        2.16
       ],
       "tests/db/closesql-connection-death.test.ts": [
         0.03
@@ -549,7 +553,8 @@
         1.49
       ],
       "tests/db/data-subject-requests.test.ts": [
-        3.88
+        3.88,
+        2.22
       ],
       "tests/db/deploy-migration-status.test.ts": [
         0.73
@@ -585,10 +590,12 @@
         0.58
       ],
       "tests/db/migrate-default-branch-guard.test.ts": [
-        6.45
+        6.45,
+        3.5
       ],
       "tests/db/migration-checksum.test.ts": [
-        7.26
+        7.26,
+        4.92
       ],
       "tests/db/migration-compatibility.test.ts": [
         3.9
@@ -624,7 +631,8 @@
         0.04
       ],
       "tests/db/privileged-action-credentials-migration.test.ts": [
-        23.3
+        23.3,
+        15.5
       ],
       "tests/db/prune-noop-reconciliation-changes.test.ts": [
         0.55
@@ -696,7 +704,8 @@
         0.02
       ],
       "tests/db/schema.test.ts": [
-        13.59
+        13.59,
+        9.9
       ],
       "tests/db/shutdown-backlog-drain.test.ts": [
         3.07
@@ -786,7 +795,8 @@
         0.4
       ],
       "tests/deploy/deploy-readme-fallback.test.ts": [
-        5.61
+        5.61,
+        1.79
       ],
       "tests/deploy/deploy-revision-ledger.test.ts": [
         13.25
@@ -798,7 +808,8 @@
         38.35
       ],
       "tests/deploy/edge-instrumentation-bundle.test.ts": [
-        95.19
+        95.19,
+        130.39
       ],
       "tests/deploy/eslint-config.test.ts": [
         0.46
@@ -807,7 +818,8 @@
         0.07
       ],
       "tests/deploy/next-config.test.ts": [
-        21.76
+        21.76,
+        13.1
       ],
       "tests/deploy/postgres-patch.test.ts": [
         0.07
@@ -822,7 +834,8 @@
         0.35
       ],
       "tests/deploy/release-build.test.ts": [
-        118.35
+        118.35,
+        73.93
       ],
       "tests/deploy/release-check.test.ts": [
         7.02
@@ -831,7 +844,8 @@
         4.54
       ],
       "tests/deploy/release-script.test.ts": [
-        8.88
+        8.88,
+        13.51
       ],
       "tests/deploy/tsconfig.test.ts": [
         0.0
@@ -1218,13 +1232,15 @@
         111.4
       ],
       "tests/lib/http-surface-record.test.ts": [
-        50.2
+        50.2,
+        77.64
       ],
       "tests/lib/http-surface-snapshot.test.ts": [
         39.71
       ],
       "tests/lib/http-surface-type-edges.test.ts": [
-        108.24
+        108.24,
+        74.54
       ],
       "tests/lib/http/error-response.test.ts": [
         3.66
@@ -1260,7 +1276,8 @@
         0.01
       ],
       "tests/lib/snapshot-updater-cli.test.ts": [
-        360.11
+        360.11,
+        195.31
       ],
       "tests/lib/strip-name-prefix.test.ts": [
         0.0
@@ -1356,7 +1373,8 @@
         0.54
       ],
       "tests/scripts/check-legal-revisions.test.ts": [
-        2.59
+        2.59,
+        4.6
       ],
       "tests/scripts/check-page-geometry-board.test.ts": [
         0.34
@@ -1452,7 +1470,8 @@
         28.87
       ],
       "tests/scripts/ratchets.test.ts": [
-        8.15
+        8.15,
+        3.8
       ],
       "tests/scripts/resolve-suite-pull-request.test.ts": [
         37.6
