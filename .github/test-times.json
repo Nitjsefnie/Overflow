@@ -458,7 +458,8 @@
       ],
       "tests/dashboard/queries-postgres.test.ts": [
         2.84,
-        1.48
+        1.48,
+        3.96
       ],
       "tests/dashboard/queries.test.ts": [
         6.65,
@@ -613,7 +614,8 @@
       "tests/db/migration-checksum.test.ts": [
         7.26,
         4.92,
-        2.94
+        2.94,
+        9.42
       ],
       "tests/db/migration-compatibility.test.ts": [
         3.9,
@@ -1281,7 +1283,8 @@
       ],
       "tests/lib/http-surface-non-envelope.test.ts": [
         111.4,
-        82.26
+        82.26,
+        61.18
       ],
       "tests/lib/http-surface-record.test.ts": [
         50.2,
@@ -1551,7 +1554,8 @@
         5.02
       ],
       "tests/security/credential-reencryption-postgres.test.ts": [
-        4.34
+        4.34,
+        6.3
       ],
       "tests/security/github-authorization-url.test.ts": [
         0.19
