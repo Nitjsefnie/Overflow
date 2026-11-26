@@ -182,7 +182,7 @@ describe("main push workflow routing", () => {
       ["false", "skipped", "skipped", "success", 1], ["true", "skipped", "failure", "success", 1],
       ["true", "skipped", "success", "failure", 1], ["false", "failure", "skipped", "success", 1],
     ] as const) {
-      expect(spawnSync("bash", ["-ec", step.run!], { env: { OVERFLOW_RECORDS_ONLY: records,
+      expect(spawnSync("bash", ["-ec", step.run!], { env: { NODE_ENV: "test", OVERFLOW_RECORDS_ONLY: records,
         OVERFLOW_TEST_RESULT: test, OVERFLOW_SOURCE_RESULT: source, OVERFLOW_REPORT_RESULT: report } }).status).toBe(status);
     }
   });
