@@ -23,10 +23,10 @@ describe("the required verify suite chain", () => {
     }
   });
 
-  it("issues base freshness only after the coverage floor, as the final step", () => {
+  it("issues base freshness only after the coverage gate, as the final step", () => {
     const names = verify.steps.map((step: { name?: string }) => step.name);
     expect(names.at(-1)).toBe("Base freshness");
-    expect(names.indexOf("Coverage floor over the suite's summary")).toBeGreaterThan(-1);
+    expect(names.indexOf("Coverage gate over the suite's artifacts")).toBeGreaterThan(-1);
   });
 
   it("names its upstream run using the relay's exact display-title contract", () => {

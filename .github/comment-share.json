@@ -27,10 +27,6 @@
     620,
     1450
   ],
-  ".github/workflows/coverage-comment.yml": [
-    5757,
-    12739
-  ],
   ".github/workflows/dependency-audit.yml": [
     8453,
     22141
@@ -307,14 +303,6 @@
     4134,
     13438
   ],
-  "scripts/calibrate-coverage.ts": [
-    971,
-    3369
-  ],
-  "scripts/check-coverage-floor.ts": [
-    1929,
-    5714
-  ],
   "scripts/check-legal-revisions.ts": [
     6785,
     12965
@@ -358,10 +346,6 @@
   "scripts/deploy-revision.sh": [
     14725,
     35141
-  ],
-  "scripts/docs-only.ts": [
-    962,
-    3185
   ],
   "scripts/event-policy-ledger-app.ts": [
     1386,
@@ -446,10 +430,6 @@
   "scripts/page-geometry-fixtures.mjs": [
     2946,
     6492
-  ],
-  "scripts/patch-coverage.ts": [
-    1439,
-    6354
   ],
   "scripts/perf-node-setup.mjs": [
     326,
@@ -1178,10 +1158,6 @@
   "tests/ci/concurrency.test.ts": [
     18067,
     46046
-  ],
-  "tests/ci/coverage-comment-workflow.test.ts": [
-    1987,
-    9243
   ],
   "tests/ci/event-policy-workflow.test.ts": [
     980,

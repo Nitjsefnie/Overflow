@@ -318,12 +318,12 @@ describe("the shell parser the hash-binding case reads", () => {
 });
 
 describe("the pull request suite workflow", () => {
-  it("is named `pr suite`, the name the coverage comment keys on", async () => {
+  it("is named `pr suite`, the name ci-pr.yml keys on", async () => {
     expect(workflow.name).toBe("pr suite");
-    const comment = parse(
-      await readFile(resolve(".github/workflows/coverage-comment.yml"), "utf8"),
+    const verify = parse(
+      await readFile(resolve(".github/workflows/ci-pr.yml"), "utf8"),
     ) as { on: { workflow_run: { workflows: string[] } } };
-    expect(comment.on.workflow_run.workflows).toEqual([workflow.name]);
+    expect(verify.on.workflow_run.workflows).toEqual([workflow.name]);
   });
 
   it("declares only the pull_request trigger, for main, on the three code-changing actions", () => {
@@ -337,7 +337,9 @@ describe("the pull request suite workflow", () => {
     expect(source).not.toMatch(/secrets\./);
     expect(source).not.toMatch(/^\s*environment\s*:/m);
     for (const job of Object.values(workflow.jobs)) {
-      expect(job.permissions, "a job-level block could widen the token").toBeUndefined();
+      for (const grant of Object.values(job.permissions ?? {})) {
+        expect(grant, "a job-level block may only read").toBe("read");
+      }
       expect(job.environment).toBeUndefined();
     }
     expect(source).not.toMatch(/:\s*write\b/);
@@ -363,7 +365,7 @@ describe("the pull request suite workflow", () => {
       expect(required).not.toContain(id);
       expect(required).not.toContain(job.name ?? id);
     }
-    expect(Object.keys(workflow.jobs)).toEqual(["postgres-image", "suite"]);
+    expect(Object.keys(workflow.jobs)).toEqual(["postgres-image", "plan", "test", "report", "suite"]);
   });
 
   it("is superseded only by the same pull request's newer push", () => {
@@ -419,9 +421,6 @@ describe("the pull request suite workflow", () => {
       "corepack install --global pnpm@",
       "pnpm install --frozen-lockfile",
       "pnpm db:migrate",
-      "node scripts/docs-only.ts HEAD^1",
-      "pnpm test --run --coverage",
-      "node scripts/patch-coverage.ts",
       "pnpm lint",
       "pnpm typecheck",
       "pnpm build",
@@ -471,23 +470,8 @@ describe("the pull request suite workflow", () => {
     ]);
   });
 
-  it("measures coverage unless its own detection says docs-only, and plain-tests otherwise", () => {
-    const detect = stepRunning("scripts/docs-only.ts");
-    expect(detect.id).toBe("detect-docs");
-    expect(detect.if).toBeUndefined();
-    const tests = suite.steps.filter((step) => (step.run ?? "").startsWith("pnpm test --run"));
-    expect(tests.map((step) => [step.if, step.run])).toEqual([
-      [
-        "${{ steps.detect-docs.outputs.docs_only != 'true' }}",
-        "pnpm test --run --coverage --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=cobertura --coverage.include='src/**'",
-      ],
-      ["${{ steps.detect-docs.outputs.docs_only == 'true' }}", "pnpm test --run"],
-    ]);
-  });
-
   it("judges nothing: no gate script whose verdict verify owns runs here", () => {
     for (const gate of [
-      "check-coverage-floor.ts",
       "check-ratchets.ts",
       "check-migration-edits.ts",
       "check-legal-revisions.ts",
@@ -564,10 +548,8 @@ describe("the pull request suite workflow", () => {
         "file pip reads; a shadow manifest under it greens this step without the " +
         "pinned manifest ever being read",
     ).toBeUndefined();
-    // Unconditional. A docs-only pull request must not skip it: the manifest is
-    // not application code, and a stale-hash bump reaches this workflow on a
-    // change that `docs-only.ts` would call docs-only (the pin line lives in a
-    // header-carrying requirements file the docs detector never reads).
+    // Unconditional: the manifest is not application code, so no condition on
+    // the change may skip it.
     expect(step.if, "the hash binding must hold on every pull request").toBeUndefined();
     // The `run:` block is EXACTLY the one pip invocation: a `pip download`
     // line, its continuation lines, and nothing else. Asserting the shape

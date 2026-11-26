@@ -410,7 +410,7 @@ for (const line of [
   "printf '%s\\n' \"$full_sha\" > \"$release/REVISION\"",
   "printf 'Source revision: %s\\n' \"$full_sha\"",
   `base=$ ( gh api 'repos/Nitjsefnie/Overflow/actions/workflows/ratchet-guard.yml/runs?branch=main&status=success&per_page=50' --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")][0].head_sha' )`,
-  'gh workflow run ci.yml --ref main -f base="$base"',
+  "gh workflow run ci.yml --ref main",
   "gh workflow run actionlint.yml --ref main",
   'gh workflow run ratchet-guard.yml --ref main -f base="$base"',
   // Section 13's client-address verification steps: the secret

@@ -178,7 +178,7 @@ describe(".github/required-checks.json", () => {
         const producers = Object.entries(workflow.jobs)
           .filter(([id, job]) => (job.name ?? id) === check);
         expect(producers, `${path} must produce ${check}`).toHaveLength(1);
-        expect(producers[0]![1].if, `${path}/${check} must never skip`).toBeUndefined();
+        expect([undefined, "${{ always() }}"], `${path}/${check} must never skip`).toContain(producers[0]![1].if);
       }
     }
   });

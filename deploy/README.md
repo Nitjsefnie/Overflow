@@ -850,7 +850,7 @@ later re-tightened past the base is not flagged.
 
 ```sh
 base=$(gh api 'repos/Nitjsefnie/Overflow/actions/workflows/ratchet-guard.yml/runs?branch=main&status=success&per_page=50' --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")][0].head_sha')
-gh workflow run ci.yml --ref main -f base="$base"
+gh workflow run ci.yml --ref main
 gh workflow run actionlint.yml --ref main
 gh workflow run ratchet-guard.yml --ref main -f base="$base"
 ```
@@ -858,15 +858,14 @@ gh workflow run ratchet-guard.yml --ref main -f base="$base"
 After fetching main, check `git rev-parse origin/main`: if `$base` is empty or
 `null` (no qualifying run among the 50 most recent successful ones) or equals
 that SHA (the tip is already certified), do not dispatch `ratchet-guard`.
-Dispatch `ci` without `-f base` in that case; it measures coverage. Find the
-base by hand from older runs or stop before dispatching `ratchet-guard`.
+Find the base by hand from older runs or stop before dispatching
+`ratchet-guard`.
 
 The gate accepts these runs because it identifies each producer by its pinned
 workflow path and job name, never by event. The newest run decides, so a
 failed dispatch is superseded only by a newer successful one. An empty-commit
-re-push is refused by branch protection. A dispatched `ci` run measures the
-change against the supplied base, including each commit in the interval; a
-dispatch without a base always measures coverage.
+re-push is refused by branch protection. A dispatched `ci` run tests main's
+tip and measures its coverage; it takes no input.
 
 Each required check is resolved to the jobs of the workflow files
 `.github/required-checks.json` pins it to — a pin may be one file or a list of

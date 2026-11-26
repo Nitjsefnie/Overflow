@@ -4,34 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { calibration } from "../../scripts/calibrate-coverage.ts";
-import {
-  COVERAGE_PATH,
-  PERF_BUDGET_PATH,
-  perfBudgetRelaxations,
-  checkRatchets,
-  coverageRelaxations,
-} from "../../scripts/check-ratchets.ts";
+import { PERF_BUDGET_PATH, perfBudgetRelaxations, checkRatchets } from "../../scripts/check-ratchets.ts";
 import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
 const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "ratchets-")]);
 
 const script = fileURLToPath(new URL("../../scripts/check-ratchets.ts", import.meta.url));
 
-type Json = Record<string, unknown>;
-
-const coverage = (
-  overrides: { gap?: unknown; hysteresis?: unknown; measured?: unknown; floor?: unknown } = {},
-): Json => ({
-  gap: "gap" in overrides ? overrides.gap : 1.0,
-  hysteresis: "hysteresis" in overrides ? overrides.hysteresis : 0.5,
-  languages: {
-    typescript: {
-      measured: "measured" in overrides ? overrides.measured : 92.89,
-      floor: "floor" in overrides ? overrides.floor : 91.89,
-    },
-  },
-});
+const budget = { board: 2, fold: 20 };
 
 describe("performance budget ratchet", () => {
   it("refuses a raised statement budget with file, workload and both values", () => {
@@ -67,150 +47,6 @@ describe("performance budget ratchet", () => {
   });
 });
 
-describe("coverage ratchet relaxations", () => {
-  it("accepts an unchanged document", () => {
-    expect(coverageRelaxations(coverage(), coverage())).toEqual([]);
-  });
-
-  it("accepts every tightening direction at once", () => {
-    const head = coverage({ gap: 0.5, hysteresis: 0.25, measured: 94.1, floor: 93.6 });
-    expect(coverageRelaxations(coverage(), head)).toEqual([]);
-  });
-
-  it("refuses a lowered floor, naming file, key, base and head values", () => {
-    const findings = coverageRelaxations(coverage(), coverage({ floor: 90 }));
-    expect(findings).toHaveLength(1);
-    expect(findings[0]).toContain(COVERAGE_PATH);
-    expect(findings[0]).toContain("languages.typescript.floor");
-    expect(findings[0]).toContain("91.89");
-    expect(findings[0]).toContain("90");
-  });
-
-  it("refuses a lowered recorded measurement", () => {
-    const findings = coverageRelaxations(coverage(), coverage({ measured: 92.0 }));
-    expect(findings).toHaveLength(1);
-    expect(findings[0]).toContain("languages.typescript.measured");
-    expect(findings[0]).toContain("92.89");
-  });
-
-  it("refuses a raised gap and a raised hysteresis", () => {
-    expect(coverageRelaxations(coverage(), coverage({ gap: 1.5 }))).toEqual([
-      expect.stringContaining("gap"),
-    ]);
-    expect(coverageRelaxations(coverage(), coverage({ hysteresis: 0.75 }))).toEqual([
-      expect.stringContaining("hysteresis"),
-    ]);
-  });
-
-  it("refuses a removed key, top-level or nested", () => {
-    const noGap = coverage();
-    delete noGap.gap;
-    expect(coverageRelaxations(coverage(), noGap)).toEqual([expect.stringContaining("gap")]);
-
-    const noFloor = coverage();
-    delete (noFloor.languages as { typescript: Json }).typescript.floor;
-    expect(coverageRelaxations(coverage(), noFloor)).toEqual([
-      expect.stringContaining("languages.typescript.floor"),
-    ]);
-  });
-
-  it("refuses an added key, top-level or nested", () => {
-    const added = coverageRelaxations(coverage(), { ...coverage(), exempt: 1 });
-    expect(added).toHaveLength(1);
-    expect(added[0]).toContain("exempt");
-    expect(added[0]).toContain("key added");
-    const nested = coverage();
-    (nested.languages as Json).python = { measured: 50, floor: 49 };
-    expect(coverageRelaxations(coverage(), nested).length).toBeGreaterThan(0);
-    expect(coverageRelaxations(coverage(), nested).join("\n")).toContain("languages.python");
-  });
-
-  it("refuses an added or removed empty object", () => {
-    expect(coverageRelaxations(coverage(), { ...coverage(), exempt: {} })).toEqual([
-      expect.stringContaining("key added"),
-    ]);
-    const nested = coverage();
-    (nested.languages as Json).python = {};
-    expect(coverageRelaxations(coverage(), nested)).toEqual([
-      expect.stringContaining("languages.python"),
-    ]);
-    expect(coverageRelaxations({ ...coverage(), exempt: {} }, coverage())).toEqual([
-      expect.stringContaining("key removed"),
-    ]);
-  });
-
-  it("refuses a change to a key with no known tightening direction", () => {
-    expect(coverageRelaxations({ ...coverage(), note: 1 }, { ...coverage(), note: 2 })).toEqual([
-      expect.stringContaining("no tightening direction"),
-    ]);
-  });
-
-  it("refuses a change away from a non-finite merge-base value", () => {
-    expect(coverageRelaxations(coverage({ floor: "91.89" }), coverage({ floor: 92 }))).toEqual([
-      expect.stringContaining("merge-base value is not a finite number"),
-    ]);
-  });
-
-  it("refuses a negative hysteresis and accepts zero", () => {
-    expect(coverageRelaxations(coverage(), coverage({ hysteresis: -100 }))).toEqual([
-      expect.stringContaining("hysteresis"),
-    ]);
-    expect(coverageRelaxations(coverage(), coverage({ hysteresis: 0 }))).toEqual([]);
-  });
-
-  it("refuses a changed measurement whose floor is below measured minus gap", () => {
-    const inflated = coverageRelaxations(coverage(), coverage({ measured: 1000 }));
-    expect(inflated).toHaveLength(1);
-    expect(inflated[0]).toContain("languages.typescript.floor");
-    expect(inflated[0]).toContain("1000");
-    expect(coverageRelaxations(coverage(), coverage({ measured: 93.5, floor: 92.4 }))).toEqual([
-      expect.stringContaining("languages.typescript.floor"),
-    ]);
-    expect(coverageRelaxations(coverage(), coverage({ measured: 93.5, floor: 92.5 }))).toEqual([]);
-  });
-
-  it("judges the measured invariant with the head's gap, not the merge base's", () => {
-    // Merge base: gap 1.0. Head: gap 0.5, measured 93.5, floor 92.5. The
-    // floor must carry round2(measured - the head's gap) = 93, so 92.5 is
-    // refused; a merge-base-gap implementation would compute 93.5 - 1.0
-    // = 92.5 and accept it.
-    const findings = coverageRelaxations(
-      coverage(),
-      coverage({ gap: 0.5, measured: 93.5, floor: 92.5 }),
-    );
-    expect(findings).toHaveLength(1);
-    expect(findings[0]).toContain("languages.typescript.floor");
-    expect(findings[0]).toContain("measured 93.5 minus gap 0.5 = 93");
-  });
-
-  it("accepts a genuine calibrate output from the current document", () => {
-    const next = calibration({ total: { lines: { pct: 94.37 } } }, {
-      gap: 1.0,
-      hysteresis: 0.5,
-      languages: { typescript: { measured: 92.89, floor: 91.89 } },
-    });
-    expect(next).not.toBeNull();
-    expect(coverageRelaxations(coverage(), next)).toEqual([]);
-  });
-
-  it("refuses a value changed to anything but a finite number", () => {
-    for (const value of ["91.89", null, true, Infinity, NaN, [91.89], { v: 91.89 }]) {
-      expect(coverageRelaxations(coverage(), coverage({ floor: value })).length).toBeGreaterThan(0);
-    }
-  });
-
-  it("refuses a deleted document", () => {
-    expect(coverageRelaxations(coverage(), null)).toEqual([
-      expect.stringContaining(COVERAGE_PATH),
-    ]);
-  });
-
-  it("accepts anything when the merge base had no document", () => {
-    expect(coverageRelaxations(null, coverage({ floor: 0, gap: 50 }))).toEqual([]);
-    expect(coverageRelaxations(null, null)).toEqual([]);
-  });
-});
-
 describe("ratchet check against a real git repository", () => {
   let root: string;
 
@@ -243,21 +79,20 @@ describe("ratchet check against a real git repository", () => {
     spawnSync(process.execPath, [script, ...args], { cwd: root, encoding: "utf8" });
 
   // main: base docs; feature forks; feature applies `onFeature`; main then
-  // advances with a RAISED floor, so the tip is stricter than the merge base.
+  // advances with a LOWERED budget, so the tip is stricter than the merge base.
   const seed = (onFeature: () => void) => {
     git("init", "-q", "-b", "main");
     git("config", "user.email", "ratchets@example.test");
     git("config", "user.name", "Ratchets Test");
     git("config", "commit.gpgsign", "false");
-    writeDoc(COVERAGE_PATH, coverage());
-    writeDoc(PERF_BUDGET_PATH, { board: 2, fold: 20 });
+    writeDoc(PERF_BUDGET_PATH, budget);
     commit("base documents");
     git("checkout", "-q", "-b", "feature");
     onFeature();
     commit("feature change");
     git("checkout", "-q", "main");
-    writeDoc(COVERAGE_PATH, coverage({ measured: 95.0, floor: 94.0 }));
-    commit("calibrate raises the floor");
+    writeDoc(PERF_BUDGET_PATH, { board: 1, fold: 20 });
+    commit("main tightens a budget");
   };
 
   it.each([
@@ -291,7 +126,7 @@ describe("ratchet check against a real git repository", () => {
     git("config", "user.email", "ratchets@example.test");
     git("config", "user.name", "Ratchets Test");
     git("config", "commit.gpgsign", "false");
-    writeDoc(COVERAGE_PATH, coverage());
+    writeDoc(PERF_BUDGET_PATH, budget);
     commit("base documents");
     onHead();
     commit("pushed commit");
@@ -299,66 +134,53 @@ describe("ratchet check against a real git repository", () => {
   };
 
   it("exits 1 when a pushed commit relaxes against its direct parent", () => {
-    const base = seedLinear(() => writeDoc(COVERAGE_PATH, coverage({ floor: 90.5 })));
+    const base = seedLinear(() => writeDoc(PERF_BUDGET_PATH, { board: 3, fold: 20 }));
     const result = run(base, "HEAD");
     expect(result.stderr).toBe("");
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain(COVERAGE_PATH);
-    expect(result.stdout).toContain("languages.typescript.floor");
-    expect(result.stdout).toContain("91.89");
-    expect(result.stdout).toContain("90.5");
+    expect(result.stdout).toContain(PERF_BUDGET_PATH);
+    expect(result.stdout).toContain("board");
+    expect(result.stdout).toContain("merge base 2, head 3");
   });
 
   it("exits 0 when a pushed commit only tightens against its direct parent", () => {
-    const base = seedLinear(() => {
-      writeDoc(COVERAGE_PATH, coverage({ measured: 93.5, floor: 92.5 }));
-      });
+    const base = seedLinear(() => writeDoc(PERF_BUDGET_PATH, { board: 1, fold: 20 }));
     const result = run(base, "HEAD");
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("ok");
   });
 
-  it("exits 1 and names the finding when the branch lowers the floor", () => {
-    seed(() => writeDoc(COVERAGE_PATH, coverage({ floor: 90.5 })));
-    const result = run("main", "feature");
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain(COVERAGE_PATH);
-    expect(result.stdout).toContain("languages.typescript.floor");
-    expect(result.stdout).toContain("91.89");
-    expect(result.stdout).toContain("90.5");
-  });
-
   it("exits 1 when the branch deletes a ratchet document", () => {
-    seed(() => git("rm", "-q", COVERAGE_PATH));
+    seed(() => git("rm", "-q", PERF_BUDGET_PATH));
     const result = run("main", "feature");
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain(COVERAGE_PATH);
+    expect(result.stdout).toContain(PERF_BUDGET_PATH);
   });
 
   it("exits 1 when the branch replaces a document with a symlink", () => {
     // The link's target text is the merge base's JSON, so reading the blob
-    // would see an unchanged document while the checks read floor 0.
-    const target = JSON.stringify(coverage());
+    // would see an unchanged document while the checks read a raised budget.
+    const target = JSON.stringify(budget);
     seed(() => {
-      rmSync(join(root, COVERAGE_PATH));
-      symlinkSync(target, join(root, COVERAGE_PATH));
-      writeDoc(join("scripts", target), coverage({ floor: 0 }));
+      rmSync(join(root, PERF_BUDGET_PATH));
+      symlinkSync(target, join(root, PERF_BUDGET_PATH));
+      writeDoc(join("scripts", target), { board: 99, fold: 20 });
     });
-    expect(git("ls-tree", "feature", "--", COVERAGE_PATH)).toMatch(/^120000 blob /);
+    expect(git("ls-tree", "feature", "--", PERF_BUDGET_PATH)).toMatch(/^120000 blob /);
     const result = run("main", "feature");
     expect(result.stderr).toBe("");
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain(COVERAGE_PATH);
+    expect(result.stdout).toContain(PERF_BUDGET_PATH);
     expect(result.stdout).toContain("120000");
   });
 
   it("exits 1 when the branch makes a document executable", () => {
-    seed(() => chmodSync(join(root, COVERAGE_PATH), 0o755));
-    expect(git("ls-tree", "feature", "--", COVERAGE_PATH)).toMatch(/^100755 blob /);
+    seed(() => chmodSync(join(root, PERF_BUDGET_PATH), 0o755));
+    expect(git("ls-tree", "feature", "--", PERF_BUDGET_PATH)).toMatch(/^100755 blob /);
     const result = run("main", "feature");
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain(COVERAGE_PATH);
+    expect(result.stdout).toContain(PERF_BUDGET_PATH);
     expect(result.stdout).toContain("100755");
   });
 
@@ -369,29 +191,21 @@ describe("ratchet check against a real git repository", () => {
     git("config", "commit.gpgsign", "false");
     mkdirSync(join(root, "scripts"));
     // Valid JSON as the link text, so a blob read would parse and compare.
-    symlinkSync('{"floor":1}', join(root, COVERAGE_PATH));
+    symlinkSync('{"board":1}', join(root, PERF_BUDGET_PATH));
     commit("symlinked document");
     git("checkout", "-q", "-b", "feature");
-    rmSync(join(root, COVERAGE_PATH));
-    writeDoc(COVERAGE_PATH, coverage());
+    rmSync(join(root, PERF_BUDGET_PATH));
+    writeDoc(PERF_BUDGET_PATH, budget);
     commit("regular document");
     const result = run("main", "feature");
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("not a regular file");
   });
 
-  it("exits 0 when the branch only tightens", () => {
-    seed(() => {
-      writeDoc(COVERAGE_PATH, coverage({ measured: 93.5, floor: 92.5 }));
-      });
-    const result = run("main", "feature");
-    expect(result.status).toBe(0);
-  });
-
   it("reads committed revisions, never the working tree", () => {
     seed(() => writeFileSync(join(root, "unrelated.txt"), "change\n"));
     git("checkout", "-q", "feature");
-    writeDoc(COVERAGE_PATH, coverage({ floor: 1 }));
+    writeDoc(PERF_BUDGET_PATH, { board: 99, fold: 20 });
     expect(run("main", "feature").status).toBe(0);
   });
 
@@ -402,7 +216,6 @@ describe("ratchet check against a real git repository", () => {
     git("config", "commit.gpgsign", "false");
     commit("empty base");
     git("checkout", "-q", "-b", "feature");
-    writeDoc(COVERAGE_PATH, coverage({ floor: 0 }));
     writeDoc(PERF_BUDGET_PATH, { board: 2 });
     commit("introduce documents");
     const result = run("main", "feature");
@@ -422,20 +235,20 @@ describe("ratchet check against a real git repository", () => {
     commit("empty base");
     git("checkout", "-q", "-b", "feature");
     mkdirSync(join(root, "scripts"), { recursive: true });
-    symlinkSync('{"floor":1}', join(root, COVERAGE_PATH));
+    symlinkSync('{"board":1}', join(root, PERF_BUDGET_PATH));
     commit("symlinked document with no merge-base document");
-    expect(git("ls-tree", "feature", "--", COVERAGE_PATH)).toMatch(/^120000 blob /);
+    expect(git("ls-tree", "feature", "--", PERF_BUDGET_PATH)).toMatch(/^120000 blob /);
     const result = run("main", "feature");
     expect(result.stderr).toBe("");
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain(COVERAGE_PATH);
+    expect(result.stdout).toContain(PERF_BUDGET_PATH);
     expect(result.stdout).toContain("120000");
   });
 
   it("exits 2 when the two revisions share no merge base", () => {
     seed(() => writeFileSync(join(root, "unrelated.txt"), "change\n"));
     git("checkout", "-q", "--orphan", "island");
-    writeDoc(COVERAGE_PATH, coverage({ floor: 1 }));
+    writeDoc(PERF_BUDGET_PATH, budget);
     commit("unrelated history");
     const result = run("main", "island");
     expect(result.status).toBe(2);
@@ -473,9 +286,9 @@ describe("ratchet check against a real git repository", () => {
   });
 
   it("exits 2 when a document at head is not valid JSON", () => {
-    seed(() => writeDoc(COVERAGE_PATH, "{ not json\n"));
+    seed(() => writeDoc(PERF_BUDGET_PATH, "{ not json\n"));
     const result = run("main", "feature");
     expect(result.status).toBe(2);
-    expect(result.stderr).toContain(COVERAGE_PATH);
+    expect(result.stderr).toContain(PERF_BUDGET_PATH);
   });
 });

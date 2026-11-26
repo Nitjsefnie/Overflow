@@ -524,176 +524,15 @@ type Scenario = {
    * reach ci.yml and workflow_run reaches ci-pr.yml.
    */
   file: string;
-  /** What `scripts/docs-only.ts` wrote into `detect-docs`'s output. */
-  docsOnly: "true" | "false";
-  /** Whether this job itself runs the suite. Under workflow_run it
-   *  never does: the pull request's code runs only in pr-suite.yml, and verify
-   *  awaits that run's outcome as data. */
-  runsSuite: boolean;
-  /** Whether the coverage measurement is expected to run IN THIS JOB — the
-   *  two-branch design ci.yml ships, written out as data so a reviewer reads
-   *  the expected outcome per run rather than deriving it from the branch
-   *  under test. */
-  coverage: boolean;
-  /** Whether the coverage floor is checked: by this job's own measurement on
-   *  push and dispatch, and over the awaited suite run's coverage summary on
-   *  a pull request carrying code. */
-  floor: boolean;
 };
 
 const SCENARIOS: Scenario[] = [
-  {
-    label: "a pull request carrying a code change",
-    event: "workflow_run",
-    file: "ci-pr.yml",
-    docsOnly: "false",
-    runsSuite: false,
-    coverage: false,
-    floor: true,
-  },
-  {
-    label: "a pull request carrying a docs-only change",
-    event: "workflow_run",
-    file: "ci-pr.yml",
-    docsOnly: "true",
-    runsSuite: false,
-    coverage: false,
-    floor: false,
-  },
-  {
-    label: "a push to main",
-    event: "push",
-    file: "ci.yml",
-    docsOnly: "false",
-    runsSuite: true,
-    coverage: true,
-    floor: true,
-  },
-  {
-    label: "a workflow_dispatch",
-    event: "workflow_dispatch",
-    file: "ci.yml",
-    docsOnly: "false",
-    runsSuite: true,
-    coverage: true,
-    floor: true,
-  },
+  { label: "a pull request", event: "workflow_run", file: "ci-pr.yml" },
+  { label: "a push to main", event: "push", file: "ci.yml" },
+  { label: "a workflow_dispatch", event: "workflow_dispatch", file: "ci.yml" },
 ];
 
-const TEST_SUITE_COMMAND = "pnpm test --run";
-// The script's path, not its invocation: the push leg runs it relative to the
-// event commit's checkout, the workflow_run leg by absolute path into
-// the base checkout.
-const COVERAGE_FLOOR_COMMAND = "scripts/check-coverage-floor.ts";
 const AWAIT_SUITE_COMMAND = "scripts/await-pr-suite.ts";
-const MIGRATE_COMMAND = "pnpm db:migrate";
-const DETECT_STEP_ID = "detect-docs";
-const DETECT_STEP_NAME = "Detect docs-only change";
-
-/**
- * Every flag the workflow's coverage invocation passes, each asserted
- * separately as a WHOLE SHELL WORD, never as a substring.
- *
- * The distinction is the whole point. `--coverage` is a prefix of all three
- * reporter flags, so a substring test for it is satisfied by any single
- * reporter and can never fail — and it is not a redundant pin either: with the
- * reporters left alone but the bare flag dropped, vitest 5.0.0 writes no
- * reports directory at all (measured), so the run measures nothing and every
- * downstream reader is handed a file that was never written. The same holds
- * for `--coverage.include`, which the step passes and nothing else in the
- * repository pins.
- *
- * Splitting on whitespace is what makes the tokens whole words, and it is also
- * what keeps the assertion indifferent to how the `run:` block is laid out: a
- * folded `>-` block, extra tabs and re-wrapped lines all arrive here as the same
- * list of words (measured: reformatting stayed green at 178/178, and must stay
- * that way).
- */
-const COVERAGE_FLAGS = [
-  "--coverage",
-  "--coverage.reporter=text",
-  "--coverage.reporter=json-summary",
-  "--coverage.reporter=cobertura",
-  "--coverage.include='src/**'",
-];
-
-/**
- * A command's shell words, each with its quoting removed.
- *
- * Quote removal is the ONE normalisation here, and it is deliberate in both
- * directions. `--coverage.reporter="text"` is the same shell word as
- * `--coverage.reporter=text`, and asserting on the raw text turned a spelling
- * difference into a red suite claiming the workflow fails to pass a flag it does
- * pass. Nothing wider: whitespace is not collapsed beyond splitting into words,
- * so the layout tolerance above is untouched, and a dropped flag still leaves
- * no word to find.
- */
-function shellWords(command: string): string[] {
-  return command
-    .split(/\s+/)
-    .map((word) => word.replaceAll("'", "").replaceAll('"', ""))
-    .filter((word) => word !== "");
-}
-
-/**
- * The steps that compute or publish a coverage artifact. They carry the same
- * `docs_only != 'true'` condition as the test steps, and rewriting only one of
- * those conditions leaves every assertion in this file outside the
- * coverage-artifact checks green — the artifact simply stops existing while the
- * job concludes green.
- *
- * Each is recognised by what it does rather than by its name, so a rename does
- * not fail the suite: the script one runs, and the artifact name the other two
- * upload.
- *
- * A hand-written table is a hole in itself, and mutation campaigns scoped to the
- * WORKFLOW are structurally unable to reach a deletion in here: deleting the
- * entry for the patch-coverage report turns the mutation that entry was written
- * to catch green, with the test count unmoved. The completeness assertion below
- * is what closes it, and it closes it by comparing this table against the
- * workflow rather than trusting it.
- */
-/** An upload's first attempt; its retry (`overwrite: true`) is held to it by Half 4. */
-const isFirstUpload = (step: WorkflowStep) =>
-  (step.uses ?? "").startsWith("actions/upload-artifact@") && step.with?.overwrite !== true;
-
-const COVERAGE_ARTIFACTS: { label: string; matches: (step: WorkflowStep) => boolean }[] = [
-  {
-    label: "the patch coverage report",
-    matches: (step) => (step.run ?? "").includes("scripts/patch-coverage.ts"),
-  },
-  {
-    label: "the patch coverage upload",
-    matches: (step) =>
-      isFirstUpload(step) && step.with?.name === "patch-coverage",
-  },
-  {
-    label: "the coverage summary upload",
-    matches: (step) =>
-      isFirstUpload(step) && step.with?.name === "coverage-summary",
-  },
-];
-
-/**
- * Whether a step reads or writes something under `coverage/` — the directory the
- * reporters write and the floor reads. This is the WORKFLOW side of the
- * completeness assertion, derived from the parsed steps by what they name rather
- * than by any key the table above carries, so a table entry cannot be removed and
- * the remainder quietly become the definition.
- *
- * It is deliberately broader than the table: it says nothing about which script
- * computes an artifact or which artifact is uploaded, only that a step touches
- * the coverage directory. `scripts/check-coverage-floor.ts` does not match
- * (nothing in its `run:` names a path under `coverage/`), and neither does the
- * test suite's invocation, whose `--coverage.include='src/**'` names no artifact
- * — so the derivation and the table agree at three steps without sharing a key.
- */
-function namesCoverageArtifact(step: WorkflowStep): boolean {
-  return [step.run ?? "", String(step.with?.path ?? ""), String(step.with?.name ?? "")]
-    .join(" ")
-    .includes("coverage/");
-}
-
 const BASE_SHA = "1".repeat(40);
 const MERGE_SHA = "2".repeat(40);
 const PUSH_BEFORE = "3".repeat(40);
@@ -722,9 +561,8 @@ function contextFor(scenario: Scenario): ActionsContext {
       token: "not-a-real-token",
       event,
     },
-    inputs: { base: "", "simulate-refused-raise": false },
+    inputs: {},
     steps: {
-      [DETECT_STEP_ID]: { outputs: { docs_only: scenario.docsOnly } },
       ...(scenario.event === "workflow_run" ? { pr: { outputs: {
         pr_number: 849, base_sha: BASE_SHA, base_ref: "main", head_sha: MERGE_SHA,
       } } } : {}),
@@ -795,13 +633,6 @@ function legOf(scenario: Scenario): ParsedLeg {
 /** The verify steps of the file a scenario runs in. */
 function stepsFor(scenario: Scenario): WorkflowStep[] { return legOf(scenario).steps; }
 
-/**
- * The push leg — the only one that measures coverage and therefore the only
- * one COVERAGE_ARTIFACTS describes. The pull-request leg uploads nothing: the
- * summary it judges was measured by pr-suite.yml.
- */
-const COVERAGE_LEG: Leg = "ci.yml";
-
 describe("the workflow files this suite simulates", () => {
   it("are parsed, not read as bytes, and each verify job is not empty", () => {
     // Without this the assertions below are vacuous: a relocated jobs key, a
@@ -822,10 +653,12 @@ describe("the workflow files this suite simulates", () => {
     // job that could be skipped posts no required check at all, and the merge
     // gate reads the missing context rather than a red one — so the condition is
     // asserted absent rather than modelled.
+    // ci.yml's `always()` never skips: it records a failed or cancelled
+    // dependency as a red verify for the deploy gate.
     for (const leg of LEGS) {
       expect(
-        legs.get(leg)!.if,
-        `${leg}: the verify job must carry no ` + "`if:`" + `. A job-level condition is invisible ` +
+        leg === "ci.yml" && legs.get(leg)!.if === "${{ always() }}" ? undefined : legs.get(leg)!.if,
+        `${leg}: the verify job must carry no ` + "`if:`" + ` but ci.yml's always(). A job-level condition is invisible ` +
           "to step selection: the step list is identical whether the job runs or not, so every " +
           "scenario assertion in this file would stay green while the job carrying the test suite " +
           "never ran. Unlike a step-level condition there is nothing to recover from — the gate " +
@@ -926,7 +759,7 @@ describe("the step selector", () => {
 });
 
 describe("the expression evaluator", () => {
-  const push = contextFor(SCENARIOS[2]!);
+  const push = contextFor(SCENARIOS[1]!);
   const pullRequest = contextFor(SCENARIOS[0]!);
 
   it("returns the operand of && and || rather than a boolean", () => {
@@ -964,7 +797,7 @@ describe("the expression evaluator", () => {
   });
 
   it("reads a nested step output that has been written", () => {
-    expect(evaluateExpression("steps.detect-docs.outputs.docs_only", pullRequest)).toBe("false");
+    expect(evaluateExpression("steps.pr.outputs.base_ref", pullRequest)).toBe("main");
   });
 
   it("resolves the dotted paths ci.yml reads, event by event", () => {
@@ -974,8 +807,6 @@ describe("the expression evaluator", () => {
     expect(evaluateExpression("steps.pr.outputs.pr_number", pullRequest)).toBe(849);
     expect(evaluateExpression("github.event.before", pullRequest)).toBeNull();
     expect(evaluateExpression("github.event.before", push)).toBe(PUSH_BEFORE);
-    expect(evaluateExpression("inputs.base", pullRequest)).toBe("");
-    expect(evaluateExpression("inputs.simulate-refused-raise", pullRequest)).toBe(false);
     expect(evaluateExpression("steps.pr.outputs.base_sha", pullRequest)).toBe(BASE_SHA);
   });
 
@@ -1090,262 +921,6 @@ describe("the expression evaluator", () => {
     expect(thrown).toContain("inputs.base");
   });
 });
-
-describe("the docs-only detection the scenarios above assume", () => {
-  it("is produced by exactly one step in each leg, under the id that leg's gated steps read", () => {
-    // Without this the scenarios are fabricated: an evaluator fed a context
-    // the workflow never wires says nothing about what CI does. The conditions
-    // below are all `steps.detect-docs.outputs.docs_only`, so if that output
-    // belonged to some other step, or to two in one file, every reachability
-    // assertion above would be reasoning about a fiction.
-    for (const leg of LEGS) {
-      const producers = legs.get(leg)!.steps.filter((step) => step.id === DETECT_STEP_ID);
-      expect(
-        producers.map(label),
-        `${leg}: exactly one step of the verify job may carry \`id: ${DETECT_STEP_ID}\` — the ` +
-          `test and coverage steps read its output by that id, and a second producer makes that ` +
-          `output ambiguous`,
-      ).toEqual([DETECT_STEP_NAME]);
-      expect(
-        producers[0]?.run ?? "",
-        `${leg}: the docs-only producer must be the step that runs scripts/docs-only.ts`,
-      ).toContain("scripts/docs-only.ts");
-      expect(
-        producers[0]?.if,
-        `${leg}: only superseded PR cancellations skip the producer and all of its consumers`,
-      ).toBe(leg === "ci-pr.yml" ? "${{ steps.pr.outputs.superseded != 'true' }}" : undefined);
-    }
-  });
-
-  it("is what the push leg publishes as its docs_only output", () => {
-    // The calibrate job's own condition reads `needs.verify.outputs.docs_only`,
-    // and calibrate is in ci.yml beside that leg's verify, so the value has to
-    // be republished under that exact name THERE. The pull-request leg has no
-    // consumer, so it republishes nothing — asserted rather than left implicit,
-    // because an output added to the wrong file is a job output nothing reads.
-    expect(legs.get(COVERAGE_LEG)!.outputs.docs_only).toBe(
-      `\${{ steps.${DETECT_STEP_ID}.outputs.docs_only }}`,
-    );
-    expect(
-      legs.get("ci-pr.yml")!.outputs,
-      "the pull-request leg publishes no job output: nothing needs: it, and a value published " +
-        "from a workflow holding pull-request data is one more channel for it to leave by",
-    ).toEqual({});
-  });
-
-  it("is selected in every scenario, so its output exists before the steps that read it", () => {
-    for (const scenario of SCENARIOS) {
-      const selected = selectSteps(stepsFor(scenario), contextFor(scenario));
-      expect(
-        selected.some((step) => step.id === DETECT_STEP_ID),
-        `on ${scenario.event} in ${scenario.file} with docs_only=${scenario.docsOnly} the detect ` +
-          `step must be among the executed steps; the conditions below read its output, which ` +
-          `only exists once it has run`,
-      ).toBe(true);
-    }
-  });
-
-  it("lists exactly the verify steps that touch a coverage artifact, so the table cannot be shrunk", () => {
-    // COVERAGE_ARTIFACTS decides what the per-scenario assertion below is about,
-    // and a table nobody checks against the workflow is a table that can be
-    // edited to stop asserting anything. Deleting an entry does not fail any
-    // assertion here — the workflow side is unchanged, so the step is simply no
-    // longer checked, and the mutation that entry existed to catch goes green
-    // with the test count unmoved.
-    //
-    // Equality in BOTH directions, against a derivation that shares no key with
-    // the table: adding an entry for a step that touches nothing fails, and a
-    // step added to the workflow that the table does not list fails, which is
-    // the direction that matters — a new coverage step would otherwise arrive
-    // with no reachability expectation at all.
-    // The table describes the leg that MEASURES coverage. The pull-request leg
-    // is checked for carrying none of them separately, below.
-    const measureLeg = legs.get(COVERAGE_LEG)!.steps;
-    const inWorkflow = measureLeg.filter((step) => namesCoverageArtifact(step) && step.with?.overwrite !== true);
-    const matched = measureLeg.filter((step) =>
-      COVERAGE_ARTIFACTS.some((artifact) => artifact.matches(step)),
-    );
-
-    for (const artifact of COVERAGE_ARTIFACTS) {
-      expect(
-        measureLeg.filter(artifact.matches),
-        `the COVERAGE_ARTIFACTS entry for ${artifact.label} must match exactly one step of ` +
-          `${COVERAGE_LEG}; an entry matching none is dead and one matching several makes the ` +
-          `per-scenario expectation ambiguous`,
-      ).toHaveLength(1);
-    }
-    expect(
-      matched.map(label),
-      `COVERAGE_ARTIFACTS must list exactly ${COVERAGE_LEG}'s verify-job steps that name ` +
-        "something under coverage/ — every one of the steps that reads or writes an artifact, and " +
-        "nothing else. Delete an entry and the workflow mutation it was written to catch goes " +
-        "green while this file still passes; add an entry for a step that touches no artifact and " +
-        "this fails. " +
-        `Steps the workflow actually carries: ${inWorkflow.map(label).join(", ") || "none"}`,
-    ).toEqual(inWorkflow.map(label));
-  });
-
-  it("carries none of them in the pull-request leg, whose coverage was measured by pr-suite.yml", () => {
-    // The other direction of the same table, and the one the split makes
-    // necessary. The pull-request leg UPLOADS nothing: pr-suite.yml measured the
-    // coverage and uploaded the summary, and ci-pr.yml downloads it as data. An
-    // upload here would overwrite that run's artifact under the same name, and
-    // coverage-comment.yml reads the suite run's — so this is asserted rather
-    // than left to the table's absence.
-    expect(
-      legs
-        .get("ci-pr.yml")!
-        .steps.filter((step) => COVERAGE_ARTIFACTS.some((artifact) => artifact.matches(step)))
-        .map(label),
-      "the pull-request leg must publish no coverage artifact: the summary it judges is the suite " +
-        "run's, uploaded by pr-suite.yml and read here as data",
-    ).toEqual([]);
-  });
-});
-
-for (const scenario of SCENARIOS) {
-  describe(`the verify job's executed steps when CI runs ${scenario.label}`, () => {
-    const selected = () => selectSteps(stepsFor(scenario), contextFor(scenario));
-    const testSteps = () => runsContaining(selected(), TEST_SUITE_COMMAND);
-    const executedRunSteps = () => selected().filter((step) => step.run !== undefined);
-    const coverageInvocations = () =>
-      // Every EXECUTED step's run, not just the test steps': a second step
-      // measuring coverage is the same defect as a second test suite — two
-      // measurements, one over the other's output — and restricting the search
-      // to `testSteps()` made appending `--coverage` to an unrelated step
-      // invisible. Token-aware for the same reason the flags are: a substring
-      // here counts every command with a `--coverage.*` flag as a measurement.
-      executedRunSteps()
-        .map((step) => step.run ?? "")
-        .filter((run) => shellWords(run).includes("--coverage"));
-
-    it(
-      scenario.runsSuite
-        ? "runs the test suite exactly once"
-        : "runs no test suite of its own and awaits the pull request suite exactly once",
-      () => {
-        // Zero is the failure mode of a condition that can never fire: it leaves
-        // the step in the file, so every presence assertion in tests/ci/ stays
-        // green while CI executes no tests. Two is a different bug — the
-        // suite would run twice against the same database — and neither count
-        // is acceptable, which is why this asserts the cardinality and not a
-        // substring. Under workflow_run the suite is the pull request's
-        // own code, so it runs only in pr-suite.yml and this job awaits that
-        // run's outcome instead: the awaiter is then the step whose absence
-        // would stop the gate gating.
-        expect(
-          testSteps().map(label),
-          `on ${scenario.event} with docs_only=${scenario.docsOnly}, ` +
-            `${scenario.runsSuite ? "exactly one" : "no"} executed step may invoke ` +
-            `\`${TEST_SUITE_COMMAND}\`. Steps that execute a command here: ` +
-            `${executedRunSteps().map(label).join(", ") || "none"}`,
-        ).toHaveLength(scenario.runsSuite ? 1 : 0);
-        expect(
-          runsContaining(selected(), AWAIT_SUITE_COMMAND).map(label),
-          `on ${scenario.event} with docs_only=${scenario.docsOnly}, ` +
-            `${scenario.runsSuite ? "no" : "exactly one"} executed step may await the pull ` +
-            `request suite`,
-        ).toHaveLength(scenario.runsSuite ? 0 : 1);
-      },
-    );
-
-    it(
-      scenario.runsSuite
-        ? "applies the migrations before it runs the tests"
-        : "applies no migration, because it runs no pull-request code",
-      () => {
-        if (!scenario.runsSuite) {
-          expect(
-            runsContaining(selected(), MIGRATE_COMMAND).map(label),
-            `on ${scenario.event} the verify job must not run \`${MIGRATE_COMMAND}\`: it executes the ` +
-              `pull request's migration runner`,
-          ).toEqual([]);
-          return;
-        }
-        // The suite cannot pass against a schema it never applied. Ordering is
-        // asserted as the one relative order that carries meaning; no absolute
-        // index is pinned anywhere in this file, so moving an unrelated step
-        // cannot fail it.
-        const selectedSteps = selected();
-        const migrate = selectedSteps.findIndex((step) => (step.run ?? "").includes(MIGRATE_COMMAND));
-        const test = selectedSteps.findIndex((step) => (step.run ?? "").includes(TEST_SUITE_COMMAND));
-
-        expect(
-          migrate,
-          `on ${scenario.event} the verify job must execute \`${MIGRATE_COMMAND}\``,
-        ).toBeGreaterThan(-1);
-        expect(
-          test,
-          `on ${scenario.event} the verify job must execute \`${TEST_SUITE_COMMAND}\``,
-        ).toBeGreaterThan(-1);
-        expect(
-          migrate,
-          `on ${scenario.event} the migrations must be applied before the tests run — a suite that ` +
-            `runs against a schema it never applied can pass against the wrong database`,
-        ).toBeLessThan(test);
-      },
-    );
-
-    it(
-      scenario.coverage
-        ? "measures coverage alongside the tests"
-        : "measures no coverage at all, because the change cannot move coverage",
-      () => {
-        const joined = selected()
-          .flatMap((step) => (step.run ? [step.run] : []))
-          .join("\n");
-        const expectation =
-          `on ${scenario.event} with docs_only=${scenario.docsOnly} the coverage measurement ` +
-          `${scenario.coverage ? "must run" : "must not run"}: a docs-only change compares the same ` +
-          `tree against itself, and a run that measured it anyway would report a number that means ` +
-          `nothing. Steps that execute a command here: ${executedRunSteps().map(label).join(", ") || "none"}`;
-
-        expect(coverageInvocations(), expectation).toHaveLength(scenario.coverage ? 1 : 0);
-        expect(
-          runsContaining(selected(), COVERAGE_FLOOR_COMMAND).map(label),
-          `on ${scenario.event} with docs_only=${scenario.docsOnly} the coverage floor ` +
-            `${scenario.floor ? "must be checked exactly once" : "must not be checked"}`,
-        ).toHaveLength(scenario.floor ? 1 : 0);
-        expect(joined.includes(COVERAGE_FLOOR_COMMAND), expectation).toBe(scenario.floor);
-        // Every flag the step passes, one at a time, as a whole token of the
-        // command: check-coverage-floor.ts and the patch-coverage step read
-        // what these write, so a dropped flag is a silently unreadable
-        // artifact rather than a smaller one.
-        const coverageWords = shellWords(coverageInvocations()[0] ?? "");
-        for (const flag of COVERAGE_FLAGS) {
-          expect(
-            coverageWords.includes(shellWords(flag)[0]!),
-            `${expectation} — the coverage invocation must pass ${flag} as its own shell word, ` +
-              `not merely as text inside a longer flag`,
-          ).toBe(scenario.coverage);
-        }
-      },
-    );
-
-    it("tolerates the failure of no test or coverage step", () => {
-      // Selected is not the same as gating: a step may be selected and still
-      // have its failure ignored, which would leave the same green conclusion
-      // this suite exists to deny, one level up.
-      const gating = [
-        ...testSteps(),
-        ...runsContaining(selected(), COVERAGE_FLOOR_COMMAND),
-        ...runsContaining(selected(), AWAIT_SUITE_COMMAND),
-      ];
-      for (const step of gating) {
-        expect(
-          step["continue-on-error"],
-          `${label(step)} runs on ${scenario.event} and must not be continue-on-error — a tolerated ` +
-            `failure does not gate the merge`,
-        ).toBeFalsy();
-      }
-      expect(
-        gating.length,
-        `on ${scenario.event} at least one test, coverage or suite-awaiting step must exist to ` +
-          `carry this check`,
-      ).toBeGreaterThan(0);
-    });
-  });
-}
 
 /* -------------------------------------------------------------------------- */
 /* Half 3 — the trust boundary of the workflow_run leg                    */
@@ -1865,7 +1440,7 @@ const BASE_SCRIPT = /^(?:\$GITHUB_WORKSPACE|\$\{GITHUB_WORKSPACE\})\/scripts\/[\
 
 /** The actions a workflow_run step may use: none of them executes
  *  anything from the tree they operate on. */
-const PRT_ACTIONS = ["actions/checkout@", "actions/setup-node@", "actions/download-artifact@"];
+const PRT_ACTIONS = ["actions/checkout@", "actions/setup-node@", "Nitjsefnie-Actions/test-ratchet/report@"];
 
 function unquoted(word: string): string { return word.replaceAll("'", "").replaceAll('"', ""); }
 
@@ -1975,42 +1550,6 @@ describe("the untrusted-execution detector the boundary assertions rely on", () 
   });
 });
 
-// Asserted over the scenarios that MEASURE coverage, not inside the loop
-// above. COVERAGE_ARTIFACTS describes the push leg's three steps — the ones
-// carrying `docs_only != 'true'` without running a test — and a mutation on
-// any one of them leaves every other assertion in tests/ci/ green, because
-// nothing but this test asserts over their EXECUTION. The pull-request leg has
-// no such step, and a version of this test that ran there would assert only
-// that its own `expect(...).toHaveLength(1)` premise held — i.e. nothing. The
-// table is completeness-checked against ci.yml above, and ci-pr.yml's carrying
-// none of it is asserted in the same place.
-for (const scenario of SCENARIOS.filter((entry) => entry.file === COVERAGE_LEG)) {
-  describe(`the coverage artifacts CI publishes when it runs ${scenario.label}`, () => {
-    const selected = () => selectSteps(stepsFor(scenario), contextFor(scenario));
-
-    it("computes and publishes them exactly when it measures coverage", () => {
-      const selectedSteps = selected();
-      const measureSteps = legs.get(COVERAGE_LEG)!.steps;
-      for (const artifact of COVERAGE_ARTIFACTS) {
-        const matching = measureSteps.filter(artifact.matches);
-
-        expect(
-          matching,
-          `the verify job must carry exactly one step that produces ${artifact.label}, so the ` +
-            `expectation below is about a step rather than about nothing`,
-        ).toHaveLength(1);
-        expect(
-          selectedSteps.includes(matching[0]!),
-          `on ${scenario.event} with docs_only=${scenario.docsOnly} ${artifact.label} must ` +
-            `${scenario.coverage ? "" : "not "}execute: it carries the same docs_only condition as ` +
-            `the test steps, and a condition that never fires leaves the artifact unproduced while ` +
-            `the job concludes green`,
-        ).toBe(scenario.coverage);
-      }
-    });
-  });
-}
-
 for (const scenario of PRT_SCENARIOS) {
   describe(`the workflow_run leg's trust boundary for ${scenario.label}`, () => {
     const selected = () => selectSteps(stepsFor(scenario), contextFor(scenario));
@@ -2100,7 +1639,6 @@ for (const scenario of PRT_SCENARIOS) {
       const steps = selected();
       const gates = [
         { gate: "conflict markers", needle: "git grep -nI" },
-        { gate: "docs-only classification", needle: "/scripts/docs-only.ts" },
         { gate: "migration immutability", needle: "/scripts/check-migration-edits.ts" },
         { gate: "legal revision currency", needle: "/scripts/check-legal-revisions.ts" },
         { gate: "commit scopes", needle: "/scripts/commit_scopes.py" },
@@ -2166,54 +1704,6 @@ for (const scenario of PRT_SCENARIOS) {
       expect(steps.indexOf(required[0]!)).toBeGreaterThan(steps.indexOf(awaiter));
     });
 
-    it(
-      scenario.floor
-        ? "downloads coverage into a fresh directory outside both trees"
-        : "downloads nothing for a docs-only change",
-      () => {
-        const steps = selected();
-        const downloads = steps.filter((step) =>
-          (step.uses ?? "").startsWith("actions/download-artifact@"),
-        );
-        expect(downloads).toHaveLength(scenario.floor ? 1 : 0);
-        if (!scenario.floor) return;
-        const download = downloads[0]!;
-        const awaiter = runsContaining(steps, AWAIT_SUITE_COMMAND)[0]!;
-        expect(download.with?.["run-id"]).toBe(`\${{ steps.${awaiter.id}.outputs.run_id }}`);
-        const destination = /^\$\{\{ steps\.([\w-]+)\.outputs\.dir \}\}$/.exec(
-          String(download.with?.path ?? ""),
-        );
-        expect(
-          destination,
-          "the download destination must be exactly the `dir` output of the step that created it " +
-            "fresh — never a path under the pull request tree or the workspace",
-        ).not.toBeNull();
-        expect(download["continue-on-error"]).toBeFalsy();
-
-        const creator = steps.filter((step) => step.id === destination![1]);
-        expect(creator, "the destination's creating step must run in this scenario").toHaveLength(1);
-        expect(steps.indexOf(creator[0]!)).toBeLessThan(steps.indexOf(download));
-        const run = creator[0]!.run ?? "";
-        expect(run, "the destination must sit under RUNNER_TEMP").toMatch(
-          /^dir="\$\{RUNNER_TEMP\}\/[\w-]+"$/m,
-        );
-        expect(run, "an existing destination, a symlink included, must be refused").toContain(
-          'if [ -e "${dir}" ] || [ -L "${dir}" ]; then',
-        );
-        expect(run, "the directory is created by mkdir without -p, which refuses an existing one").toMatch(
-          /^mkdir -- "\$\{dir\}"$/m,
-        );
-
-        // The floor reads exactly the downloaded file, by the creator's output.
-        const floor = runsContaining(steps, COVERAGE_FLOOR_COMMAND);
-        expect(floor).toHaveLength(1);
-        expect(floor[0]!.run).toContain('--summary "${OVERFLOW_SUMMARY_DIR:?}/coverage-summary.json"');
-        expect((floor[0] as { env?: Record<string, string> }).env?.OVERFLOW_SUMMARY_DIR).toBe(
-          `\${{ steps.${destination![1]}.outputs.dir }}`,
-        );
-      },
-    );
-
     it("writes nothing into the pull request tree or the workspace", () => {
       const offences: string[] = [];
       for (const step of selected()) {
@@ -2266,13 +1756,8 @@ for (const scenario of SCENARIOS.filter((entry) => entry.file === "ci.yml")) {
 // Each upload below is a tolerated first attempt followed at once by an
 // identical retry that overwrites what the first left and carries the failure.
 // `afterFailure`: the upload runs on a red job too (the findings report).
-const DOCS_CHANGE: ActionsContext = { steps: { [DETECT_STEP_ID]: { outputs: { docs_only: "false" } } } };
-const DOCS_ONLY: ActionsContext = { steps: { [DETECT_STEP_ID]: { outputs: { docs_only: "true" } } } };
-const RETRIED_UPLOADS = [
-  { file: "ci.yml", artifact: "patch-coverage", afterFailure: false, skippedWhen: DOCS_ONLY },
-  { file: "ci.yml", artifact: "coverage-summary", afterFailure: false, skippedWhen: DOCS_ONLY },
-  { file: "pr-suite.yml", artifact: "patch-coverage", afterFailure: false, skippedWhen: DOCS_ONLY },
-  { file: "pr-suite.yml", artifact: "coverage-summary", afterFailure: false, skippedWhen: DOCS_ONLY },
+const NO_STEPS: ActionsContext = { steps: {} };
+const RETRIED_UPLOADS: { file: string; artifact: string; afterFailure: boolean; skippedWhen: ActionsContext | null }[] = [
   { file: "secret-scan.yml", artifact: "gitleaks-report", afterFailure: true, skippedWhen: null },
   { file: "pr-gates.yml", artifact: "gitleaks-report", afterFailure: true, skippedWhen: null },
 ];
@@ -2341,7 +1826,7 @@ describe("every artifact upload on a required path", () => {
             const holds = !skipped && (prior === "success" || site.afterFailure);
             const when = `job ${prior}, ${skipped ? "condition false" : "condition holds"}, first ${firstFails ? "fails" : "succeeds"}, retry ${retryFails ? "fails" : "succeeds"}`;
             it(`on ${when}`, () => {
-              const run = runAttempts(pair(), skipped ? site.skippedWhen! : DOCS_CHANGE, prior, [firstFails!, retryFails!]);
+              const run = runAttempts(pair(), skipped ? site.skippedWhen! : NO_STEPS, prior, [firstFails!, retryFails!]);
               expect(run.ran, "which attempts run").toEqual(holds ? (firstFails ? ["first", "retry"] : ["first"]) : []);
               expect(run.status, "the job's status after them").toBe(prior === "failure" || (holds && firstFails && retryFails) ? "failure" : "success");
             });

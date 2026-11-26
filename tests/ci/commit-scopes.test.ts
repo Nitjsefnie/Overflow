@@ -178,7 +178,7 @@ describe("scripts/commit_scopes.py", () => {
       "Actions event policy",
       "actionlint", "advisory tracking",
       "ci", "ci pull request",
-      "claim", "code scanning", "comment share", "coverage comment",
+      "claim", "code scanning", "comment share",
       "dependency audit",
       "ledger relay", "pin test screen", "pr gate", "pr gates", "pr suite",
       "ratchet guard", "scorecard",

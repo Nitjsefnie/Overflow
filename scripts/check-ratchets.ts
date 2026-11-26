@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 // Ratchet document guard: refuses a change that relaxes the
-// documents the coverage floor and SQL statement checks compare against.
+// document the SQL statement check compares against. The coverage floor is
+// test-ratchet's, in .github/ci-thresholds.json, guarded by its
+// records-only-rise.
 //
 //   node scripts/check-ratchets.ts <base-rev> <head-rev>
 //
 // All documents are read as data with `git show <rev>:<path>` at the merge
 // base of the two revisions and at the head — never from the working tree,
 // and no head code is executed. The merge base, not the base tip, is the
-// reference: calibration raises the floor on the base branch after a branch
-// forks, and the branch did not loosen anything by missing that raise.
+// reference: the base branch may tighten a record after a branch forks, and
+// the branch did not loosen anything by missing that change.
 //
 // Exit 0 when nothing is relaxed, 1 with one line per relaxation (file, key,
 // merge-base value, head value), 2 on a usage error, an unknown revision, a
@@ -23,9 +25,7 @@
 
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { round2 } from "./check-coverage-floor.ts";
 
-export const COVERAGE_PATH = "scripts/coverage.json";
 export const PERF_BUDGET_PATH = "scripts/perf-budget.json";
 
 // Workloads are a closed set. No existing cap may rise or disappear. A new
@@ -64,10 +64,6 @@ function isObject(value: unknown): value is Json {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
 function show(value: unknown): string {
   if (value === undefined) return "absent";
   if (typeof value === "number" && !Number.isFinite(value)) return String(value);
@@ -90,104 +86,6 @@ function finding(file: string, key: string, base: unknown, head: unknown, why: s
 
 function deleted(file: string): string {
   return finding(file, "(document)", "present", undefined, "the document was deleted");
-}
-
-// Leaf values keyed by their path; a non-object or an empty object anywhere
-// (including the document itself) is a leaf, so a subtree replaced by a
-// scalar shows up as its leaves removed and one key added, and an added
-// empty object is still an added key.
-function leaves(value: unknown, parts: string[] = [], out = new Map<string, unknown>()) {
-  if (!isObject(value) || Object.keys(value).length === 0) {
-    out.set(keyPath(parts), value);
-    return out;
-  }
-  for (const [key, child] of Object.entries(value)) leaves(child, [...parts, key], out);
-  return out;
-}
-
-// Direction in which each coverage leaf may move: "up" means it may only rise.
-// Direction alone is not enough for two of them, because of how
-// calibrate-coverage.ts uses them — see calibratorRelaxations.
-const COVERAGE_DIRECTIONS = new Map<string, "up" | "down">([
-  ["languages.typescript.floor", "up"],
-  ["languages.typescript.measured", "up"],
-  ["gap", "down"],
-  ["hysteresis", "down"],
-]);
-
-export function coverageRelaxations(base: unknown, head: unknown): string[] {
-  if (base === null || base === undefined) return [];
-  if (head === null || head === undefined) return [deleted(COVERAGE_PATH)];
-  const out: string[] = [];
-  const before = leaves(base);
-  const after = leaves(head);
-  for (const [key, was] of before) {
-    if (!after.has(key)) out.push(finding(COVERAGE_PATH, key, was, undefined, "key removed"));
-  }
-  for (const [key, now] of after) {
-    if (!before.has(key)) {
-      out.push(finding(COVERAGE_PATH, key, undefined, now, "key added"));
-      continue;
-    }
-    const was = before.get(key);
-    if (!isFiniteNumber(now)) {
-      out.push(finding(COVERAGE_PATH, key, was, now, "not a finite number"));
-      continue;
-    }
-    if (Object.is(was, now)) continue;
-    const direction = COVERAGE_DIRECTIONS.get(key);
-    if (direction === undefined) {
-      out.push(finding(COVERAGE_PATH, key, was, now, "changed, and has no tightening direction"));
-    } else if (!isFiniteNumber(was)) {
-      out.push(finding(COVERAGE_PATH, key, was, now, "merge-base value is not a finite number"));
-    } else if (direction === "up" && now < was) {
-      out.push(finding(COVERAGE_PATH, key, was, now, "lowered; it may only rise"));
-    } else if (direction === "down" && now > was) {
-      out.push(finding(COVERAGE_PATH, key, was, now, "raised; it may only fall"));
-    }
-  }
-  out.push(...calibratorRelaxations(before, after));
-  return out;
-}
-
-// The calibrator rewrites the document when round2(measured - recorded)
-// exceeds the hysteresis, setting floor = measured - gap. So a negative
-// hysteresis makes every run rewrite and the floor falls whenever coverage
-// dips, and a recorded measurement inflated above the floor it implies
-// freezes the ratchet. A genuine calibrate output meets the floor bound with
-// equality.
-function calibratorRelaxations(before: Map<string, unknown>, after: Map<string, unknown>) {
-  const out: string[] = [];
-  const hysteresis = after.get("hysteresis");
-  if (isFiniteNumber(hysteresis) && hysteresis < 0) {
-    out.push(
-      finding(COVERAGE_PATH, "hysteresis", before.get("hysteresis"), hysteresis, "negative"),
-    );
-  }
-  const measuredKey = "languages.typescript.measured";
-  const floorKey = "languages.typescript.floor";
-  const measured = after.get(measuredKey);
-  const floor = after.get(floorKey);
-  const gap = after.get("gap");
-  if (
-    !Object.is(before.get(measuredKey), measured) &&
-    isFiniteNumber(measured) &&
-    isFiniteNumber(floor) &&
-    isFiniteNumber(gap) &&
-    floor < round2(measured - gap)
-  ) {
-    out.push(
-      finding(
-        COVERAGE_PATH,
-        floorKey,
-        before.get(floorKey),
-        floor,
-        `below measured ${measured} minus gap ${gap} = ${round2(measured - gap)}; ` +
-          "a changed measurement must carry the floor it implies",
-      ),
-    );
-  }
-  return out;
 }
 
 function git(cwd: string, args: string[]): { status: number | null; stdout: string; stderr: string } {
@@ -283,21 +181,19 @@ export function checkRatchets(
   const base = resolveCommit(cwd, baseRev);
   const head = resolveCommit(cwd, headRev);
   const fork = mergeBase(cwd, base, head);
-  const findings: string[] = [];
-  const documents = [
-    [COVERAGE_PATH, coverageRelaxations],
-    [PERF_BUDGET_PATH, perfBudgetRelaxations],
-  ] as const;
-  for (const [path, relaxations] of documents) {
-    // A non-regular entry at head is the branch's own change, refused like
-    // any relaxation (exit 1) whether or not the merge base had the file.
-    const kind = entryKind(cwd, head, path);
-    if (kind !== null && kind !== REGULAR_FILE) {
-      findings.push(finding(path, "(document)", REGULAR_FILE, kind, "not a regular file"));
-      continue;
-    }
-    findings.push(...relaxations(readDocument(cwd, fork, path), readDocument(cwd, head, path)));
+  // A non-regular entry at head is the branch's own change, refused like
+  // any relaxation (exit 1) whether or not the merge base had the file.
+  const kind = entryKind(cwd, head, PERF_BUDGET_PATH);
+  if (kind !== null && kind !== REGULAR_FILE) {
+    return {
+      mergeBase: fork,
+      findings: [finding(PERF_BUDGET_PATH, "(document)", REGULAR_FILE, kind, "not a regular file")],
+    };
   }
+  const findings = perfBudgetRelaxations(
+    readDocument(cwd, fork, PERF_BUDGET_PATH),
+    readDocument(cwd, head, PERF_BUDGET_PATH),
+  );
   return { mergeBase: fork, findings };
 }
 
@@ -317,7 +213,7 @@ function main(): void {
   }
   if (result.findings.length === 0) {
     console.log(
-      `ratchet check: ${COVERAGE_PATH} and ${PERF_BUDGET_PATH} not relaxed ` +
+      `ratchet check: ${PERF_BUDGET_PATH} not relaxed ` +
         `against merge base ${result.mergeBase} — ok`,
     );
     return;
