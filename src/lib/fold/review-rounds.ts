@@ -1,3 +1,4 @@
+import { validTimestamp } from "@/lib/fold/valid-timestamp";
 import type { GitHubPullRequestReview } from "@/lib/github/types";
 
 export function countReviewRoundsAsOf(
@@ -30,8 +31,4 @@ function dismissedBefore(review: GitHubPullRequestReview, deadline: number): boo
   return review.dismissal !== null &&
     validTimestamp(review.dismissal.at) &&
     Date.parse(review.dismissal.at) < deadline;
-}
-
-function validTimestamp(value: string | null): value is string {
-  return value !== null && Number.isFinite(Date.parse(value));
 }
