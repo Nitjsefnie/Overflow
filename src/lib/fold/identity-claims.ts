@@ -324,14 +324,15 @@ type ClaimValue = ParameterOrFragment<never>;
 
 /**
  * The SQL twin of the fold's `teamAt`: the team `account` belonged to at `at`
- * (joined at or before it, not yet left, the latest such join), or null.
+ * (joined at or before it, not yet left), or null. Overlap: latest join, then
+ * greatest team id, the order `teamAt` sorts by.
  */
 function teamAtSql(sql: ClaimSql, account: string, at: ClaimValue) {
   return sql`(
     select memberships.team_id from team_memberships as memberships
     where memberships.user_id = ${account} and memberships.joined_at <= ${at}
       and (memberships.left_at is null or ${at} < memberships.left_at)
-    order by memberships.joined_at desc limit 1
+    order by memberships.joined_at desc, memberships.team_id desc limit 1
   )`;
 }
 

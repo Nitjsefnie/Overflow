@@ -56,6 +56,10 @@ describe("teamAt", () => {
       [member("T", "2026-08-01T00:00:00Z", "2026-08-15T00:00:00Z"), member("U", "2026-08-15T00:00:00Z")], "U"],
     ["held two overlapping rows: the later join decides",
       [member("U", "2026-08-20T00:00:00Z"), member("T", "2026-08-01T00:00:00Z", "2026-09-02T00:00:00Z")], "U"],
+    ["held two rows joined at one instant: the greater team id decides",
+      [member("U", "2026-08-20T00:00:00Z", "2026-09-02T00:00:00Z"), member("T", "2026-08-20T00:00:00Z")], "U"],
+    ["held the same tie listed the other way round",
+      [member("T", "2026-08-20T00:00:00Z"), member("U", "2026-08-20T00:00:00Z", "2026-09-02T00:00:00Z")], "U"],
   ])("%s", (_case, memberships, expected) => {
     expect(teamAt(user("author", 2001, memberships), mergedAt)).toBe(expected);
   });
