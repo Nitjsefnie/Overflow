@@ -54,53 +54,47 @@ describe("GitHub webhook route", () => {
     expect(deliveries).toEqual([]);
   });
 
+  const issue = { id: 201, number: 11, state: "open", updated_at: "2026-09-08T10:00:00Z",
+    title: "Issue", body: null, html_url: "https://github.com/octo/example/issues/11" };
+  const pullRequest = { id: 201, number: 11 };
+  const prIssue = { ...issue, pull_request: { url: "https://api.github.com/repos/octo/example/pulls/11" } };
+
+  function statusChange(state: string, category: string, changes: Record<string, unknown>) {
+    const status = { id: 3, name: "Team status", category };
+    return { issue: { ...issue, state, status }, status, changes: { status: { from: null }, ...changes } };
+  }
+
   it.each([undefined, { id: 0, number: 11 }, { id: 201, number: -1 }, { id: 201, number: "11" }])(
     "rejects comment delivery without a valid issue subject, even if it contains a PR subject: %j", async (issue) => {
-      const deliveries: unknown[] = [];
-      const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: async (delivery) => { deliveries.push(delivery); return { status: "PROCESSED" as const }; } });
-      const response = await route(request(JSON.stringify({ action: "created",
-        repository: { id: 42, full_name: "octo/example" }, issue, pull_request: { id: 201, number: 11 },
-      }), { "x-github-event": "issue_comment", "x-github-delivery": "invalid-comment-subject" }));
+      const { response, processWebhook } = await postSignedDelivery("issue_comment", "created", { issue, pull_request: pullRequest });
       expect(response.status).toBe(400);
-      expect(deliveries).toEqual([]);
+      expect(processWebhook).not.toHaveBeenCalled();
     },
   );
 
-  // PR-carrying issue envelopes are deliberately ignored (webhook-schema's
-  // pull_request guard), and an ignored delivery must read as success to
-  // GitHub — any 2xx counts as delivered — or its delivery log turns red on
-  // traffic Overflow chose to ignore and hides real failures.
-  it.each(["issues", "issue_comment"])("answers 204 for a deliberately ignored PR-carrying %s envelope", async (event) => {
-    const processWebhookMock = vi.fn().mockResolvedValue(undefined);
-    const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
-    const response = await route(request(JSON.stringify({
-      action: event === "issues" ? "edited" : "created",
-      repository: { id: 42, full_name: "octo/example" },
-      issue: { id: 201, number: 11, state: "closed", updated_at: "2026-09-08T10:00:00Z",
-        title: "Issue", body: null, html_url: "https://github.com/octo/example/issues/11",
-        pull_request: { url: "https://api.github.com/repos/octo/example/pulls/11" } },
-    }), { "x-github-event": event, "x-github-delivery": "pr-carrying" }));
+  it.each([
+    { event: "issues", action: "edited", fields: { issue: prIssue } },
+    { event: "issue_comment", action: "created", fields: { issue: prIssue } },
+    { event: "pull_request", action: "ready_for_review", fields: { pull_request: pullRequest } },
+    { event: "pull_request", action: "converted_to_draft", fields: { pull_request: pullRequest } },
+    { event: "issues", action: "status_changed", fields: statusChange("open", "started", {}) },
+  ])("answers 204 without processing an ignored $event/$action delivery", async ({ event, action, fields }) => {
+    const { response, processWebhook } = await postSignedDelivery(event, action, fields);
     expect(response.status).toBe(204);
-    expect(processWebhookMock).not.toHaveBeenCalled();
+    expect(processWebhook).not.toHaveBeenCalled();
   });
 
-  // ready_for_review and converted_to_draft are recognized pull_request
-  // actions Overflow does not materialize (webhook-schema's
-  // unmaterializedActions). Like a PR-carrying issue envelope they must read
-  // as success to GitHub — any 2xx counts as delivered — or the delivery log
-  // turns red on traffic Overflow chose to ignore, and like every ignored
-  // delivery they must persist nothing: no processWebhook call, so no claim
-  // and no delivery row.
-  it.each(["ready_for_review", "converted_to_draft"])("answers 204 for a recognized-but-unmaterialized %s action without processing", async (action) => {
-    const processWebhookMock = vi.fn().mockResolvedValue(undefined);
-    const route = createGitHubWebhookPostHandler({ checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook: processWebhookMock });
-    const response = await route(request(JSON.stringify({
-      action,
-      repository: { id: 42, full_name: "octo/example" },
-      pull_request: { id: 201, number: 11 },
-    }), { "x-github-event": "pull_request", "x-github-delivery": `unmaterialized-${action}` }));
-    expect(response.status).toBe(204);
-    expect(processWebhookMock).not.toHaveBeenCalled();
+  it.each([
+    { state: "closed", category: "completed", changes: { state: { from: "open" }, state_reason: { from: null } } },
+    { state: "open", category: "backlog", changes: { state: { from: "closed" } } },
+    { state: "closed", category: "not_planned", changes: { state_reason: { from: "completed" } } },
+  ])("processes issues/status_changed when $changes affects reconciliation", async ({ state, category, changes }) => {
+    const { response, processWebhook } = await postSignedDelivery("issues", "status_changed", statusChange(state, category, changes));
+    expect(response.status).toBe(202);
+    expect(processWebhook).toHaveBeenCalledWith(expect.objectContaining({
+      event: "issues", action: "status_changed", subject: { kind: "ISSUE", id: 201, number: 11 },
+      issue: expect.objectContaining({ state: state.toUpperCase() }),
+    }), expect.anything());
   });
 
   it("answers 400 for a correctly signed unparseable JSON body", async () => {
@@ -796,6 +790,16 @@ describe("GitHub webhook route", () => {
     }
   });
 });
+
+async function postSignedDelivery(event: string, action: string, fields: Record<string, unknown>) {
+  const processWebhook = vi.fn().mockResolvedValue({ status: "PROCESSED" });
+  const route = createGitHubWebhookPostHandler({
+    checkRateLimit: () => true, lookupCredential: async () => webhookCredential("github", secret), processWebhook,
+  });
+  const body = JSON.stringify({ action, repository: { id: 42, full_name: "octo/example" }, ...fields });
+  const response = await route(request(body, { "x-github-event": event, "x-github-delivery": "delivery" }));
+  return { response, processWebhook };
+}
 
 function request(
   body: string,

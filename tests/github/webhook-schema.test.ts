@@ -77,27 +77,23 @@ describe("webhook delivery classification", () => {
     })).toEqual({ status: "ignored" });
   });
 
-  it.each(["ready_for_review", "converted_to_draft"])("classifies recognized-but-unmaterialized pull_request action %s as ignored, not invalid", (action) => {
-    // These actions arrive on a webhook subscribed event-grained to
-    // pull_request, which cannot unsubscribe per-action. They are deliberate
-    // drops, not malformed traffic: the parser must answer ignored so the
-    // route returns 2xx and GitHub's delivery log does not turn red on valid
-    // deliveries Overflow chooses not to materialize.
+  it.each([
+    { action: "ready_for_review", pull_request: { id: 201, number: 11 } },
+    { action: "converted_to_draft", pull_request: { id: 201, number: 11 } },
+    { action: "ready_for_review" },
+  ])("ignores recognized pull_request actions before subject parsing: %j", (payload) => {
     expect(parseGitHubWebhookDeliveryDetailed("pull_request", "delivery", {
-      action,
-      repository: { id: 42, full_name: "octo/example" },
-      pull_request: { id: 201, number: 11 },
+      repository: { id: 42, full_name: "octo/example" }, ...payload,
     })).toEqual({ status: "ignored" });
   });
 
-  it("classifies a subject-less ready_for_review envelope as ignored, not invalid", () => {
-    // The unmaterialized-action guard fires before subject parsing, so the
-    // envelope's missing pull_request subject cannot reclassify the
-    // deliberate drop as a rejection.
-    expect(parseGitHubWebhookDeliveryDetailed("pull_request", "delivery", {
-      action: "ready_for_review",
-      repository: { id: 42, full_name: "octo/example" },
-    })).toEqual({ status: "ignored" });
+  it.each([
+    undefined, { state: null }, { state: {} }, { state: { from: "started" } },
+    { state_reason: null }, { state_reason: { from: 1 } },
+  ])("rejects malformed issues/status_changed changes %j", (changes) => {
+    expect(parseGitHubWebhookDeliveryDetailed("issues", "delivery", {
+      action: "status_changed", repository: { id: 42, full_name: "octo/example" }, issue, changes,
+    })).toEqual({ status: "invalid" });
   });
 
   it.each([
