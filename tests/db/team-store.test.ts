@@ -109,10 +109,9 @@ describe("changing a team's membership", () => {
     expect(await store.addTeamMember(member.id, outsider.login)).toEqual({ kind: "not_lead" });
     expect(await store.addTeamMember(outsider.id, outsider.login)).toEqual({ kind: "not_lead" });
     expect(await store.addTeamMember(lead.id, "no-such-login")).toEqual({ kind: "not_found" });
-    const deletedLogin = deleted.login;
-    await sql`update users set deleted_at = now(), github_login = '(deleted account)' where id = ${deleted.id}`;
-    expect(await store.addTeamMember(lead.id, deletedLogin)).toEqual({ kind: "not_found" });
-    expect(await store.addTeamMember(lead.id, "(deleted account)")).toEqual({ kind: "not_found" });
+    // Deleted but still carrying its login, the one state where only deleted_at tells it apart.
+    await sql`update users set deleted_at = now() where id = ${deleted.id}`;
+    expect(await store.addTeamMember(lead.id, deleted.login)).toEqual({ kind: "not_found" });
     expect(await store.addTeamMember(lead.id, member.login)).toEqual({ kind: "already_in_team" });
     expect(await store.addTeamMember(lead.id, otherLead.login)).toEqual({ kind: "already_in_team" });
     expect(await store.addTeamMember(otherLead.id, member.login)).toEqual({ kind: "already_in_team" });
