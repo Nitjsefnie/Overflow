@@ -1,10 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSettlementsGetHandler } from "@/app/api/settlements/route";
 import { createSettlementProofGetHandler } from "@/app/api/settlements/[id]/route";
-import type {
-  SettlementHistoryProjection,
-  SettlementProofProjection,
-} from "@/lib/dashboard/queries";
+import type { SettlementHistoryProjection, SettlementProofProjection } from "@/lib/dashboard/settlement-calibration";
 import type { SettlementOverrideRequest } from "@/lib/overrides/service";
 
 const memberId = "00000000-0000-4000-8000-000000000001";

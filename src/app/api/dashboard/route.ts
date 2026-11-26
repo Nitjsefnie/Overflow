@@ -1,8 +1,5 @@
 import { errorResponse } from "@/lib/http/error-response";
-import {
-  getDashboard,
-  type DashboardProjection,
-} from "@/lib/dashboard/queries";
+import { getDashboard, type DashboardProjection } from "@/lib/dashboard/queries";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import {
   getProductionSession,

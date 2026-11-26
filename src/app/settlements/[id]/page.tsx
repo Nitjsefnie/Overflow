@@ -14,7 +14,7 @@ export default async function SettlementPage({ params }: SettlementPageProps) {
   const session = await requireMemberPageSession();
   const { id } = await params;
   try {
-    const { getSettlementProof } = await import("@/lib/dashboard/queries");
+    const { getSettlementProof } = await import("@/lib/dashboard/settlement-calibration");
     const settlement = await getSettlementProof(session.user.id, id);
     if (settlement === null) {
       return (

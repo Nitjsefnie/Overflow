@@ -1,8 +1,5 @@
 import { errorResponse } from "@/lib/http/error-response";
-import {
-  getSettlementProof,
-  type SettlementProofProjection,
-} from "@/lib/dashboard/queries";
+import { getSettlementProof, type SettlementProofProjection } from "@/lib/dashboard/settlement-calibration";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import { PostgresSettlementOverrideStore } from "@/lib/overrides/postgres-store";
 import {

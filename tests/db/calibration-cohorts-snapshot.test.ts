@@ -4,7 +4,8 @@ import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { startPostgresContainer } from "../support/postgres-container";
 import { closeSql, getSql } from "@/lib/db/client";
-import { loadCalibrationCohorts, type DashboardSql } from "@/lib/dashboard/queries";
+import { type DashboardSql } from "@/lib/dashboard/queries";
+import { loadCalibrationCohorts } from "@/lib/dashboard/settlement-calibration";
 
 /**
  * Issue 499: loadCalibrationCohorts read the self-work cohort and the outsider

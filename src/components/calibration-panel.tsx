@@ -4,7 +4,7 @@ import type {
   CalibrationSummary,
   RepositoryCalibrationEntry,
 } from "@/lib/calibration/statistics";
-import type { SelfWorkCalibrationProjection } from "@/lib/dashboard/queries";
+import type { SelfWorkCalibrationProjection } from "@/lib/dashboard/settlement-calibration";
 import { formatSigned } from "@/lib/format-signed";
 import { formatInstant } from "@/lib/format-instant";
 import { plural } from "@/lib/plural";

@@ -9,9 +9,13 @@ import { exportAccount } from "@/lib/accounts/export";
 import { closeSql, getSql } from "@/lib/db/client";
 import { listEligibleIssues } from "@/lib/dashboard/eligible-issues";
 import { listCreditIssued } from "@/lib/dashboard/ledger-panels";
+import { getDashboard, type DashboardSql } from "@/lib/dashboard/queries";
 import {
-  getDashboard, getSettlementProof, listAuditCandidates, listSettlementHistory, loadCalibrationCohorts, type DashboardSql,
-} from "@/lib/dashboard/queries";
+  getSettlementProof,
+  listAuditCandidates,
+  listSettlementHistory,
+  loadCalibrationCohorts,
+} from "@/lib/dashboard/settlement-calibration";
 import { PostgresModerationStore } from "@/lib/moderation/postgres-store";
 import { createSettledWorkReader } from "@/lib/public-stats";
 import { validDifficultyScheme } from "../support/difficulty-scheme";

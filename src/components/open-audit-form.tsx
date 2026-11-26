@@ -3,7 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { MINIMUM_CALIBRATION_SAMPLE_SIZE, type CalibrationSummary } from "@/lib/calibration/statistics";
-import type { AuditCandidateProjection, ModerationRepositoryProjection } from "@/lib/dashboard/queries";
+import type { ModerationRepositoryProjection } from "@/lib/dashboard/queries";
+import type { AuditCandidateProjection } from "@/lib/dashboard/settlement-calibration";
 import { formatSigned } from "@/lib/format-signed";
 import { parseDateTimeLocalAsUtc } from "@/lib/format-instant";
 import { plural } from "@/lib/plural";

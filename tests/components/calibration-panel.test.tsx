@@ -7,7 +7,7 @@ import CalibrationPage from "@/app/calibration/page";
 import { CalibrationPanel, SelfWorkCalibrationList } from "@/components/calibration-panel";
 import { SettlementOverrideQueue } from "@/components/settlement-override-queue";
 import type { RepositoryCalibrationEntry } from "@/lib/calibration/statistics";
-import type { SelfWorkCalibrationProjection } from "@/lib/dashboard/queries";
+import type { SelfWorkCalibrationProjection } from "@/lib/dashboard/settlement-calibration";
 import { formatSigned } from "@/lib/format-signed";
 import { UNLABELLED_POINTS } from "@/lib/overrides/unlabelled-points";
 // Undeclared under pnpm strict mode, so the import names the locked store

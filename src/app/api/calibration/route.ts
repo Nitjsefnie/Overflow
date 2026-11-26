@@ -10,7 +10,7 @@ import {
   loadCalibrationCohorts,
   type CalibrationCohorts,
   type SelfWorkCalibrationProjection,
-} from "@/lib/dashboard/queries";
+} from "@/lib/dashboard/settlement-calibration";
 import { getCurrentUserRole } from "@/lib/moderation/current-role";
 import {
   getProductionSession,
