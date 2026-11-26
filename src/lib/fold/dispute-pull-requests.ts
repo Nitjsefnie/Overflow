@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { diffFingerprint } from "@/lib/fold/diff-fingerprint";
 import type { FoldIssue, FoldPullRequest, RepositoryFoldSnapshot } from "@/lib/fold/repository-fold";
 import { belongsToRegisteredRepository } from "@/lib/fold/repository-ownership";
 
@@ -28,7 +28,7 @@ export function retainDisputePullRequests(
         mergedAt: pr.mergedAt, mergeCommitOid: pr.mergeCommitOid?.toLowerCase() ?? null, finalCommitAt: pr.finalCommitAt,
         authorId: pr.authorGitHubUserId === null ? null : authors.get(pr.authorGitHubUserId) ?? null,
         authorGitHubLogin: pr.authorLogin, authorGitHubUserId: pr.authorGitHubUserId,
-        proofSha256: createHash("sha256").update(pr.rawDiff, "utf8").digest("hex"),
+        proofSha256: diffFingerprint(pr.rawDiff),
         githubIssueIds: [issue.id], reviewRounds: [],
       });
     }

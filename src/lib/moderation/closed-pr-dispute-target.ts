@@ -1,5 +1,5 @@
 import { readEnv } from "@/lib/env";
-import { createHash } from "node:crypto";
+import { diffFingerprint } from "@/lib/fold/diff-fingerprint";
 import { z } from "zod";
 import type { PullRequestState, TransactionClient } from "@/lib/db/types";
 import { PostgresSponsorCredentialStore } from "@/lib/fold/sponsor-credential-store";
@@ -95,7 +95,7 @@ export async function resolveDisputeTarget(
     (github_pull_request_id, repository_id, issue_id, pull_request_number, url, title, body,
       author_id, author_github_login, author_github_user_id, state, proof_sha256)
     values (${pr.id}, ${repository.id}, ${landing.issue_id}, ${number}, ${pr.url}, ${pr.title}, ${pr.body},
-      ${author.id}, ${pr.authorLogin}, ${pr.authorGitHubUserId}, 'CLOSED', ${createHash('sha256').update(await diff()).digest('hex')}) returning id`;
+      ${author.id}, ${pr.authorLogin}, ${pr.authorGitHubUserId}, 'CLOSED', ${diffFingerprint(await diff())}) returning id`;
   if (row === undefined) throw new Error('Closed PR insert returned no row.');
   await sql`insert into pull_request_issues (pull_request_id, issue_id, repository_id)
     values (${row.id}, ${landing.issue_id}, ${repository.id})`;

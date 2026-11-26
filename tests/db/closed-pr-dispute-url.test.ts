@@ -54,7 +54,7 @@ async function fixture(provider = "github") {
   const [landing] = await sql<{ id: string }[]>`insert into pull_requests
     (github_pull_request_id, repository_id, issue_id, pull_request_number, title, body, url, state)
     values (${sequence++}, ${repository.id}, ${issue.id}, 42, 'Landing', '', ${landingUrl}, 'MERGED') returning id`;
-  const rawDiff = `diff --git a/change b/change\n+contribution ${sequence++}\n`;
+  const rawDiff = `diff --git a/change b/change\nindex c57eff55e..719be62e9 100644\n+contribution ${sequence++}\n`;
   const pr: GitHubPullRequest = { id: sequence++, number: 41, title: 'Unreferenced change', body: 'Work', url, state: 'CLOSED',
     mergedAt: null, mergeCommitOid: null, finalCommitAt: null, authorGitHubUserId: forgeId,
     authorLogin: 'renamed-author', repositoryGitHubId: Number((await sql`select github_repository_id from registered_repositories where id = ${repository.id}`)[0].github_repository_id),
@@ -276,7 +276,7 @@ describe("closed PR URL filing", () => {
     expect(pr).toMatchObject({ repository_id: f.repositoryId, issue_id: f.issueId, github_pull_request_id: String(f.pr.id),
       pull_request_number: 41, url: f.url, title: 'Unreferenced change', author_id: f.accountId,
       author_github_user_id: String(f.forgeId), author_github_login: 'renamed-author', state: 'CLOSED', merged_at: null,
-      proof_sha256: createHash('sha256').update(f.rawDiff).digest('hex') });
+      proof_sha256: createHash('sha256').update(f.rawDiff.replace('c57eff55e..719be62e9', 'c57e..719b')).digest('hex') });
     expect(await sql`select pull_request_id, issue_id, repository_id from pull_request_issues where pull_request_id = ${pr.id}`)
       .toEqual([{ pull_request_id: pr.id, issue_id: f.issueId, repository_id: f.repositoryId }]);
     const exported = await exportAccount(sql, f.forgeId);

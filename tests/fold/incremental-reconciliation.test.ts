@@ -460,6 +460,26 @@ describe("incremental reconciliation", () => {
     expect((await f.store.getReconciliationEvidence(f.id))?.lastFullPassAt).toEqual(f.clock);
   });
 
+  it("keeps every stored proof and records no settlement change when a full pass reads the change at another blob-id length", async () => {
+    const f = await fixture();
+    const diffAt = (length: number) => `diff --git a/f b/f\nindex ${"c57eff55e1".slice(0, length)}..${"719be62e91".slice(0, length)} 100644\n+x\n`;
+    const settled = () => sql`select settlements.proof_sha256 from settlements join issues on issues.id = settlements.issue_id
+      where issues.repository_id = ${f.id} order by issues.issue_number`;
+    f.diff = diffAt(8);
+    await f.run();
+    const [before, proofs] = [await derived(f.id), await settled()];
+    expect(proofs).toHaveLength(2);
+    f.diff = diffAt(9);
+    f.clock = new Date("2026-09-08T16:00:00Z");
+    const full = await f.run();
+    if (full.skipped) throw new Error("Expected a completed full pass.");
+    expect(f.scans.at(-1)).toBeUndefined();
+    expect((await f.store.getReconciliationEvidence(f.id))?.pullRequests.map(({ rawDiff }) => rawDiff)).toEqual([diffAt(9), diffAt(9)]);
+    expect([full.changes, await derived(f.id), await settled()]).toEqual([0, before, proofs]);
+    expect(await sql`select count(*)::int as count from reconciliation_changes
+      where reconciliation_run_id = ${full.runId} and entity_kind = 'SETTLEMENT'`).toEqual([{ count: 0 }]);
+  });
+
   // Mutant: OMITTED_OVERSIZED_DOES_NOT_FORCE_FULL — a fact omitted as
   // oversized leaves a hole in the evidence cache, and a quiet partial pass
   // reading that hole as upstream absence would destroy the subject's

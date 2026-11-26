@@ -1,5 +1,5 @@
 import { retainDisputePullRequests } from "@/lib/fold/dispute-pull-requests";
-import { createHash } from "node:crypto";
+import { diffFingerprint } from "@/lib/fold/diff-fingerprint";
 import type { EnforcementState, IssueState, PullRequestState } from "@/lib/db/types";
 import { isParticipationEligibleAt } from "@/lib/fold/moderation-history";
 import { isSelfWorkAt, settlementTeam, type FoldTeamMembership } from "@/lib/fold/team-membership";
@@ -532,7 +532,7 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
         ? forgeIdentitiesByForgeUserId.get(pullRequest.authorGitHubUserId)
         : usersByGitHubUserId.get(pullRequest.authorGitHubUserId);
     const reviewRounds = countReviewRounds(pullRequest.reviews, pullRequest.mergedAt);
-    const proofSha256 = hashRawDiff(pullRequest.rawDiff);
+    const proofSha256 = diffFingerprint(pullRequest.rawDiff);
     const foldedPullRequest = rememberPullRequest(
       pullRequestsByGitHubId,
       pullRequest,
@@ -1212,10 +1212,6 @@ function toLedgerSettlement(settlement: FoldSettlement): SettlementDecision[] {
       credits: settlement.credits,
     },
   ];
-}
-
-function hashRawDiff(rawDiff: string): string {
-  return createHash("sha256").update(rawDiff).digest("hex");
 }
 
 function normalizedNonblankLogin(login: string | null): string | null {
