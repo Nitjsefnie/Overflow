@@ -1023,7 +1023,7 @@ is CLOSED and unmerged, and its numeric author identity must map to the filing
 account (GitLab identities are scoped to the registered instance). Supply a
 `landedPullRequestUrl` resolving to a recorded MERGED PR in that repository with
 a recorded issue. The dispute uses that issue, and filing atomically stores the
-closed PR, its raw-diff SHA-256 proof and its issue link. A commit-only landing
+closed PR, its diff-fingerprint proof and its issue link. A commit-only landing
 cannot identify an issue for an unrecorded PR and is refused with a named reason.
 
 For a stored closed PR, filing uses an already stored MERGED PR for the same issue automatically. When
