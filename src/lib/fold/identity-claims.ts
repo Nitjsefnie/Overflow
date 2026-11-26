@@ -1,3 +1,4 @@
+import type { ParameterOrFragment } from "postgres";
 import type { SqlClient, TransactionClient } from "@/lib/db/types";
 import { calculateSettlement } from "@/lib/domain/settlement";
 import type { SettlementRow } from "@/lib/fold/postgres-row-mapping";
@@ -54,9 +55,10 @@ export async function claimGitHubIdentity(
       where settlements.status = ${"UNCLAIMED"}
         and settlements.provider = ${"github"}
         and settlements.creditor_github_user_id = ${githubUserId}
-        and settlements.debtor_id = ${userId}
         and pull_requests.merged_at is not null
         and participation_eligible_at(${userId}, pull_requests.merged_at)
+        and participation_eligible_at(settlements.debtor_id, pull_requests.merged_at)
+        and (settlements.debtor_id = ${userId} or ${teammateAtMerge(transaction, userId)})
     `;
     for (const settlement of selfWorkSettlements) {
       await transaction`
@@ -64,7 +66,7 @@ export async function claimGitHubIdentity(
           pull_request_id, issue_id, user_id, opening_comparison_points, actual_points, fold_revision
         )
         values (
-          ${settlement.pull_request_id}, ${settlement.issue_id}, ${userId},
+          ${settlement.pull_request_id}, ${settlement.issue_id}, ${settlement.debtor_id},
           ${settlement.opening_comparison_points}, ${settlement.settled_points}, ${settlement.fold_revision}
         )
         on conflict (pull_request_id, issue_id) do update
@@ -90,7 +92,7 @@ export async function claimGitHubIdentity(
     `;
     await transaction`
       update settlements
-      set creditor_id = ${userId}, status = ${"SETTLED"}
+      set creditor_id = ${userId}, status = ${"SETTLED"}, team_id = ${teamAtSql(transaction, userId, transaction`pull_requests.merged_at`)}
       from users as creditor, users as debtor, pull_requests
       where settlements.status = ${"UNCLAIMED"}
         and settlements.provider = ${"github"}
@@ -143,9 +145,10 @@ export async function claimForgeIdentity(
         and settlements.provider = ${"gitlab"}
         and settlements.instance_url = ${instanceUrl}
         and settlements.creditor_github_user_id = ${input.forgeUserId}
-        and settlements.debtor_id = ${input.userId}
         and pull_requests.merged_at is not null
         and participation_eligible_at(${input.userId}, pull_requests.merged_at)
+        and participation_eligible_at(settlements.debtor_id, pull_requests.merged_at)
+        and (settlements.debtor_id = ${input.userId} or ${teammateAtMerge(transaction, input.userId)})
     `;
     for (const settlement of selfWorkSettlements) {
       await transaction`
@@ -153,7 +156,7 @@ export async function claimForgeIdentity(
           pull_request_id, issue_id, user_id, opening_comparison_points, actual_points, fold_revision
         )
         values (
-          ${settlement.pull_request_id}, ${settlement.issue_id}, ${input.userId},
+          ${settlement.pull_request_id}, ${settlement.issue_id}, ${settlement.debtor_id},
           ${settlement.opening_comparison_points}, ${settlement.settled_points}, ${settlement.fold_revision}
         )
         on conflict (pull_request_id, issue_id) do update
@@ -167,7 +170,8 @@ export async function claimForgeIdentity(
 
     await transaction`
       update settlements
-      set creditor_id = ${input.userId}, status = ${"SETTLED"}
+      set creditor_id = ${input.userId}, status = ${"SETTLED"},
+          team_id = ${teamAtSql(transaction, input.userId, transaction`pull_requests.merged_at`)}
       from users as creditor, users as debtor, pull_requests
       where settlements.status = ${"UNCLAIMED"}
         and settlements.provider = ${"gitlab"}
@@ -260,23 +264,25 @@ export async function reResolveIdentityClaims(
     // settlement it would not have flipped stays UNCLAIMED here too. When the
     // claimed identity is the debtor, both terms name the same user — the
     // self-work guard the claim applies.
-    const [guard] = await sql<{ eligible: boolean }[]>`
+    const [guard] = await sql<{ eligible: boolean; team_id: string | null; teammate: boolean }[]>`
       select participation_eligible_at(${claimedCreditorId}, ${settlement.mergedAt})
-        and participation_eligible_at(${settlement.debtorId}, ${settlement.mergedAt}) as eligible
+          and participation_eligible_at(${settlement.debtorId}, ${settlement.mergedAt}) as eligible,
+        ${teamAtSql(sql, claimedCreditorId, settlement.mergedAt)} as team_id,
+        ${teammateAtSql(sql, claimedCreditorId, settlement.debtorId, settlement.mergedAt)} as teammate
     `;
     if (guard?.eligible !== true) {
       settlements.push(settlement);
       continue;
     }
 
-    if (claimedCreditorId === settlement.debtorId) {
-      // Self-work: the claim deletes the settlement and records the calibration
-      // with the field mapping the fold itself uses, so the rewritten fold
-      // describes exactly those rows.
+    if (claimedCreditorId === settlement.debtorId || guard.teammate) {
+      // Self-work: the claim deletes the settlement and records the sponsor's
+      // calibration with the field mapping the fold itself uses, so the
+      // rewritten fold describes exactly those rows.
       selfWorkCalibrations.push({
         githubIssueId: settlement.githubIssueId,
         githubPullRequestId: settlement.githubPullRequestId,
-        userId: claimedCreditorId,
+        userId: settlement.debtorId,
         openingComparisonPoints: settlement.openingComparisonPoints,
         actualLabel: settlement.settledLabel,
         actualPoints: settlement.settledPoints,
@@ -304,10 +310,41 @@ export async function reResolveIdentityClaims(
     });
     settlements.push(
       decision.status === "SETTLED"
-        ? { ...settlement, creditorId: claimedCreditorId, credits: decision.credits, status: "SETTLED" }
+        ? { ...settlement, creditorId: claimedCreditorId, ...(guard.team_id !== null && { teamId: guard.team_id }),
+          credits: decision.credits, status: "SETTLED" }
         : { ...settlement, credits: 0, status: "UNSETTLED" },
     );
   }
 
   return { ...fold, pullRequests, settlements, selfWorkCalibrations };
+}
+
+type ClaimSql = SqlClient | TransactionClient;
+type ClaimValue = ParameterOrFragment<never>;
+
+/**
+ * The SQL twin of the fold's `teamAt`: the team `account` belonged to at `at`
+ * (joined at or before it, not yet left, the latest such join), or null.
+ */
+function teamAtSql(sql: ClaimSql, account: string, at: ClaimValue) {
+  return sql`(
+    select memberships.team_id from team_memberships as memberships
+    where memberships.user_id = ${account} and memberships.joined_at <= ${at}
+      and (memberships.left_at is null or ${at} < memberships.left_at)
+    order by memberships.joined_at desc limit 1
+  )`;
+}
+
+/** The SQL twin of `isSelfWorkAt`'s team half: `sponsor` was, at `at`, in the team `account`'s work credits. */
+function teammateAtSql(sql: ClaimSql, account: string, sponsor: ClaimValue, at: ClaimValue) {
+  return sql`exists (
+    select 1 from team_memberships as sponsor_memberships
+    where sponsor_memberships.team_id = ${teamAtSql(sql, account, at)} and sponsor_memberships.user_id = ${sponsor}
+      and sponsor_memberships.joined_at <= ${at} and (sponsor_memberships.left_at is null or ${at} < sponsor_memberships.left_at)
+  )`;
+}
+
+/** `teammateAtSql` over a claim query's own settlement row: its sponsor, at its pull request's merge. */
+function teammateAtMerge(sql: ClaimSql, account: string) {
+  return teammateAtSql(sql, account, sql`settlements.debtor_id`, sql`pull_requests.merged_at`);
 }

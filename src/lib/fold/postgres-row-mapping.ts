@@ -13,6 +13,7 @@ export type SettlementRow = {
   creditor_github_login: string | null;
   creditor_github_user_id: number | string | null;
   debtor_id: string;
+  team_id: string | null;
   opening_comparison_points: number;
   settled_points: number | null;
   review_rounds: number;

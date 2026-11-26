@@ -3,6 +3,7 @@ import type { DifficultyScheme, DifficultySchemeVersion } from "@/lib/domain/dif
 import { suppressionScope } from "@/lib/fold/data-subject-suppression";
 import { normalizeInstanceUrl } from "@/lib/forge/identities";
 import { moderationEventsFromJson } from "@/lib/fold/moderation-history";
+import { teamMembershipsFromJson } from "@/lib/fold/team-membership";
 import { timestampToIso, toSafeInteger } from "@/lib/fold/postgres-row-mapping";
 import type { ReconciliationRepository, RepositoryUnavailableReason } from "@/lib/fold/reconcile";
 import type { RepositoryCoordinator } from "@/lib/fold/repository-coordination";
@@ -24,6 +25,7 @@ type RepositoryRow = {
   sponsor_github_login: string;
   sponsor_enforcement_state: EnforcementState;
   sponsor_moderation_events: unknown;
+  sponsor_team_memberships: unknown;
   sponsor_forge_identities: { instanceUrl: string; forgeUserId: string }[];
   sponsor_suppressions: { provider: string; instanceUrl: string; forgeId: string }[];
   dispute_pull_requests: { id: string; number: number }[];
@@ -35,6 +37,7 @@ type UserRow = {
   github_login: string;
   enforcement_state: EnforcementState;
   moderation_events: unknown;
+  team_memberships: unknown;
 };
 
 export class PostgresRepositoryLookupStore {
@@ -62,6 +65,7 @@ export class PostgresRepositoryLookupStore {
       enforcement_state: EnforcementState;
       forge_user_id: number | string;
       moderation_events: unknown;
+      team_memberships: unknown;
     }[]>`
       select users.id, users.github_user_id, users.github_login, users.enforcement_state,
              identities.forge_user_id,
@@ -74,7 +78,15 @@ export class PostgresRepositoryLookupStore {
                ) order by events.created_at, events.id)
                from moderation_events as events
                where events.target_user_id = users.id
-             ), '[]'::jsonb) as moderation_events
+             ), '[]'::jsonb) as moderation_events,
+             -- jsonb keeps each instant's microseconds, so the fold's merge-time membership test is exact.
+             coalesce((
+               select jsonb_agg(jsonb_build_object(
+                 'teamId', memberships.team_id, 'joinedAt', memberships.joined_at, 'leftAt', memberships.left_at
+               ) order by memberships.joined_at, memberships.id)
+               from team_memberships as memberships
+               where memberships.user_id = users.id
+             ), '[]'::jsonb) as team_memberships
       from user_forge_identities as identities
       join users on users.id = identities.user_id
       join registered_repositories as repositories
@@ -92,6 +104,7 @@ export class PostgresRepositoryLookupStore {
         githubLogin: row.github_login,
         enforcementState: row.enforcement_state,
         moderationEvents: moderationEventsFromJson(row.moderation_events),
+        teamMemberships: teamMembershipsFromJson(row.team_memberships),
       },
     }));
   }
@@ -121,6 +134,13 @@ export class PostgresRepositoryLookupStore {
           from moderation_events as events
           where events.target_user_id = sponsors.id
         ), '[]'::jsonb) as sponsor_moderation_events,
+        coalesce((
+          select jsonb_agg(jsonb_build_object(
+            'teamId', memberships.team_id, 'joinedAt', memberships.joined_at, 'leftAt', memberships.left_at
+          ) order by memberships.joined_at, memberships.id)
+          from team_memberships as memberships
+          where memberships.user_id = sponsors.id
+        ), '[]'::jsonb) as sponsor_team_memberships,
         coalesce((
           select jsonb_agg(jsonb_build_object('instanceUrl', identities.instance_url, 'forgeUserId', identities.forge_user_id::text))
           from user_forge_identities as identities
@@ -301,7 +321,14 @@ export class PostgresRepositoryLookupStore {
           ) order by events.created_at, events.id)
           from moderation_events as events
           where events.target_user_id = users.id
-        ), '[]'::jsonb) as moderation_events
+        ), '[]'::jsonb) as moderation_events,
+        coalesce((
+          select jsonb_agg(jsonb_build_object(
+            'teamId', memberships.team_id, 'joinedAt', memberships.joined_at, 'leftAt', memberships.left_at
+          ) order by memberships.joined_at, memberships.id)
+          from team_memberships as memberships
+          where memberships.user_id = users.id
+        ), '[]'::jsonb) as team_memberships
       from users
       where users.github_user_id = any(${this.sql.array(normalized.map(String))}::bigint[])
     `;
@@ -331,6 +358,7 @@ function toReconciliationRepository(
       githubLogin: row.sponsor_github_login,
       enforcementState: row.sponsor_enforcement_state,
       moderationEvents: moderationEventsFromJson(row.sponsor_moderation_events),
+      teamMemberships: teamMembershipsFromJson(row.sponsor_team_memberships),
     },
   };
 }
@@ -342,6 +370,7 @@ function toFoldUser(row: UserRow): FoldUser {
     githubLogin: row.github_login,
     enforcementState: row.enforcement_state,
     moderationEvents: moderationEventsFromJson(row.moderation_events),
+    teamMemberships: teamMembershipsFromJson(row.team_memberships),
   };
 }
 

@@ -132,7 +132,8 @@ export function isParticipationEligibleAt(user: FoldUser, timestamp: string): bo
   return isParticipationEligible(firstLaterEvent?.event.priorState ?? user.enforcementState);
 }
 
-function readInstant(value: string): bigint | null {
+/** The instant at microsecond precision, or null when it does not parse. */
+export function readInstant(value: string): bigint | null {
   if (typeof value !== "string") return null;
   try {
     return parseInstant(value);

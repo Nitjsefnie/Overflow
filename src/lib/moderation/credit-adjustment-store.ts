@@ -280,11 +280,12 @@ export class PostgresRecalibrationCreditStore implements RecalibrationCreditStor
         throw new Error("Credit adjustment insert returned no row.");
       }
 
+      // Each line copies its settlement's team, so it books where the settlement's credit landed.
       const lines = [...evaluation.lines].sort(bySettlementId);
       for (const line of lines) {
         await transaction`
-          insert into moderation_credit_adjustment_lines (adjustment_id, settlement_id, creditor_id, amount)
-          values (${adjustment.id}, ${line.settlementId}, ${line.creditorId}, ${line.amount})
+          insert into moderation_credit_adjustment_lines (adjustment_id, settlement_id, creditor_id, amount, team_id)
+          select ${adjustment.id}, ${line.settlementId}, ${line.creditorId}, ${line.amount}, (select team_id from settlements where id = ${line.settlementId})
         `;
       }
 
@@ -422,12 +423,11 @@ export class PostgresRecalibrationCreditStore implements RecalibrationCreditStor
         creditorId: line.creditor_id,
         amount: -toSafeInteger(line.amount),
       }));
-      for (const line of lines) {
-        await transaction`
-          insert into moderation_credit_adjustment_lines (adjustment_id, settlement_id, creditor_id, amount)
-          values (${reversal.id}, ${line.settlementId}, ${line.creditorId}, ${line.amount})
-        `;
-      }
+      await transaction`
+        insert into moderation_credit_adjustment_lines (adjustment_id, settlement_id, creditor_id, amount, team_id)
+        select ${reversal.id}, settlement_id, creditor_id, -amount, team_id
+        from moderation_credit_adjustment_lines where adjustment_id = ${original.id}
+      `;
 
       return {
         kind: "ok",

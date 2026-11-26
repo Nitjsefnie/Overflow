@@ -15,6 +15,7 @@ import {
   PostgresRecalibrationCreditStore,
   type CreditAdjustmentLineRecord,
 } from "@/lib/moderation/credit-adjustment-store";
+import { PostgresTeamStore } from "@/lib/teams/store";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 import { startPostgresContainer } from "../support/postgres-container";
 
@@ -380,6 +381,39 @@ describe("PostgreSQL recalibration credit adjustments", () => {
         credential: null,
       }),
     ).resolves.toEqual({ kind: "conflict", detail: { cause: "ALREADY_REVERSED" } });
+  });
+
+  it("books a team settlement's lines to its team, so a reversal debits the team, not points it distributed", async () => {
+    const store = new PostgresRecalibrationCreditStore(sql);
+    const fixture = await seedActionableCohort();
+    await openSubstantiatedAudit(fixture);
+    const teams = new PostgresTeamStore(sql);
+    const created = await teams.createTeam(fixture.creditorAId, `adjusted team ${nextExternalId()}`);
+    if (created.kind !== "ok") throw new Error("Expected the team to be created.");
+    const teamId = created.value.id;
+    await sql`update settlements set team_id = ${teamId} where creditor_id = ${fixture.creditorAId}`;
+    const accountIds = [teamId, fixture.creditorAId, fixture.creditorBId];
+    expect(await readLedgerSums(accountIds)).toEqual(new Map([[teamId, 24], [fixture.creditorBId, 16]]));
+
+    const applied = await store.applyRecalibrationCreditAdjustment({
+      actorId: fixture.moderatorId, targetAccountId: fixture.targetId, reason: "Undercredited outsiders.", credential: null,
+    });
+    if (applied.kind !== "ok") throw new Error("Expected the adjustment to apply.");
+    expect(await readLedgerSums(accountIds)).toEqual(new Map([[teamId, 30], [fixture.creditorBId, 20]]));
+    expect(await teams.distributeTeamPoints(fixture.creditorAId, fixture.creditorAId, 30)).toMatchObject({ kind: "ok" });
+
+    const reversal = await store.reverseModerationCreditAdjustment({
+      actorId: fixture.moderatorId, adjustmentId: applied.value.id, reason: "Wrong cohort window.", credential: null,
+    });
+    if (reversal.kind !== "ok") throw new Error("Expected the reversal to apply.");
+    expect(await readLedgerSums(accountIds)).toEqual(new Map([[teamId, -6], [fixture.creditorAId, 30], [fixture.creditorBId, 16]]));
+    for (const adjustmentId of [applied.value.id, reversal.value.id]) {
+      expect(await sql`select creditor_id, team_id, count(*)::integer as lines from moderation_credit_adjustment_lines
+        where adjustment_id = ${adjustmentId} group by creditor_id, team_id order by lines desc`).toEqual([
+        { creditor_id: fixture.creditorAId, team_id: teamId, lines: 6 },
+        { creditor_id: fixture.creditorBId, team_id: null, lines: 4 },
+      ]);
+    }
   });
 
   it("lists applied and reversed adjustments with their reversal linkage and lines", async () => {

@@ -2,6 +2,7 @@ import { retainDisputePullRequests } from "@/lib/fold/dispute-pull-requests";
 import { createHash } from "node:crypto";
 import type { EnforcementState, IssueState, PullRequestState } from "@/lib/db/types";
 import { isParticipationEligibleAt } from "@/lib/fold/moderation-history";
+import { isSelfWorkAt, settlementTeam, type FoldTeamMembership } from "@/lib/fold/team-membership";
 import { difficultySchemeInForceAt, type DifficultyScheme, type DifficultySchemeVersion } from "@/lib/domain/difficulty-scheme";
 import { foldLedger, type LedgerEntry } from "@/lib/domain/ledger";
 import { calculateSettlement, type SettlementDecision } from "@/lib/domain/settlement";
@@ -27,6 +28,7 @@ export type FoldUser = {
   githubLogin: string;
   enforcementState: EnforcementState;
   moderationEvents?: FoldModerationEvent[];
+  teamMemberships?: FoldTeamMembership[];
 };
 
 /**
@@ -183,6 +185,8 @@ export type FoldSettlement = {
   creditorId: string | null;
   creditorGitHubLogin: string | null;
   creditorGitHubUserId: number | null;
+  /** The team the credit lands on (settlements.team_id); absent when the author was in none at the merge. */
+  teamId?: string;
   debtorId: string;
   openingComparisonPoints: number;
   settledLabel: string | null;
@@ -547,23 +551,21 @@ export function foldRepository(snapshot: RepositoryFoldSnapshot): FoldResult {
         kind: "SETTLEMENT_EVIDENCE_REJECTED",
         githubPullRequestId: pullRequest.id,
         reason: settledResolution.reason,
-        ...(settledResolution.unlabelled === true && author?.id === sponsor.id && { unlabelledSelfWork: true as const }),
+        ...(settledResolution.unlabelled === true && isSelfWorkAt(author, sponsor, pullRequest.mergedAt) && { unlabelledSelfWork: true as const }),
       });
     }
 
-    if (!isParticipationEligibleAt(snapshot.repository.sponsor, pullRequest.mergedAt)) {
+    if (!isParticipationEligibleAt(snapshot.repository.sponsor, pullRequest.mergedAt)
+      || (author !== undefined && !isParticipationEligibleAt(author, pullRequest.mergedAt))) {
       continue;
     }
 
-    if (author !== undefined && !isParticipationEligibleAt(author, pullRequest.mergedAt)) {
-      continue;
-    }
-
-    if (author?.id === snapshot.repository.sponsor.id) {
+    // A teammate's work records the sponsor's calibration: its user feeds the sponsor's cohort.
+    if (isSelfWorkAt(author, sponsor, pullRequest.mergedAt)) {
       selfWorkCalibrations.push({
         githubIssueId: issue.id,
         githubPullRequestId: foldedPullRequest.githubPullRequestId,
-        userId: author.id,
+        userId: sponsor.id,
         openingComparisonPoints: opening.openingComparisonPoints,
         actualLabel: settledDifficulty?.label ?? null,
         actualPoints: settledDifficulty?.points ?? null,
@@ -1145,6 +1147,7 @@ function toSettlement(input: {
     creditorId: input.author?.id ?? null,
     creditorGitHubLogin: input.authorLogin,
     creditorGitHubUserId: input.authorGitHubUserId,
+    ...settlementTeam(input.author, input.pullRequest.mergedAt!),
     debtorId: input.debtorId,
     openingComparisonPoints: input.openingComparisonPoints,
     settledLabel: input.settledDifficulty?.label ?? null,
@@ -1202,7 +1205,7 @@ function toLedgerSettlement(settlement: FoldSettlement): SettlementDecision[] {
   return [
     {
       status: "SETTLED",
-      creditorId: settlement.creditorId,
+      creditorId: settlement.teamId ?? settlement.creditorId,
       debtorId: settlement.debtorId,
       opening: settlement.openingComparisonPoints,
       settled: settlement.settledPoints,
@@ -1216,15 +1219,11 @@ function hashRawDiff(rawDiff: string): string {
   return createHash("sha256").update(rawDiff).digest("hex");
 }
 
-function normalizeLogin(login: string): string {
-  return login.trim().toLowerCase();
-}
-
 function normalizedNonblankLogin(login: string | null): string | null {
   if (login === null || login.trim().length === 0) {
     return null;
   }
-  return normalizeLogin(login);
+  return login.trim().toLowerCase();
 }
 
 /** Whoever GitHub named on a timeline event or a comment, as the payload reports them. */
