@@ -1284,7 +1284,7 @@ describe("initial PostgreSQL materialization", () => {
     `).rejects.toThrow();
   });
 
-  it("allows one merged PR to settle each of several issues with its one raw-diff proof", async () => {
+  it("allows one merged PR to settle each of several issues with its one diff-fingerprint proof", async () => {
     const pullRequest = await insertPullRequest(sql);
     const secondIssueId = await insertSiblingIssue(sql, pullRequest.issueId);
     const contributorId = await insertUser(sql);
