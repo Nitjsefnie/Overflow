@@ -51,9 +51,11 @@ describe("diff fingerprint", () => {
 
   it("hashes the diff with each blob id cut to four characters and the rest byte for byte", () => {
     const canonical = "diff --git a/README b/README\nindex c57e..719b 100644\n--- a/README\n+++ b/README\n@@ -1,2 +1,2 @@\n"
-      + " Hello\n-World\n+World!\n\\ No newline at end of file\n";
-    const nineCharacters = canonical.replace("index c57e..719b", `index ${README[0]}..${README[1]}`);
+      + " Hello\n-World\n+World!\n\\ No newline at end of file\ndiff --git a/new.txt b/new.txt\nnew file mode 100644\nindex 0000..e69d\n";
+    const nineCharacters = canonical.replace("index c57e..719b", `index ${README[0]}..${README[1]}`)
+      .replace("index 0000..e69d", `index ${CREATED[0]}..${CREATED[1]}`);
     expect(nineCharacters).toContain("index c57eff55e..719be62e9 100644\n");
+    expect(nineCharacters).toContain("\nindex 000000000..e69de29bb\n");
     expect(diffFingerprint(nineCharacters)).toBe(sha256(canonical));
     expect(diffFingerprint(canonical)).toBe(sha256(canonical));
   });
@@ -93,9 +95,9 @@ describe("diff fingerprint", () => {
   it.each([
     ["an added line", (ids: string) => `+index ${ids} 100644`], ["a removed line", (ids: string) => `-index ${ids} 100644`],
     ["a context line", (ids: string) => ` index ${ids} 100644`], ["text after a carriage return", (ids: string) => `+x\rindex ${ids}`],
-    ["text after a line separator", (ids: string) => `+x index ${ids}`], ["text after a paragraph separator", (ids: string) => `+x index ${ids}`],
+    ["text after a line separator", (ids: string) => `+x\u2028index ${ids}`], ["text after a paragraph separator", (ids: string) => `+x\u2029index ${ids}`],
     ["a header with a trailing carriage return", (ids: string) => `index ${ids} 100644\r`], ["a header with extra text", (ids: string) => `index ${ids} 100644 x`],
-    ["a combined-diff header", (ids: string) => `index ${ids.replace("..", `,${LOGO[0]}..`)}`],
+    ["a combined-diff header", (ids: string) => `index ${LOGO[0]},${ids}`],
     ["an uppercase header", (ids: string) => `index ${ids.toUpperCase()} 100644`],
   ])("hashes %s as served", (_shape, line) => {
     const text = (ids: string) => BASE.replace(`index ${README[0]}..${README[1]} 100644`, line(ids));
