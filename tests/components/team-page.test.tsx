@@ -134,6 +134,18 @@ describe("team page", () => {
     }));
   });
 
+  it("keeps the distribute button disabled for zero points", () => {
+    const fetchMock = mockResponse({ distribution: {} }, 201);
+    renderPage(leadId, team);
+
+    const distribute = screen.getByRole("button", { name: "Distribute the points" });
+    fireEvent.change(screen.getByLabelText("Points (whole)"), { target: { value: "0" } });
+    expect(distribute).toBeDisabled();
+    fireEvent.click(distribute);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("distributes to the first remaining member once the selected member leaves the list", async () => {
     const fetchMock = mockResponse({ distribution: {} }, 201);
     const { rerender } = renderPage(leadId, team);
