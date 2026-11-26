@@ -680,16 +680,21 @@ describe("foldRepository", () => {
   });
 });
 
-it("FINAL-P1 closed contributor PR reaches the filing store through the fold", () => {
+it("FINAL-P1 closed contributor PR reaches the filing store through the fold, both proofs blind to blob-id length", () => {
   const snapshot = outsiderFixture();
   const landing = snapshot.issues[0]!.closingPullRequests[0]!;
+  const diffAt = (length: number) => `diff --git a/f b/f\nindex ${"c57eff55e1".slice(0, length)}..${"719be62e91".slice(0, length)} 100644\n+x\n`;
+  landing.rawDiff = diffAt(9);
   snapshot.issues[0]!.closingPullRequests.unshift({ ...landing,
     id: 202, number: 12, state: "CLOSED", mergedAt: null, mergeCommitOid: null,
-    url: "https://github.com/octo/example/pull/12",
+    url: "https://github.com/octo/example/pull/12", rawDiff: diffAt(8),
   });
   const result = foldRepository(snapshot);
   expect(result.pullRequests.map((pr) => pr.githubPullRequestId),
     "closed contributor PR must reach the real materializer before filing").toContain(202);
+  expect(result.settlements.map(({ proofSha256 }) => proofSha256)).toEqual([sha256(diffAt(4))]);
+  expect(Object.fromEntries(result.pullRequests.map((pr) => [pr.githubPullRequestId, pr.proofSha256])))
+    .toEqual({ 201: sha256(diffAt(4)), 202: sha256(diffAt(4)) });
 });
 
 it("never prices a CLOSED PR even when all its merge evidence is valid", () => {
