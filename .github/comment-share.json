@@ -12,8 +12,8 @@
     3682
   ],
   ".github/workflows/ci-pr.yml": [
-    15740,
-    35744
+    15668,
+    36056
   ],
   ".github/workflows/ci.yml": [
     11344,
@@ -1092,8 +1092,8 @@
     17897
   ],
   "tests/api/ci-workflows.test.ts": [
-    25684,
-    63863
+    25435,
+    66265
   ],
   "tests/api/instrumentation-fail-closed.test.ts": [
     820,
@@ -1156,8 +1156,8 @@
     8375
   ],
   "tests/ci/concurrency.test.ts": [
-    18067,
-    46046
+    18040,
+    46055
   ],
   "tests/ci/event-policy-workflow.test.ts": [
     980,
@@ -1180,8 +1180,8 @@
     3767
   ],
   "tests/ci/verify-step-reachability.test.ts": [
-    24976,
-    85505
+    18567,
+    72792
   ],
   "tests/components/card-section-styles.test.tsx": [
     1254,
