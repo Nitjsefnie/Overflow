@@ -606,12 +606,12 @@ describe("the verify workflows' untrusted-code boundary", () => {
     }
   }
 
-  it("confines secrets to ci.yml's push-recalibration job and references none in ci-pr.yml", () => {
+  it("confines secrets to ci.yml's report job and references none in ci-pr.yml", () => {
     const secretRefs: string[] = [];
     const ciOutsidePush = {
       ...workflow,
       jobs: Object.fromEntries(
-        Object.entries(workflow.jobs ?? {}).filter(([name]) => name !== "push-recalibration"),
+        Object.entries(workflow.jobs ?? {}).filter(([name]) => name !== "report"),
       ),
     };
     for (const [label, parsed] of [["ci.yml", ciOutsidePush], ["ci-pr.yml", prWorkflow]] as const) {
@@ -625,8 +625,8 @@ describe("the verify workflows' untrusted-code boundary", () => {
       "ci-pr.yml runs workflow_run and must therefore reference no secret — " +
         "a `${{ secrets.… }}` in any with:/env: value would hand PR-authored input " +
         "the run's secret context. ci.yml may reference secrets only inside " +
-        "push-recalibration: calibrate gates it on a push to main or workflow_dispatch, " +
-        "and the push job executes no repository code. No other job or workflow-level " +
+        "report, which checks out the event's commit and runs only the test-ratchet " +
+        "report action, no repository code. No other job or workflow-level " +
         "setting may reference a secret.",
     ).toEqual([]);
   });
@@ -677,21 +677,27 @@ describe("the verify workflows' untrusted-code boundary", () => {
       Object.entries(workflow.jobs ?? {})
         .filter(([, job]) => job !== undefined && "permissions" in job)
         .map(([name]) => name),
-      "only push-recalibration may carry a permissions: override in ci.yml (its contents: write is pinned " +
-        "by tests/ci/calibrate-workflow.test.ts and it runs only when calibrate exported a changed " +
-        "document); a verify " +
+      "only report may carry a permissions: override in ci.yml, reading the test artifacts; a verify " +
         "override here would be a scope no step in that job uses",
-    ).toEqual(["push-recalibration"]);
+    ).toEqual(["report"]);
+    expect(workflow.jobs?.report?.permissions).toEqual({ contents: "read", actions: "read" });
 
     // ci-pr.yml keeps verify's read-only actions: read — the base copy of the
-    // suite awaiter reads the triggering run and downloads its
-    // coverage summary — and nothing that writes.
+    // suite awaiter reads the triggering run and the coverage gate its
+    // artifacts — and nothing that writes. The comment job runs only the
+    // report action over the default branch's checkout, so it alone writes.
     expect(
       Object.entries(prWorkflow.jobs ?? {})
         .filter(([, job]) => job !== undefined && "permissions" in job)
         .map(([name]) => name),
-      "ci-pr.yml has no calibrate job, so only verify may carry a permissions: override",
-    ).toEqual(["verify"]);
+      "ci-pr.yml's verify and comment jobs carry permissions: overrides",
+    ).toEqual(["verify", "comment"]);
+    expect(prWorkflow.jobs?.comment?.permissions).toEqual({
+      contents: "read",
+      actions: "read",
+      "pull-requests": "write",
+      checks: "write",
+    });
     expect(
       prWorkflow.jobs?.verify?.permissions,
       "verify adds actions: read for the suite and artifact, pull-requests: read for binding, and no write grant",

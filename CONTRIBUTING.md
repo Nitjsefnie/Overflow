@@ -203,19 +203,22 @@ again recreates the development copy.
 
 CI is defined by a workflow pair: `.github/workflows/ci.yml` and
 `.github/workflows/ci-pr.yml`, both producing the required `verify` context.
-`ci.yml` is the push-and-dispatch leg — `verify` runs on pushes to `main` and
-manual dispatch, and a separate `calibrate` job handles eligible `main` pushes
-and the manual refusal self-test. On a push or dispatch `verify` starts
-PostgreSQL 17, installs the pinned toolchain, applies migrations, and runs
-tests, lint, typecheck, build and page-geometry checks, with
-coverage. `ci-pr.yml` is the pull-request leg: its only trigger is
+`ci.yml` is the push-and-dispatch leg. It runs the tests through
+`Nitjsefnie-Actions/test-ratchet`: a `plan` job splits the test files into
+shards, a `test` matrix job runs each shard with coverage measured against
+PostgreSQL 17 with migrations applied, and a `report` job merges the shards'
+coverage and gates it against the floor in `.github/ci-thresholds.json`.
+`verify` needs the test matrix and `report` and fails unless both succeeded;
+it then installs the pinned toolchain, applies migrations, and runs lint,
+typecheck, build and page-geometry checks. `ci-pr.yml` is the pull-request leg: its only trigger is
 `workflow_run` completion of `pr suite`, so no runner polls for the suite.
 Its `verify` checks out `main`, API-validates the exact triggering run, and
 resolves the open PR by head repository, branch and SHA (forks included),
 failing on a missing, ambiguous or moved head. It runs main's copies of the
-integrity gates — conflict markers, docs-only detection,
-migration immutability, legal revisions, commit scopes, the coverage floor and
-base freshness — over the pull request's merge tree as data, and requires the
+integrity gates — conflict markers, migration immutability, legal revisions,
+commit scopes and base freshness — over the pull request's merge tree as data,
+gates the coverage of the suite run's test-ratchet artifacts with the action's
+`report`, and requires the
 exact triggering `pr suite` run for the resolved head to have succeeded,
 with no newer run at that SHA or a later attempt. The relay rechecks
 supersession before publication and skips older results without posting.
@@ -228,9 +231,8 @@ code — its install, migrations, tests, lint, typecheck, build and page
 geometry — runs only in `.github/workflows/pr-suite.yml` (`pr suite`), on the
 pull request's own code with no trust. Ratchet documents are judged by the
 `ratchet-guard` jobs in `.github/workflows/ratchet-guard.yml` and
-`.github/workflows/pr-gates.yml`. Docs-only changes run the test
-suite without coverage; other changes also measure coverage and check the
-floor. Run this local baseline in the same order:
+`.github/workflows/pr-gates.yml`. Every change, documentation-only included,
+runs the test suite with coverage. Run this local baseline in the same order:
 
 ```bash
 pnpm db:migrate
@@ -483,26 +485,28 @@ them itself.
 
 ### Coverage is floored
 
-CI measures line coverage over `src/` with
-`pnpm test --run --coverage --coverage.include='src/**'`, and
-`node scripts/check-coverage-floor.ts` fails when the measurement falls below
-the floor recorded in `scripts/coverage.json`. A change that touched only
-documentation — the `.md`, `.txt`, `.rst` and `.adoc` extensions, plus
-`LICENSE` — skips the measurement entirely, because it cannot move the
-number.
+CI measures line coverage over `src/` through `Nitjsefnie-Actions/test-ratchet`:
+each shard's `run` step passes `source: src/**` (vitest's
+`--coverage.include`) and `javascript: src/**`, and `report` merges the
+shards' coverage and fails when it falls below `coverage.javascript.floor` in
+`.github/ci-thresholds.json`, read at the pull request's base. With
+`precision: '2'` the gate compares the exact coverage with the floor and shows
+the figure truncated to two decimals. Every change runs the measurement,
+documentation-only changes included.
 
-The floor moves in one direction only. After a `main` push whose measurement
-beat the record by more than 0.5 points, CI attempts to record the raise:
-the calibrate job rewrites `scripts/coverage.json` and pushes it to `main`.
-That push is always refused — a bot commit can never carry the checks main's
-branch protection requires — so the calibrate job fails visibly, naming the
-measured and recorded floors in its error. The refusal is the alarm, not a
-regression: the raise is then recorded by hand. Run the suite with coverage,
-run `node scripts/calibrate-coverage.ts`, commit `scripts/coverage.json`,
-and open an ordinary pull request; the ratchet guard permits a raise to the
-floor and only a raise. A raise that lands without the failed job — an
-automatic push through a token that can bypass protection — waits on the
-GitHub App route. A drop, or a rise within the hysteresis, changes nothing.
+The records move in one direction only. On a push to `main` whose gate passed
+and whose shards all passed, a figure that beats the recorded `measured` by
+more than the file's `hysteresis` becomes the new `measured`, and `floor`
+becomes that figure minus `gap`, rounded down to two decimals, unless the old
+floor is higher. `report` commits the change as
+`chore(ratchet): update the test-ratchet records` and pushes it with the
+`main-push` environment's deploy key. With `records-only-rise`, a pull request
+whose thresholds file lowers or removes a record, gives a new or changed
+`measured` a floor below the one a raise would give, or raises or removes the
+`gap` or `hysteresis` key fails. A raise by hand edits
+`.github/ci-thresholds.json` in an ordinary pull request; with
+`gate-raised-floors` that pull request is gated by the higher of the base's
+floor and its own.
 **The floor is never lowered by hand.** A red floor means coverage
 regressed, and the remedy is to test the code you changed — not to edit the
 record.

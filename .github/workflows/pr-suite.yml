@@ -13,15 +13,17 @@ name: pr suite
 # Its resolver binds this run to one current PR by head repository, branch and
 # SHA. The base copy of scripts/await-pr-suite.ts reads this exact run by id,
 # without polling, accepting only a completed, successful pull_request run of
-# exactly this file at exactly the resolved head SHA, and
-# the base copy of scripts/check-coverage-floor.ts judges the coverage
-# summary this run uploads. The integrity gates (migration immutability,
-# legal revisions, commit scopes, the coverage floor, base
-# freshness) are verify's, never this workflow's. The ledger relay never
-# posts a required context from a run of this workflow.
+# exactly this file at exactly the resolved head SHA, and verify's
+# test-ratchet report step gates the coverage this run's test matrix uploads.
+# The integrity gates (migration immutability, legal revisions, commit scopes,
+# the coverage gate, base freshness) are verify's, never this workflow's. The
+# ledger relay never posts a required context from a run of this workflow.
 #
-# The patch-coverage artifact uploaded here is what coverage-comment.yml
-# reads when this workflow completes.
+# The tests run through Nitjsefnie-Actions/test-ratchet: plan, the test
+# matrix and report. This run's report gates the coverage against the floors
+# at the pull request's base and, with gate-raised-floors, a floor the pull
+# request raises or adds; its token cannot comment, so the comment goes to the
+# job summary and ci-pr.yml's comment job posts it.
 on:
   pull_request:
     branches: [main]
@@ -65,6 +67,134 @@ jobs:
           fi
           echo "image=${image}" >> "$GITHUB_OUTPUT"
 
+  # Splits the test files into shards balanced by the run times recorded in
+  # .github/test-times.json. It reads only the repository and the times file.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: plan
+        uses: Nitjsefnie-Actions/test-ratchet/plan@972529077c00a9331f0481c0a434a171d502c402 # v2.4.1
+        with:
+          tests: |
+            tests/**/*.test.ts
+            tests/**/*.test.tsx
+          times: .github/test-times.json
+          cell: ubuntu-latest-node24.17.0
+          max-minutes: 10
+
+  # One shard of the suite with coverage measured over src/.
+  test:
+    needs: [postgres-image, plan]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        # The reference is read at run time from the digest-pinned ci/Dockerfile by
+        # the postgres-image job; zizmor cannot resolve a needs expression to a digest,
+        # so this line carries the audit's suppression directive.
+        image: ${{ needs.postgres-image.outputs.image }}  # zizmor: ignore[unpinned-images]
+        env:
+          POSTGRES_USER: overflow
+          POSTGRES_PASSWORD: overflow
+          POSTGRES_DB: overflow_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U overflow -d overflow_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    # Placeholders satisfy configuration validation without carrying production
+    # credentials or granting access to an external system.
+    env:
+      OVERFLOW_DATABASE_URL: postgresql://overflow:overflow@127.0.0.1:5432/overflow_ci
+      AUTH_SECRET: ci-placeholder-auth-secret-not-for-production
+      AUTH_GITHUB_ID: ci-placeholder-github-client-id
+      AUTH_GITHUB_SECRET: ci-placeholder-github-client-secret
+      OVERFLOW_TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+      OVERFLOW_APP_URL: https://overflow.invalid
+      OVERFLOW_GITHUB_WEBHOOK_URL: https://overflow.invalid/api/github/webhooks
+      OVERFLOW_MODERATOR_GITHUB_USER_IDS: "1"
+      # At job scope so every `pnpm` step inherits both pins.
+      COREPACK_ENABLE_PROJECT_SPEC: "0"
+      npm_config_registry: "https://registry.npmjs.org/"
+
+    steps:
+      # The pull_request merge commit at depth 2, the checkout the suite has
+      # always run on.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.17.0"
+
+      # Tests run python3 scripts; this is the interpreter the suite job sets up.
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+
+      - name: Enable the pinned package manager
+        run: |
+          corepack enable
+          corepack install --global pnpm@10.33.0
+          pnpm --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply PostgreSQL migrations
+        run: pnpm db:migrate
+
+      - uses: Nitjsefnie-Actions/test-ratchet/run@972529077c00a9331f0481c0a434a171d502c402 # v2.4.1
+        with:
+          runner: vitest
+          tests: |
+            tests/**/*.test.ts
+            tests/**/*.test.tsx
+          times: .github/test-times.json
+          cell: ubuntu-latest-node24.17.0
+          shard: ${{ matrix.shard }}
+          source: src/**
+          javascript: src/**
+
+  # The pull request's own coverage gate: the floors at its base, and with
+  # gate-raised-floors a floor the pull request raises or adds.
+  report:
+    needs: test
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: Nitjsefnie-Actions/test-ratchet/report@972529077c00a9331f0481c0a434a171d502c402 # v2.4.1
+        with:
+          github-token: ${{ github.token }}
+          cell: ubuntu-latest-node24.17.0
+          times: .github/test-times.json
+          precision: '2'
+          gate-raised-floors: 'true'
+
   suite:
     needs: postgres-image
     runs-on: ubuntu-latest
@@ -104,14 +234,9 @@ jobs:
       npm_config_registry: "https://registry.npmjs.org/"
 
     steps:
-      # The default pull_request checkout is the merge commit GitHub built for
-      # this event: base tip first parent, head second. Depth 2 carries the
-      # first parent, which the docs-only detection and the patch coverage
-      # report diff against.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 2
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -144,7 +269,7 @@ jobs:
       # `pip download`, not an install: nothing is executed and no package is
       # placed on the runner, only resolved and checksummed. `--no-deps` keeps it
       # to the one pin. Unconditional on purpose — the manifest is not
-      # application code, and a docs-only detection must not be able to skip it.
+      # application code, so nothing may skip it.
       # Reads no secret and needs no token: PyPI is anonymous, and the hash
       # pinning is what makes the download trustworthy.
       #
@@ -221,78 +346,6 @@ jobs:
 
       - name: Apply PostgreSQL migrations
         run: pnpm db:migrate
-
-      # Decides only whether THIS run measures coverage. verify makes its own
-      # docs-only decision with the base copy of the script, and requires this
-      # run's coverage summary whenever that decision says code.
-      - name: Detect docs-only change
-        id: detect-docs
-        run: |
-          changed=$(node scripts/docs-only.ts HEAD^1)
-          echo "docs_only=${changed}" >> "$GITHUB_OUTPUT"
-
-      - name: Test suite
-        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
-        run: pnpm test --run --coverage --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=cobertura --coverage.include='src/**'
-
-      - name: Test suite (docs-only)
-        if: ${{ steps.detect-docs.outputs.docs_only == 'true' }}
-        run: pnpm test --run
-
-      # Informational, never a gate. HEAD^1..HEAD is exactly the change the
-      # pull request carries: GitHub merges the head into the base, so the
-      # base tip is the merge commit's first parent.
-      - name: Patch coverage report
-        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
-        run: git diff HEAD^1 HEAD | node scripts/patch-coverage.ts coverage/cobertura-coverage.xml
-
-      # Upload once more on failure: the action rethrows a network error
-      # (ETIMEDOUT, ECONNRESET) without retrying, so each first attempt is
-      # tolerated and its identical retry, overwriting whatever the first
-      # left, carries the step's failure.
-      - name: Upload patch coverage report
-        id: upload-patch-coverage
-        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: patch-coverage
-          path: coverage/patch-coverage.json
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload patch coverage report (retry)
-        if: ${{ steps.detect-docs.outputs.docs_only != 'true' && steps.upload-patch-coverage.outcome == 'failure' }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: patch-coverage
-          path: coverage/patch-coverage.json
-          if-no-files-found: error
-          retention-days: 7
-          overwrite: true
-
-      # Seven days: verify downloads this artifact cross-run, and a verify
-      # re-run or relay heal can come well after the suite finished.
-      - name: Upload coverage summary
-        id: upload-coverage-summary
-        if: ${{ steps.detect-docs.outputs.docs_only != 'true' }}
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: coverage-summary
-          path: coverage/coverage-summary.json
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload coverage summary (retry)
-        if: ${{ steps.detect-docs.outputs.docs_only != 'true' && steps.upload-coverage-summary.outcome == 'failure' }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: coverage-summary
-          path: coverage/coverage-summary.json
-          if-no-files-found: error
-          retention-days: 7
-          overwrite: true
 
       - name: Lint
         run: pnpm lint

@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 // Base-checkout resolver for ci-pr.yml's completion-triggered verify job.
-// Mirrors coverage-comment.yml's issue-656 binding: query open PRs using
-// head=owner:branch, then select the exact head repository and SHA (forks
-// included). Keep the two bindings in step. Unlike the comment workflow,
-// missing or ambiguous destinations fail the required verify check. Only an
-// API-proven superseded cancellation is a successful no-op.
+// Queries open PRs using head=owner:branch, then selects the exact head
+// repository and SHA (forks included). Missing or ambiguous destinations fail
+// the required verify check. Only an API-proven superseded cancellation is a
+// successful no-op.
 // Inputs: GITHUB_REPOSITORY, GH_TOKEN, SUITE_RUN_ID, optional GITHUB_OUTPUT.
 
 import { realpathSync } from "node:fs";

@@ -229,9 +229,6 @@ const UNBOUNDED_BY_CHOICE = new Map<string, {
   ["ledger-relay.yml", {
     reason: "The relay posts the check-runs branch protection requires. Every schedule, workflow_dispatch (with or without run_id), and workflow_run start shares the literal ledger-relay group, so only one relay run writes at a time across the repository. cancel-in-progress false preserves the running start. Up to 100 pending starts wait in FIFO order (ordering is not guaranteed); a full queue cancels the new arrival. Every start sweeps to attest a cancelled arrival's producer within the sweep window.",
     group: "ledger-relay", "cancel-in-progress": false, queue: "max" }],
-  ["coverage-comment.yml", {
-    reason: "The report posts a comment the author reads. Cancelling a queued run loses the report for that head commit, and the next run may not come.",
-    group: "coverage-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}", "cancel-in-progress": false, queue: undefined }],
   ["secret-scan.yml", {
     reason: "No PR event reaches this main producer. The secret-scan PR job lives in pr-gates.yml with a per-PR cancelling group. This file checks main on push and dispatch and schedule. Its SHA-keyed group preserves every in-flight run, so another merged SHA cannot cancel a conclusion that deployment reads.",
     group: "secret-scan-${{ github.sha }}", "cancel-in-progress": false, queue: undefined }],
@@ -343,11 +340,11 @@ export function unboundedGroupKeysIn(group: string): string[] {
  * classification totality assertion reds. What this set does NOT catch,
  * deliberately: a workflow DROPPING a key it should have, such as a missing
  * `permissions:`. This is a check against the unexpected, not against the
- * missing — that direction is covered elsewhere for eight of the eleven
+ * missing — that direction is covered elsewhere for eight of the ten
  * workflows, being the seven whose exact `permissions` value
  * `ci-workflows.test.ts` pins and `claim.yml`, whose ABSENCE of a top-level
- * `permissions` it pins. The three it does not cover — `coverage-comment.yml`,
- * `ledger-relay.yml` and `secret-scan.yml`, all of which do carry one — are a
+ * `permissions` it pins. The two it does not cover — `ledger-relay.yml` and
+ * `secret-scan.yml`, both of which do carry one — are a
  * gap in THAT suite, not a reason to duplicate the direction here.
  *
  * Every name below is carried by at least one shipped workflow, which is what
@@ -371,19 +368,18 @@ const ALLOWED_JOB_NAMES: Record<string, readonly string[]> = {
   // match.
   "actionlint.yml": ["actionlint"],
   "advisory-tracking.yml": ["advisory-audit", "advisory-comment"],
-  "ci-pr.yml": ["verify"],
-  "ci.yml": ["calibrate", "postgres-image", "push-recalibration", "shellcheck", "verify"],
+  "ci-pr.yml": ["comment", "verify"],
+  "ci.yml": ["plan", "postgres-image", "report", "shellcheck", "test", "verify"],
   "claim.yml": ["claim"],
   "code-scanning.yml": ["analyze"],
   "comment-share.yml": ["comment-share"],
-  "coverage-comment.yml": ["comment"],
   "dependency-audit.yml": ["dependency-audit"],
   "event-policy.yml": ["event-policy", "event-policy-pull-request"],
   "ledger-relay.yml": ["relay-required-checks"],
   "pin-guard.yml": ["pin-guard"],
   "pr-gate.yml": ["gate"],
   "pr-gates.yml": ["actionlint", "ratchet-guard", "secret-scan", "dependency-audit"],
-  "pr-suite.yml": ["postgres-image", "suite"],
+  "pr-suite.yml": ["plan", "postgres-image", "report", "suite", "test"],
   "ratchet-guard.yml": ["ratchet-guard"],
   "scorecard.yml": ["analysis"],
   "secret-scan.yml": ["secret-scan"],

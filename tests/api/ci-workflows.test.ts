@@ -336,26 +336,7 @@ fi
     const workflow = await readWorkflow("ci.yml");
     expect(workflow.on).toEqual({
       push: { branches: ["main"] },
-      // The dispatch trigger carries the calibrate self-test's input: a
-      // boolean, defaulting false, whose fabricated raise must be refused by
-      // branch protection so the calibrate job fails visibly.
-      // Pinned in full so a retyped, re-defaulted or renamed input — the
-      // difference between a self-test dispatch and an accidental
-      // fabrication — fails here.
-      workflow_dispatch: {
-        inputs: {
-          base: {
-            description: "Full SHA of the main commit to measure this dispatch against",
-            required: false,
-            type: "string",
-          },
-          "simulate-refused-raise": {
-            description: "calibrate self-test: fabricate a coverage raise so the push is refused by branch protection and the push-recalibration job fails visibly (issue 684)",
-            type: "boolean",
-            default: false,
-          },
-        },
-      },
+      workflow_dispatch: null,
     });
     expect(workflow.on.push).not.toHaveProperty("paths");
     expect(workflow.on).not.toHaveProperty("pull_request");
@@ -372,23 +353,8 @@ fi
 
     const verify = workflow.jobs.verify!;
     expect(verify.services?.postgres?.options).toContain("pg_isready");
-    // Keep the artifact actions' counts and identities exact across jobs:
-    // verify uploads the pair, each retried, on push and dispatch, then
-    // the calibration job downloads the summary. Which REVISION they share
-    // across files is held by `keeps each action family to one revision
-    // across all workflow files`; the family sets below pin this file's
-    // counts. The pull-request leg's one download is asserted in ci-pr.yml's
-    // own case below, so neither file's artifact actions are checked by a
-    // derivation that only reads this one.
-    const ciSteps = Object.values(workflow.jobs).flatMap((job) => job.steps);
-    const uploads = ciSteps.filter((step) => step.uses?.startsWith("actions/upload-artifact@"));
-    const downloads = ciSteps.filter((step) => step.uses?.startsWith("actions/download-artifact@"));
-    expect(uploads).toHaveLength(4);
-    expect(downloads).toHaveLength(1);
     // Exactly one checkout: under push and workflow_dispatch the default
-    // checkout takes the event's own commit, at full history so
-    // the suite's secret-scan provenance check has the history its baseline
-    // names. It carries no event gate because this file admits nothing else —
+    // checkout takes the event's own commit. It carries no event gate because this file admits nothing else —
     // no pull_request trigger and no pull_request.* value, so the depth pulls
     // in no pull-request data. The pull_request_target checkout, with full
     // history and no ref input, is in ci-pr.yml.
@@ -399,7 +365,6 @@ fi
     expect(verify.steps.map((step) => step.run).filter(Boolean)).toEqual(expect.arrayContaining([
       "pnpm install --frozen-lockfile",
       "pnpm db:migrate",
-      "pnpm test --run",
       "pnpm lint",
       "pnpm typecheck",
       "pnpm build",
@@ -443,14 +408,11 @@ fi
     expect(verify.services, "the pull-request leg must not pay for a database it never connects to")
       .toEqual(undefined);
     expect(verify.permissions).toEqual({ contents: "read", actions: "read", "pull-requests": "read" });
-    // One download — the awaited pull request suite run's coverage summary —
-    // and no upload: the artifacts a pull request's coverage report is built
+    // No upload: the artifacts a pull request's coverage report is built
     // from are pr-suite.yml's, not this job's.
     const prSteps = Object.values(workflow.jobs).flatMap((job) => job.steps);
     const uploads = prSteps.filter((step) => step.uses?.startsWith("actions/upload-artifact@"));
-    const downloads = prSteps.filter((step) => step.uses?.startsWith("actions/download-artifact@"));
     expect(uploads).toHaveLength(0);
-    expect(downloads).toHaveLength(1);
     // Exactly one checkout, and it is the base branch's tip with full history
     // and no ref input: under workflow_run that is actions/checkout's
     // default, which is what makes the pull request's own edit to a gated

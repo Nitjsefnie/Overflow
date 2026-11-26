@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -45,12 +45,7 @@ function stepRunning(needle: string): Step {
   return matching[0]!;
 }
 
-const GATE_SCRIPTS = [
-  "scripts/docs-only.ts",
-  "scripts/check-migration-edits.ts",
-  "scripts/check-coverage-floor.ts",
-  "scripts/commit_scopes.py",
-];
+const GATE_SCRIPTS = ["scripts/check-migration-edits.ts", "scripts/commit_scopes.py"];
 
 const NEUTERED = "process.exit(0);\n";
 
@@ -104,7 +99,6 @@ async function fixture(
       "README.md": "# scratch\n",
       "src/a.ts": "export const a = 0;\n",
       "db/migrations/001_initial.sql": "create table t (id int);\n",
-      "scripts/coverage.json": await readFile(resolve("scripts/coverage.json"), "utf8"),
       ".github/workflows/lint.yml": "name: lint\non: push\njobs: {}\n",
     },
     "root",
@@ -583,113 +577,6 @@ describe("a pull request that replaces the gate script guarding what it changed"
     expect(result.stdout).toContain("db/migrations is append-only");
   });
 
-  it("is still classified as code by the base copy of the docs-only detection", async () => {
-    const fx = await fixture({
-      "src/a.ts": "export const a = 2;\n",
-      "scripts/docs-only.ts": 'process.stdout.write("true\\n");\n',
-    });
-    const { outputs } = await materialise(fx);
-
-    const detect = stepRunning("/scripts/docs-only.ts");
-    const result = await runStep(
-      detect,
-      fx,
-      { OVERFLOW_EVENT_NAME: "workflow_run", OVERFLOW_PUSH_BEFORE: "", OVERFLOW_DISPATCH_BASE: "", OVERFLOW_PR_NUMBER: "1" },
-      outputs,
-    );
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.output).toBe("docs_only=false\n");
-  });
-
-  it("is classified docs-only by the base copy when it changes only documentation", async () => {
-    const fx = await fixture({ "README.md": "# scratch, edited\n" });
-    const { outputs } = await materialise(fx);
-
-    const result = await runStep(
-      stepRunning("/scripts/docs-only.ts"),
-      fx,
-      { OVERFLOW_EVENT_NAME: "workflow_run", OVERFLOW_PUSH_BEFORE: "", OVERFLOW_DISPATCH_BASE: "", OVERFLOW_PR_NUMBER: "1" },
-      outputs,
-    );
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.output).toBe("docs_only=true\n");
-  });
-
-  /** The step that creates the download destination, found by its id in the download's path. */
-  function prepareStep(): Step {
-    const download = steps.filter((step) =>
-      ((step as { uses?: string }).uses ?? "").startsWith("actions/download-artifact@"),
-    );
-    expect(download).toHaveLength(1);
-    const path = String((download[0] as { with?: Record<string, unknown> }).with?.path ?? "");
-    const id = /^\$\{\{ steps\.([\w-]+)\.outputs\.dir \}\}$/.exec(path)?.[1];
-    expect(id, `the download path ${path} must be a creating step's dir output`).toBeDefined();
-    const prepare = steps.filter((step) => step.id === id);
-    expect(prepare).toHaveLength(1);
-    return prepare[0]!;
-  }
-
-  function floorStep(): Step {
-    const floor = steps.filter((step) => (step.run ?? "").includes("/scripts/check-coverage-floor.ts"));
-    expect(floor).toHaveLength(1);
-    return floor[0]!;
-  }
-
-  it("is still refused by the coverage floor over the downloaded summary, whatever its tree carries", async () => {
-    // The pull request neuters the floor script and commits a passing summary
-    // where the old layout read one; neither is what the base copy reads.
-    const fx = await fixture({
-      "scripts/check-coverage-floor.ts": NEUTERED,
-      "coverage/coverage-summary.json": JSON.stringify({ total: { lines: { pct: 99 } } }),
-    });
-    const { outputs, runnerTemp } = await materialise(fx);
-    const prepared = await runStep(prepareStep(), fx, { RUNNER_TEMP: runnerTemp }, outputs);
-    expect(prepared.status, prepared.stderr).toBe(0);
-    const dir = readOutputs(prepared.output).dir!;
-    expect(dir.startsWith(`${runnerTemp}/`)).toBe(true);
-    expect(dir.startsWith(`${outputs.path}/`)).toBe(false);
-    expect(dir.startsWith(`${fx.workspace}/`)).toBe(false);
-    // What the download step places there: the awaited suite run's summary.
-    await writeFile(
-      join(dir, "coverage-summary.json"),
-      JSON.stringify({ total: { lines: { total: 100, covered: 50, skipped: 0, pct: 50 } } }),
-    );
-
-    const result = await runStep(floorStep(), fx, {}, outputs, { [prepareStep().id!]: { dir } });
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("below the");
-  });
-
-  it("is refused by the coverage floor when no summary was downloaded", async () => {
-    const fx = await fixture({
-      "coverage/coverage-summary.json": JSON.stringify({ total: { lines: { pct: 99 } } }),
-    });
-    const { outputs, runnerTemp } = await materialise(fx);
-    const prepared = await runStep(prepareStep(), fx, { RUNNER_TEMP: runnerTemp }, outputs);
-    const dir = readOutputs(prepared.output).dir!;
-
-    const result = await runStep(floorStep(), fx, {}, outputs, { [prepareStep().id!]: { dir } });
-    expect(result.status).not.toBe(0);
-  });
-
-  it("refuses a download destination that already exists, a symlink included", async () => {
-    const fx = await fixture({ "src/a.ts": "export const a = 5;\n" });
-    const { outputs, runnerTemp } = await materialise(fx);
-    const first = await runStep(prepareStep(), fx, { RUNNER_TEMP: runnerTemp }, outputs);
-    expect(first.status, first.stderr).toBe(0);
-    const dir = readOutputs(first.output).dir!;
-
-    const again = await runStep(prepareStep(), fx, { RUNNER_TEMP: runnerTemp }, outputs);
-    expect(again.status).not.toBe(0);
-    expect(again.output).toBe("");
-
-    await rm(dir, { recursive: true });
-    await symlink(outputs.path!, dir);
-    const linked = await runStep(prepareStep(), fx, { RUNNER_TEMP: runnerTemp }, outputs);
-    expect(linked.status).not.toBe(0);
-    expect(linked.output).toBe("");
-  });
-
   it("is still refused by the commit scope rule", async () => {
     const fx = await fixture(
       { "scripts/commit_scopes.py": "import sys\nsys.exit(0)\n" },
@@ -727,12 +614,7 @@ describe("a pull request that replaces the gate script guarding what it changed"
 });
 
 describe("the awaited suite run's id the workflow_run leg requires", () => {
-  /**
-   * On a docs-only change nothing downstream reads the run id, so this step is
-   * the only thing between an awaiter that exits 0 without writing one and a
-   * green verify. Its real run block is executed with the id resolved from
-   * the awaiter's output the way the runner would.
-   */
+  /** Runs the real step with the id the awaiter wrote. */
   function requireStep(): Step {
     const awaiter = stepRunning("/scripts/await-pr-suite.ts");
     expect(awaiter.id).toBeDefined();

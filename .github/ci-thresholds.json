@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "gap": 1,
+  "hysteresis": 0.5,
+  "coverage": {
+    "javascript": {
+      "floor": 93.86,
+      "measured": 94.86
+    }
+  }
+}
