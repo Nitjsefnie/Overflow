@@ -156,7 +156,10 @@ describe("membership and distribution history", () => {
   it("refuses deleting a membership or changing anything but a still-open left_at", async () => {
     const [lead, member, other] = [await insertAccount(sql), await insertAccount(sql), await insertAccount(sql)];
     const teamId = await team(lead, member);
+    const otherTeamId = await team(other);
     const refusal = { message: "Team membership history is immutable" };
+    await expect(sql`update team_memberships set team_id = ${otherTeamId} where user_id = ${member.id}`).rejects.toMatchObject(refusal);
+    await expect(sql`update team_memberships set id = gen_random_uuid() where user_id = ${member.id}`).rejects.toMatchObject(refusal);
     await expect(sql`delete from team_memberships where user_id = ${member.id}`).rejects.toMatchObject(refusal);
     await expect(sql`update team_memberships set joined_at = joined_at - interval '1 day' where user_id = ${member.id}`)
       .rejects.toMatchObject(refusal);
@@ -205,6 +208,36 @@ describe("distributing a team's points", () => {
     expect(await store.distributeTeamPoints(lead.id, member.id, 5)).toMatchObject({ kind: "ok" });
     expect(await store.distributeTeamPoints(lead.id, member.id, 1)).toEqual({ kind: "insufficient_balance" });
     expect(await balancesOf(sql, teamId, member.id)).toEqual([0, 5]);
+  });
+
+  it("refuses a distribution that a concurrent one, committed while it waited, left unaffordable", async () => {
+    const member = await insertAccount(sql);
+    const { lead, teamId } = await fundedTeam(5, member);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let locked!: () => void;
+    const holding = new Promise<void>((resolve) => { locked = resolve; });
+    // A second distributor in the store's own shape: team row locked, 3 points out, not yet committed.
+    const holder = sql.begin(async (tx) => {
+      await tx`select id from teams where id = ${teamId} for no key update`;
+      await tx`insert into team_distributions (team_id, member_id, points) values (${teamId}, ${lead.id}, 3)`;
+      locked();
+      await held;
+    });
+    await holding;
+    let settled = false;
+    const pending = store.distributeTeamPoints(lead.id, member.id, 3).finally(() => { settled = true; });
+    // An unlocked store never waits, so settling ends the wait as well as blocking does.
+    for (;;) {
+      const [blocked] = await sql<{ count: number }[]>`
+        select count(*)::int as count from pg_stat_activity where wait_event_type = 'Lock' and datname = current_database()
+      `;
+      if (blocked.count > 0 || settled) break;
+    }
+    release();
+    await holder;
+    expect(await pending).toEqual({ kind: "insufficient_balance" });
+    expect(await balancesOf(sql, teamId)).toEqual([2]);
   });
 
   it("refuses zero, negative and fractional points", async () => {

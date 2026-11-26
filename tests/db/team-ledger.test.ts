@@ -99,58 +99,82 @@ describe("a team settlement in the ledger views", () => {
   });
 });
 
+/** A moderator adjustment of `target`'s settled work: one line on `settlementId` paying `amount` to `creditor`, booked to `teamId`. */
+async function adjustmentLine(
+  { settlementId, target, creditor, teamId, amount, createdAt = "2026-01-02T00:00:00.000Z" }:
+    { settlementId: string; target: FixtureAccount; creditor: FixtureAccount; teamId: string | null; amount: number; createdAt?: string },
+): Promise<void> {
+  const [event] = await sql<{ id: string }[]>`
+    insert into moderation_events (target_user_id, actor_id, prior_state, new_state, reason)
+    values (${target.id}, ${creditor.id}, 'ACTIVE', 'UNDER_AUDIT', 'fixture audit') returning id
+  `;
+  const [audit] = await sql<{ id: string }[]>`
+    insert into calibration_audits (account_id, reporter_id, rationale, sample_started_at, sample_ended_at, settled_sample_size, state)
+    values (${target.id}, ${creditor.id}, 'fixture sample', '2025-01-01', '2025-02-01', 1, 'SUBSTANTIATED') returning id
+  `;
+  const [adjustment] = await sql<{ id: string }[]>`
+    insert into moderation_credit_adjustments (moderation_event_id, calibration_audit_id, target_account_id,
+      gap_per_pair, pair_count, total_amount, reason, created_at)
+    values (${event.id}, ${audit.id}, ${target.id}, ${Math.abs(amount)}, 1, ${Math.abs(amount)}, 'fixture adjustment', ${createdAt})
+    returning id
+  `;
+  await sql`insert into moderation_credit_adjustment_lines (adjustment_id, settlement_id, creditor_id, team_id, amount)
+    values (${adjustment.id}, ${settlementId}, ${creditor.id}, ${teamId}, ${amount})`;
+}
+
+/** A GRANTED dispute whose landing is `settlement`'s pull request, decided at `decidedAt`. */
+async function grantDispute(settlement: { issueId: string; pullRequestId: string }, sponsor: FixtureAccount, decidedAt: string) {
+  const [contributor, moderator] = [await insertAccount(sql), await insertAccount(sql)];
+  const closedPullRequestId = await insertPullRequest(sql, contributor, sponsor.repositoryId, settlement.issueId, "CLOSED", null);
+  await sql`
+    insert into closed_pr_dispute_requests (contributor_id, pull_request_id, issue_id, landed_pull_request_id, request_reason,
+      state, decision, decided_by, decided_reason, decided_at, moderator_figure, awarded_points)
+    values (${contributor.id}, ${closedPullRequestId}, ${settlement.issueId}, ${settlement.pullRequestId}, 'My work landed.',
+      'DECIDED', 'GRANTED', ${moderator.id}, 'The landing copied it.', ${decidedAt}, 6, 6)
+  `;
+}
+
 describe("a moderator adjustment line in the ledger views", () => {
   it("books its creditor leg to the line's team, and to its creditor when the line carries none", async () => {
     const [lead, author, sponsor] = [await insertAccount(sql), await insertAccount(sql), await insertAccount(sql)];
     const teamId = await team(lead, author);
     const settlement = await insertSettlement(sql, { author, debtor: sponsor, credits: 6, teamId });
-    const [event] = await sql<{ id: string }[]>`
-      insert into moderation_events (target_user_id, actor_id, prior_state, new_state, reason)
-      values (${sponsor.id}, ${lead.id}, 'ACTIVE', 'UNDER_AUDIT', 'fixture audit') returning id
-    `;
-    const [audit] = await sql<{ id: string }[]>`
-      insert into calibration_audits (account_id, reporter_id, rationale, sample_started_at, sample_ended_at, settled_sample_size)
-      values (${sponsor.id}, ${lead.id}, 'fixture sample', '2025-01-01', '2025-02-01', 1) returning id
-    `;
-    const adjust = async (lineTeamId: string | null, amount: number) => {
-      const [adjustment] = await sql<{ id: string }[]>`
-        insert into moderation_credit_adjustments (moderation_event_id, calibration_audit_id, target_account_id,
-          gap_per_pair, pair_count, total_amount, reason, reversal_of)
-        values (${event.id}, ${audit.id}, ${sponsor.id}, 2, 1, 2, 'fixture adjustment',
-          (select id from moderation_credit_adjustments where calibration_audit_id = ${audit.id} and reversal_of is null))
-        returning id
-      `;
-      await sql`insert into moderation_credit_adjustment_lines (adjustment_id, settlement_id, creditor_id, team_id, amount)
-        values (${adjustment.id}, ${settlement.id}, ${author.id}, ${lineTeamId}, ${amount})`;
-    };
 
-    await adjust(teamId, 2);
+    await adjustmentLine({ settlementId: settlement.id, target: sponsor, creditor: author, teamId, amount: 2 });
     expect(await balancesOf(sql, teamId, author.id, sponsor.id)).toEqual([8, 0, -8]);
     expect(await creditLimitOf(sql, author.id)).toBeNull();
     expect((await legsOf(settlement.id)).map((leg) => [leg.account_id, leg.counterparty_id, leg.amount])).toEqual([
       [sponsor.id, teamId, -6], [sponsor.id, teamId, -2], [teamId, sponsor.id, 2], [teamId, sponsor.id, 6],
     ]);
 
-    await adjust(null, -2);
+    await adjustmentLine({ settlementId: settlement.id, target: sponsor, creditor: author, teamId: null, amount: -2 });
     expect(await balancesOf(sql, teamId, author.id, sponsor.id)).toEqual([8, -2, -6]);
     expect(await creditLimitOf(sql, author.id)).toEqual({ repaidDebt: 0, creditLimit: 10 });
+  });
+
+  it("leaves a team line out of its creditor's repayment in the board's credit-limit replay", async () => {
+    // Owes 10, a team line pays 10 to the team, the author's own work then repays 10, and 10 more is owed.
+    // Booked to the author instead, the line would clear the debt first and the work would repay nothing.
+    const [lead, author, worker] = [await insertAccount(sql), await insertAccount(sql, 2), await insertAccount(sql)];
+    const teamId = await team(lead, author);
+    await insertSettlement(sql, { author: worker, debtor: author, credits: 10, mergedAt: "2026-01-01T00:00:00.000Z" });
+    const teamWork = await insertSettlement(sql, { author, debtor: worker, credits: 1, mergedAt: "2026-01-01T00:00:00.000Z", teamId });
+    await adjustmentLine({ settlementId: teamWork.id, target: worker, creditor: author, teamId, amount: 10 });
+    await insertSettlement(sql, { author, debtor: worker, credits: 10, mergedAt: "2026-01-03T00:00:00.000Z" });
+    await insertSettlement(sql, { author: worker, debtor: author, credits: 10, mergedAt: "2026-01-04T00:00:00.000Z" });
+
+    expect(await balancesOf(sql, author.id, teamId)).toEqual([-10, 11]);
+    expect(await creditLimitOf(sql, author.id)).toEqual({ repaidDebt: 10, creditLimit: 11 });
+    expect(await boardIssuesOf(author)).toBe(2);
   });
 });
 
 describe("a granted dispute's landing reversal in the ledger views", () => {
   it("debits the settlement's team, and its author when the settlement carries no team", async () => {
-    const [lead, author, sponsor, contributor] = [
-      await insertAccount(sql), await insertAccount(sql), await insertAccount(sql), await insertAccount(sql),
-    ];
+    const [lead, author, sponsor] = [await insertAccount(sql), await insertAccount(sql), await insertAccount(sql)];
     const teamId = await team(lead, author);
     const settlement = await insertSettlement(sql, { author, debtor: sponsor, credits: 6, teamId });
-    const closedPullRequestId = await insertPullRequest(sql, contributor, sponsor.repositoryId, settlement.issueId, "CLOSED", null);
-    await sql`
-      insert into closed_pr_dispute_requests (contributor_id, pull_request_id, issue_id, landed_pull_request_id, request_reason,
-        state, decision, decided_by, decided_reason, decided_at, moderator_figure, awarded_points)
-      values (${contributor.id}, ${closedPullRequestId}, ${settlement.issueId}, ${settlement.pullRequestId}, 'My work landed.',
-        'DECIDED', 'GRANTED', ${lead.id}, 'The landing copied it.', '2026-02-01', 6, 6)
-    `;
+    await grantDispute(settlement, sponsor, "2026-02-01");
 
     expect(await balancesOf(sql, teamId, author.id, sponsor.id)).toEqual([0, 0, 0]);
     expect(await creditLimitOf(sql, author.id)).toBeNull();
@@ -160,6 +184,22 @@ describe("a granted dispute's landing reversal in the ledger views", () => {
     expect(await creditLimitOf(sql, author.id)).toEqual({ repaidDebt: 0, creditLimit: 10 });
     expect((await legsOf(settlement.id)).filter((leg) => leg.amount === -6).map((leg) => leg.account_id).sort())
       .toEqual([author.id, sponsor.id].sort());
+  });
+
+  it("leaves a team settlement's reversal out of its author's repayment in the board's credit-limit replay", async () => {
+    // The author owes nothing when their own work lands, then owes 10. Debited to the author instead,
+    // the reversal would make that work repay 10 and lift the limit to 11.
+    const [lead, author, worker] = [await insertAccount(sql), await insertAccount(sql, 2), await insertAccount(sql)];
+    const teamId = await team(lead, author);
+    const teamWork = await insertSettlement(sql, { author, debtor: worker, credits: 10, mergedAt: "2026-01-01T00:00:00.000Z", teamId });
+    await grantDispute(teamWork, worker, "2026-01-02T00:00:00.000Z");
+    await insertSettlement(sql, { author, debtor: worker, credits: 10, mergedAt: "2026-01-03T00:00:00.000Z" });
+    await insertSettlement(sql, { author: worker, debtor: author, credits: 10, mergedAt: "2026-01-04T00:00:00.000Z" });
+    await insertSettlement(sql, { author: worker, debtor: author, credits: 10, mergedAt: "2026-01-05T00:00:00.000Z" });
+
+    expect(await balancesOf(sql, author.id, teamId)).toEqual([-10, 0]);
+    expect(await creditLimitOf(sql, author.id)).toEqual({ repaidDebt: 0, creditLimit: 10 });
+    expect(await boardIssuesOf(author)).toBe(1);
   });
 });
 
