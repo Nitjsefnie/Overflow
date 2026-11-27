@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -206,7 +206,6 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
   });
 
   it("uses a job id and name that cannot collide with a required check context", () => {
-
     expect(workflow.jobs, "the job id must not be verify").not.toHaveProperty("verify");
     if (!pr) {
       expect(workflow.jobs, "the push scan must not produce actionlint").not.toHaveProperty("actionlint");
@@ -246,19 +245,20 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     };
 
     let root = "";
-
     let unmerged = "";
     /** An ancestor of HEAD, so the positive direction has something real to pass on. */
     let reachable = "";
-
     let orphaned = "";
 
     const finding = (commit: string, file: string) => ({ Fingerprint: `${commit}:${file}:generic-api-key:116` });
 
-    /** Run the step's `run:` block verbatim in `repoPath`, with `entries` as its committed .gitleaksignore. */
+    /** Run the step's `run:` block verbatim in `repoPath`, `entries` committed as .gitleaksignore and the copy deleted as the scan action does. */
     const runStep = (repoPath: string, entries: { Fingerprint: string }[], preamble = "# fixture findings\n") => {
       const lines = entries.map((entry) => `${entry.Fingerprint}\n`).join("");
       writeFileSync(join(repoPath, ".gitleaksignore"), `${preamble}${lines}`, "utf8");
+      git(repoPath, "add", ".gitleaksignore");
+      git(repoPath, "commit", "--quiet", "--allow-empty", "-m", "the ignore list");
+      rmSync(join(repoPath, ".gitleaksignore"));
       return spawnSync("bash", ["-e", "-c", step().run!], {
         cwd: repoPath,
         encoding: "utf8",
@@ -305,32 +305,31 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       const result = runStep(join(root, "checkout"), [
         finding(reachable, "tests/security/token-cipher.test.ts"),
       ]);
-      expect(
-        result.status,
-        `the step must pass on an ignore list naming only reachable commits:\n${result.stdout}\n${result.stderr}`,
-      ).toBe(0);
+      expect(result.status, `the step must pass on an ignore list naming only reachable commits:\n${result.stdout}\n${result.stderr}`).toBe(0);
       // Not a bare exit code: a step that exited 0 without reading the ignore list
       // would satisfy that too, so it has to say what it checked.
       expect(result.stdout, "the step must report how many entries it checked").toMatch(/1\b/);
     });
 
-    it("fails, naming the fingerprint and the commit, on an entry on neither root", () => {
+    it("reads the list HEAD commits, after the scan action deleted the working-tree copy", () => {
+      const repo = join(root, "checkout");
+      const result = runStep(repo, [finding(reachable, "tests/a.ts"), finding(reachable, "tests/b.ts")]);
+      expect(existsSync(join(repo, ".gitleaksignore"))).toBe(false);
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("all 2 entries");
+    });
 
+    it("fails, naming the fingerprint and the commit, on an entry on neither root", () => {
       const orphan = finding(orphaned, "tests/security/orphan.test.ts");
       const result = runStep(join(root, "checkout"), [
         finding(reachable, "tests/security/token-cipher.test.ts"),
         orphan,
       ]);
-      expect(
-        result.status,
-        "an ignore list naming a commit on neither HEAD nor the pull request is a defect in a tracked " +
-          "artefact, and this step is the only thing that ever notices it",
-      ).not.toBe(0);
+      expect(result.status, "an ignore list naming a commit on neither HEAD nor the pull request is a defect in a tracked " +
+        "artefact, and this step is the only thing that ever notices it").not.toBe(0);
 
-      expect(
-        `${result.stdout}\n${result.stderr}`,
-        "the failure must name the entry's fingerprint AND the commit it names",
-      ).toContain(`${orphan.Fingerprint} names commit ${orphaned}`);
+      expect(`${result.stdout}\n${result.stderr}`, "the failure must name the entry's fingerprint AND the commit it names")
+        .toContain(`${orphan.Fingerprint} names commit ${orphaned}`);
       expect(`${result.stdout}\n${result.stderr}`).toMatch(/not an ancestor/i);
     });
 
@@ -368,21 +367,28 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       const orphan = finding(absent, "tests/security/never-committed.test.ts");
       const result = runStep(join(root, "checkout"), [finding(reachable, "tests/security/token-cipher.test.ts"), orphan]);
       expect(result.status, "an entry naming a commit absent from the checkout is the same defect").not.toBe(0);
-      expect(`${result.stdout}\n${result.stderr}`, "the two faults have different fixes, so they get different messages").toContain(
-        `${orphan.Fingerprint} names commit ${absent}`,
-      );
+      expect(`${result.stdout}\n${result.stderr}`, "the two faults have different fixes, so they get different messages")
+        .toContain(`${orphan.Fingerprint} names commit ${absent}`);
       expect(`${result.stdout}\n${result.stderr}`).not.toMatch(/not an ancestor/i);
     });
 
-    it("refuses to answer in a shallow checkout, where every verdict would be a false alarm", async () => {
+    it("fails, naming it, when HEAD commits no ignore list", () => {
+      const repo = join(root, "checkout");
+      runStep(repo, []);
+      git(repo, "rm", "--quiet", "--cached", ".gitleaksignore");
+      git(repo, "commit", "--quiet", "-m", "no ignore list");
+      const result = spawnSync("bash", ["-e", "-c", step().run!], { cwd: repo, encoding: "utf8", env: scratchGitEnv });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("the committed ignore list is missing: HEAD:.gitleaksignore");
+    });
 
+    it("refuses to answer in a shallow checkout, where every verdict would be a false alarm", async () => {
       const shallowPath = join(root, "shallow");
       await mkdir(shallowPath, { recursive: true });
       git(shallowPath, "init", "--quiet", "--initial-branch=main");
       const head = await commitFiles(shallowPath, { "README.md": "# shallow\n" }, "root");
       await mkdir(join(shallowPath, "scripts"), { recursive: true });
       await copyFile(resolve(SCRIPT), join(shallowPath, SCRIPT));
-
       await writeFile(join(shallowPath, ".git", "shallow"), `${head}\n`, "utf8");
 
       const result = runStep(shallowPath, [finding(head, "tests/security/token-cipher.test.ts")]);
@@ -391,12 +397,9 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     });
 
     it("cannot pass on an ignore list it did not read", () => {
-
       const empty = runStep(join(root, "checkout"), []);
       expect(empty.status, "the step must not report success on an ignore list it read nothing from").not.toBe(0);
-      expect(`${empty.stdout}\n${empty.stderr}`, "and it must say it checked nothing").toMatch(
-        /checked nothing|no entries|nothing to check/i,
-      );
+      expect(`${empty.stdout}\n${empty.stderr}`, "and it must say it checked nothing").toMatch(/checked nothing|no entries|nothing to check/i);
 
       const global = runStep(join(root, "checkout"), [{ Fingerprint: "tests/a.ts:generic-api-key:1" }]);
       expect(global.status, "an entry naming no commit gives the step nothing to check").not.toBe(0);
@@ -404,8 +407,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
 
     it("reads comments, blank lines and a missing final newline the way gitleaks does", () => {
       const repo = join(root, "checkout");
-      writeFileSync(join(repo, ".gitleaksignore"), `# a comment\n\n  ${finding(reachable, "tests/a.ts").Fingerprint}  \n${finding(reachable, "tests/b.ts").Fingerprint}`, "utf8");
-      const result = spawnSync("bash", ["-e", "-c", step().run!], { cwd: repo, encoding: "utf8", env: scratchGitEnv });
+      const result = runStep(repo, [], `# a comment\n\n  ${finding(reachable, "tests/a.ts").Fingerprint}  \n${finding(reachable, "tests/b.ts").Fingerprint}`);
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
       expect(result.stdout).toContain("all 2 entries");
     });
@@ -420,10 +422,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       ".gitleaksignore",
       "scripts/secret-scan-baseline.sh",
     ]) {
-      expect(
-        checkIgnore(path),
-        `${path} must be named back by .gitignore, or it is invisible to git despite existing on disk`,
-      ).toBe(1);
+      expect(checkIgnore(path), `${path} must be named back by .gitignore, or it is invisible to git despite existing on disk`).toBe(1);
     }
 
     for (const path of [".github/workflows/junk.yaml", ".github/junk.txt", "scripts/junk.sh"]) {
