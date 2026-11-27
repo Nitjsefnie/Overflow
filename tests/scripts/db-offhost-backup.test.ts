@@ -1,12 +1,12 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
-const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "overflow-offhost-"), join(tmpdir(), "overflow-offhost-prune-"), join(tmpdir(), "overflow-offhost-sweep-"), join(tmpdir(), "overflow-offhost-cred-")]);
+const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "overflow-offhost-"), join(tmpdir(), "overflow-offhost-prune-"), join(tmpdir(), "overflow-offhost-sweep-"), join(tmpdir(), "overflow-offhost-token-")]);
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const scriptPath = join(repositoryRoot, "scripts", "db-offhost-backup.sh");
@@ -18,6 +18,9 @@ const recipient = "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs29ufr
 const channel = "123456789012345678";
 
 const databaseUrl = "postgresql://backup:synthetic@127.0.0.1:1/overflow_offhost_test";
+
+/** Not the identity the job used to hardcode, so a hardcoded name fails every mailbox pin. */
+const identity = "offhost_bot_7";
 
 /** The plain SQL the pg_dump stub writes, as one line for easy size math. */
 const defaultDump = "overflow test dump payload\n";
@@ -181,11 +184,10 @@ function runBackup(
     connectorMute?: boolean;
     /** The messages the conversation stub answers with, as raw JSON text. */
     conversationJson?: string;
-    /**
-     * A CREDENTIALS_DIRECTORY the run sees, as the systemd unit hands one to
-     * the script; the bridge under test reads the overflow token from there.
-     */
-    credentialsDirectory?: string;
+    identity?: string;
+    /** OVERFLOW_BACKUP_DISCORD_TOKEN and OVERFLOW_BACKUP_DISCORD_TOKEN_FILE, set only when given. */
+    token?: string;
+    tokenFile?: string;
     /**
      * Runs against a backup directory the TEST made and seeded, so the run's
      * sweep and prune can be judged on real files afterwards. Absent: a fresh
@@ -193,7 +195,7 @@ function runBackup(
      */
     backupDirectory?: string;
     /** Leaves one of the required variables out of the environment entirely. */
-    omit?: "OVERFLOW_DATABASE_URL" | "OVERFLOW_BACKUP_AGE_RECIPIENT" | "OVERFLOW_BACKUP_DISCORD_CHANNEL";
+    omit?: "OVERFLOW_DATABASE_URL" | "OVERFLOW_BACKUP_AGE_RECIPIENT" | "OVERFLOW_BACKUP_DISCORD_CHANNEL" | "OVERFLOW_BACKUP_DISCORD_IDENTITY";
     recipient?: string;
     channelValue?: string;
   } = {},
@@ -233,6 +235,7 @@ function runBackup(
       OVERFLOW_DATABASE_URL: databaseUrl,
       OVERFLOW_BACKUP_AGE_RECIPIENT: options.recipient ?? recipient,
       OVERFLOW_BACKUP_DISCORD_CHANNEL: options.channelValue ?? channel,
+      OVERFLOW_BACKUP_DISCORD_IDENTITY: options.identity ?? identity,
       OVERFLOW_BACKUP_DIR: backupDirectory,
       OVERFLOW_BACKUP_MAX_BYTES: options.maxBytes ?? "100000000",
       OVERFLOW_OFFHOST_MB: mbPath,
@@ -253,9 +256,8 @@ function runBackup(
       OFFHOST_TEST_MB_DELETE_RC: String(options.deleteRc ?? 0),
       OFFHOST_TEST_MB_CONNECTOR_MUTE: options.connectorMute ? "1" : "",
       OFFHOST_TEST_MB_TOKEN_SEEN: join(directory, "mb-token-seen"),
-      ...(options.credentialsDirectory !== undefined
-        ? { CREDENTIALS_DIRECTORY: options.credentialsDirectory }
-        : {}),
+      ...(options.token !== undefined ? { OVERFLOW_BACKUP_DISCORD_TOKEN: options.token } : {}),
+      ...(options.tokenFile !== undefined ? { OVERFLOW_BACKUP_DISCORD_TOKEN_FILE: options.tokenFile } : {}),
       ...(options.conversationJson !== undefined
         ? { OFFHOST_TEST_MB_CONVERSATION_JSON: conversationPath }
         : {}),
@@ -375,6 +377,22 @@ describe("db-offhost-backup.sh environment validation", () => {
     expect(run.mbCalls).toEqual([]);
   });
 
+  it.each([
+    ["absent", undefined],
+    ["empty", ""],
+    ["uppercase", "Overflow"],
+    ["hyphenated", "over-flow"],
+    ["shell-bearing", "bot;id"],
+    ["multi-line", "bot\nbot"],
+  ])("refuses an %s Discord identity before anything runs", (_label, value) => {
+    const run = runBackup(value === undefined ? { omit: "OVERFLOW_BACKUP_DISCORD_IDENTITY" } : { identity: value });
+
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain("OVERFLOW_BACKUP_DISCORD_IDENTITY");
+    expect(run.dumpArgv).toBeNull();
+    expect(run.mbCalls).toEqual([]);
+  });
+
   it("refuses a non-numeric channel id", () => {
     const run = runBackup({ channelValue: "backups-chat; rm -rf /" });
 
@@ -420,11 +438,7 @@ describe("db-offhost-backup.sh reduced dump", () => {
     const run = runBackup();
 
     expect(run.status).toBe(0);
-    expect(run.dumpArgv).toEqual([
-      "--format=plain",
-      ...excludedTables.map((table) => `--exclude-table-data=${table}`),
-      databaseUrl,
-    ]);
+    expect(run.dumpArgv).toEqual(["--format=plain", ...excludedTables.map((table) => `--exclude-table-data=${table}`), databaseUrl]);
   });
 
   it("compresses with xz -9e and encrypts to the recipient, in that order", () => {
@@ -487,9 +501,7 @@ describe("db-offhost-backup.sh size guard", () => {
     expect(sendCalls(run), "a file at the limit must not be posted").toEqual([]);
     // The local encrypted file stays: it is a good local copy.
     expect(run.backupPath).toBe("");
-    expect(readdirSync(run.backupDirectory)).toEqual([
-      expect.stringMatching(/^overflow-reduced-\d{8}T\d{6}Z\.sql\.xz\.age$/),
-    ]);
+    expect(readdirSync(run.backupDirectory)).toEqual([expect.stringMatching(/^overflow-reduced-\d{8}T\d{6}Z\.sql\.xz\.age$/)]);
   });
 
   it("posts when the encrypted file is one byte under the limit", () => {
@@ -508,16 +520,8 @@ describe("db-offhost-backup.sh local retention", () => {
     try {
       const backupDirectory = join(directory, "backups");
       mkdirSync(backupDirectory);
-      const oldReduced = seedFile(
-        backupDirectory,
-        "overflow-reduced-20260901T000000Z.sql.xz.age",
-        20,
-      );
-      const freshReduced = seedFile(
-        backupDirectory,
-        "overflow-reduced-20260929T000000Z.sql.xz.age",
-        1,
-      );
+      const oldReduced = seedFile(backupDirectory, "overflow-reduced-20260901T000000Z.sql.xz.age", 20);
+      const freshReduced = seedFile(backupDirectory, "overflow-reduced-20260929T000000Z.sql.xz.age", 1);
       const oldFullDump = seedFile(backupDirectory, "overflow-20260901T000000Z.dump", 20);
       const unrelated = seedFile(backupDirectory, "notes.txt", 20);
 
@@ -538,26 +542,10 @@ describe("db-offhost-backup.sh local retention", () => {
     try {
       const backupDirectory = join(directory, "backups");
       mkdirSync(backupDirectory);
-      const stalePartial = seedFile(
-        backupDirectory,
-        ".overflow-reduced-20260901T000000Z.sql.xz.age.incomplete",
-        2,
-      );
-      const stalePlain = seedFile(
-        backupDirectory,
-        ".overflow-reduced-20260901T000000Z.sql.incomplete",
-        2,
-      );
-      const staleDeflated = seedFile(
-        backupDirectory,
-        ".overflow-reduced-20260901T000000Z.sql.xz.incomplete",
-        2,
-      );
-      const freshPlain = seedFile(
-        backupDirectory,
-        ".overflow-reduced-20260930T000000Z.sql.incomplete",
-        1 / 24,
-      );
+      const stalePartial = seedFile(backupDirectory, ".overflow-reduced-20260901T000000Z.sql.xz.age.incomplete", 2);
+      const stalePlain = seedFile(backupDirectory, ".overflow-reduced-20260901T000000Z.sql.incomplete", 2);
+      const staleDeflated = seedFile(backupDirectory, ".overflow-reduced-20260901T000000Z.sql.xz.incomplete", 2);
+      const freshPlain = seedFile(backupDirectory, ".overflow-reduced-20260930T000000Z.sql.incomplete", 1 / 24);
 
       const run = runBackup({ backupDirectory });
 
@@ -596,7 +584,7 @@ describe("db-offhost-backup.sh scratch naming", () => {
 });
 
 describe("db-offhost-backup.sh discord posting", () => {
-  it("posts exactly once, as overflow, to the channel, with the file attached and --wait", () => {
+  it("posts exactly once, as the configured identity, to the channel, with the file attached and --wait", () => {
     const run = runBackup();
     const calls = sendCalls(run);
 
@@ -604,7 +592,7 @@ describe("db-offhost-backup.sh discord posting", () => {
     expect(calls, "exactly one send").toHaveLength(1);
     const [subject, body, attachFlag, attachedPath, channelFlag, channelValue, waitFlag] =
       calls[0]!.slice(3);
-    expect(calls[0]!.slice(0, 3)).toEqual(["send", "overflow", "nobody"]);
+    expect(calls[0]!.slice(0, 3)).toEqual(["send", identity, "nobody"]);
     expect(subject).toBe(basename(run.backupPath));
     expect(attachFlag).toBe("--attach");
     expect(attachedPath).toBe(run.backupPath);
@@ -624,13 +612,13 @@ describe("db-offhost-backup.sh discord posting", () => {
     expect(run.stdout.trimEnd().endsWith(run.backupPath)).toBe(true);
   });
 
-  it("brings up its own overflow connector when none is running, and stops it afterwards", () => {
+  it("brings up its own connector when none is running, and stops it afterwards", () => {
     const run = runBackup({ listRc: 1 });
     const connectorCalls = run.mbCalls.filter((argv) => argv[0] === "connector");
 
     expect(run.status).toBe(0);
     expect(connectorCalls, "one connector for the job").toHaveLength(1);
-    expect(connectorCalls[0]!.slice(0, 2)).toEqual(["connector", "overflow"]);
+    expect(connectorCalls[0]!.slice(0, 2)).toEqual(["connector", identity]);
     expect(connectorCalls[0]![2]).toBe("--claude-pid");
     expect(connectorCalls[0]![3], "the pid is the job's own, as a number").toMatch(/^\d+$/);
     expect(sendCalls(run)).toHaveLength(1);
@@ -664,23 +652,59 @@ describe("db-offhost-backup.sh discord posting", () => {
     );
   });
 
-  it("bridges the unit's overflow credential to DISCORD_TOKEN before any mailbox call", () => {
-
-    const directory = tempDirectories.create(join(tmpdir(), "overflow-offhost-cred-"));
+  /** A scratch token file holding `content`; with no content, a path that does not exist. */
+  const tokenFile = (content?: string): string => {
+    const directory = tempDirectories.create(join(tmpdir(), "overflow-offhost-token-"));
     runDirectories.push(directory);
-    const credentialsDirectory = join(directory, "credentials");
-    mkdirSync(credentialsDirectory);
-    writeFileSync(join(credentialsDirectory, "overflow_token"), "canary-overflow-token\n");
+    const path = join(directory, "token");
+    if (content !== undefined) writeFileSync(path, content);
+    return path;
+  };
+  const secret = "canary-token-value";
 
-    const run = runBackup({ credentialsDirectory });
+  it.each([
+    ["the token variable", () => ({ token: secret })],
+    ["the token file, trailing newline stripped", () => ({ tokenFile: tokenFile(`${secret}\n`) })],
+    ["the token file beside an empty token variable", () => ({ token: "", tokenFile: tokenFile(secret) })],
+  ])("exports %s as DISCORD_TOKEN, never on argv or in the output", (_label, options) => {
+    const run = runBackup(options());
+
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.tokenSeen, "the CLI observed the token in DISCORD_TOKEN").toBe(secret);
+    expect(JSON.stringify(run.mbCalls) + run.stdout + run.stderr, "the token rides only the environment").not.toContain(secret);
+  });
+
+  it("exports nothing when neither token variable is set, leaving the lookup to the CLI", () => {
+    const run = runBackup();
 
     expect(run.status).toBe(0);
-    expect(run.tokenSeen, "the CLI observed the credential's value in DISCORD_TOKEN").toBe(
-      "canary-overflow-token",
-    );
-    expect(JSON.stringify(run.mbCalls), "the token never rides argv").not.toContain(
-      "canary-overflow-token",
-    );
+    expect(run.tokenSeen).toBe("");
+  });
+
+  it.each([
+    ["both token variables set", () => ({ token: secret, tokenFile: tokenFile(secret) }), "both"],
+    ["a missing token file", () => ({ tokenFile: tokenFile() }), "cannot read"],
+    ["a directory as the token file", () => ({ tokenFile: dirname(tokenFile()) }), "cannot read"],
+    ["an empty token file", () => ({ tokenFile: tokenFile("") }), "is empty"],
+    ["a token file holding only a newline", () => ({ tokenFile: tokenFile("\n") }), "is empty"],
+  ])("refuses %s before anything runs", (_label, options, message) => {
+    const run = runBackup(options());
+
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain(message);
+    expect(run.stderr, "a refusal never prints the token").not.toContain(secret);
+    expect(run.dumpArgv).toBeNull();
+    expect(run.mbCalls).toEqual([]);
+  });
+
+  it("speaks as the configured identity on every mailbox call", () => {
+    const stale = { msg_id: "1111111111111111111", from: identity, created: createdDaysAgo(20) };
+    const run = runBackup({ listRc: 1, conversationJson: JSON.stringify([stale]) });
+
+    expect(run.status).toBe(0);
+    expect(new Set(run.mbCalls.map((argv) => argv[0]))).toEqual(new Set(["list-agents", "connector", "send", "conversation", "message"]));
+    expect(run.mbCalls.filter((argv) => argv[1] !== identity)).toEqual([]);
+    expect(deleteCalls(run), "the sweep filters on the same identity").toHaveLength(1);
   });
 
   it("propagates a failed send as a nonzero exit", () => {
@@ -690,34 +714,30 @@ describe("db-offhost-backup.sh discord posting", () => {
     expect(sendCalls(run)).toHaveLength(1);
   });
 
-  it("deletes only its own overflow-authored messages older than 14 days", () => {
+  it("deletes only its own identity-authored messages older than 14 days", () => {
     const stale = "1111111111111111111";
     const thirteenDays = "2222222222222222222";
     const otherAuthor = "3333333333333333333";
     const fresh = "4444444444444444444";
     const conversationJson = JSON.stringify([
-      { msg_id: stale, from: "overflow", created: createdDaysAgo(20) },
-      { msg_id: thirteenDays, from: "overflow", created: createdDaysAgo(13) },
-      { msg_id: otherAuthor, from: "backup-bot", created: createdDaysAgo(30) },
-      { msg_id: fresh, from: "overflow", created: createdDaysAgo(0) },
+      { msg_id: stale, from: identity, created: createdDaysAgo(20) },
+      { msg_id: thirteenDays, from: identity, created: createdDaysAgo(13) },
+      { msg_id: otherAuthor, from: "overflow", created: createdDaysAgo(30) },
+      { msg_id: fresh, from: identity, created: createdDaysAgo(0) },
     ]);
 
     const run = runBackup({ conversationJson });
 
     expect(run.status).toBe(0);
     const sweep = run.mbCalls.filter((argv) => argv[0] === "conversation");
-    expect(sweep, "one page, generously sized, json, in the backups channel").toEqual([
-      ["conversation", "overflow", "100", "--channel", channel, "--json"],
-    ]);
-    expect(deleteCalls(run)).toEqual([
-      ["message", "overflow", "delete", stale, "--channel", channel],
-    ]);
+    expect(sweep, "one page, generously sized, json, in the backups channel").toEqual([["conversation", identity, "100", "--channel", channel, "--json"]]);
+    expect(deleteCalls(run)).toEqual([["message", identity, "delete", stale, "--channel", channel]]);
   });
 
   it("propagates a failed sweep deletion as a nonzero exit", () => {
     const run = runBackup({
       conversationJson: JSON.stringify([
-        { msg_id: "1111111111111111111", from: "overflow", created: createdDaysAgo(20) },
+        { msg_id: "1111111111111111111", from: identity, created: createdDaysAgo(20) },
       ]),
       deleteRc: 1,
     });
@@ -733,25 +753,15 @@ describe("db-offhost-backup.sh discord posting", () => {
     expect(
       single.mbCalls.filter((argv) => argv[0] === "list-agents"),
       "a running connector costs exactly one 10-second probe",
-    ).toEqual([["list-agents", "overflow", "--timeout", "10"]]);
+    ).toEqual([["list-agents", identity, "--timeout", "10"]]);
 
     const brought = runBackup({ listRc: 1 });
 
     expect(brought.status).toBe(0);
     const probes = brought.mbCalls.filter((argv) => argv[0] === "list-agents");
-    expect(probes[0], "the liveness probe is the 10-second one").toEqual([
-      "list-agents",
-      "overflow",
-      "--timeout",
-      "10",
-    ]);
+    expect(probes[0], "the liveness probe is the 10-second one").toEqual(["list-agents", identity, "--timeout", "10"]);
     for (const probe of probes.slice(1)) {
-      expect(probe, "every bring-up probe is the short one").toEqual([
-        "list-agents",
-        "overflow",
-        "--timeout",
-        "2",
-      ]);
+      expect(probe, "every bring-up probe is the short one").toEqual(["list-agents", identity, "--timeout", "2"]);
     }
     expect(probes.length, "the bring-up loop probed at least once").toBeGreaterThan(1);
 
@@ -761,9 +771,9 @@ describe("db-offhost-backup.sh discord posting", () => {
 
     expect(exhausted.status).not.toBe(0);
     const exhaustProbes = exhausted.mbCalls.filter((argv) => argv[0] === "list-agents");
-    expect(exhaustProbes[0]).toEqual(["list-agents", "overflow", "--timeout", "10"]);
+    expect(exhaustProbes[0]).toEqual(["list-agents", identity, "--timeout", "10"]);
     expect(exhaustProbes.slice(1)).toEqual(
-      exhaustProbes.slice(1).map(() => ["list-agents", "overflow", "--timeout", "2"]),
+      exhaustProbes.slice(1).map(() => ["list-agents", identity, "--timeout", "2"]),
     );
     expect(exhaustProbes).toHaveLength(3);
   });
@@ -771,15 +781,13 @@ describe("db-offhost-backup.sh discord posting", () => {
   it("keeps a message whose stamp will not parse, rather than deleting on a guess", () => {
     const run = runBackup({
       conversationJson: JSON.stringify([
-        { msg_id: "1111111111111111111", from: "overflow", created: "not-a-timestamp" },
-        { msg_id: "2222222222222222222", from: "overflow" },
-        { msg_id: "3333333333333333333", from: "overflow", created: createdDaysAgo(30) },
+        { msg_id: "1111111111111111111", from: identity, created: "not-a-timestamp" },
+        { msg_id: "2222222222222222222", from: identity },
+        { msg_id: "3333333333333333333", from: identity, created: createdDaysAgo(30) },
       ]),
     });
 
     expect(run.status).toBe(0);
-    expect(deleteCalls(run)).toEqual([
-      ["message", "overflow", "delete", "3333333333333333333", "--channel", channel],
-    ]);
+    expect(deleteCalls(run)).toEqual([["message", identity, "delete", "3333333333333333333", "--channel", channel]]);
   });
 });

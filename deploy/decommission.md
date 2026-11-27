@@ -193,8 +193,9 @@ Preconditions:
 - Control of the off-host destinations: the alert and canary mailboxes and
   the Discord channel the canary's failure reports go to — and, on a
   deployment that ran the off-host copy, the backups channel those copies
-  were posted to, through the `overflow` identity from a machine that runs the
-  fleet's mailbox CLI. The host-side files die in phase 7; the destinations
+  were posted to, through the Discord identity `backup.env` names
+  (`OVERFLOW_BACKUP_DISCORD_IDENTITY`) from a machine that runs the fleet's
+  mailbox CLI. The host-side files die in phase 7; the destinations
   themselves are closed off the host, by whoever holds them.
 - A way to remove the webhooks of phase 4: an administrator of each member
   GitHub repository or a Maintainer/Owner of each GitLab project still carrying
@@ -265,10 +266,11 @@ ls -la /etc/overflow
 printf '%s\n' 'alert mailbox:'; cat /etc/overflow/alert-recipient
 printf '%s\n' 'canary mailbox:'; cat /etc/overflow/canary-recipient
 
-# The backups channel the off-host copies were posted to, which phase 6's
-# disposal reads out of the environment file (an identifier, not a secret).
-# On a deployment that never ran the off-host copy this line answers nothing.
-grep OVERFLOW_BACKUP_DISCORD_CHANNEL /etc/overflow/backup.env
+# The backups channel the off-host copies were posted to and the identity
+# they were posted as, which phase 6's disposal reads out of the environment
+# file (identifiers, not secrets). On a deployment that never ran the
+# off-host copy this line answers nothing.
+grep -e OVERFLOW_BACKUP_DISCORD_CHANNEL -e OVERFLOW_BACKUP_DISCORD_IDENTITY /etc/overflow/backup.env
 
 # Journal footprint, for the phase 8 journald decision.
 journalctl --disk-usage
@@ -588,21 +590,26 @@ store this runbook disposes of itself: their sweeper — the job deletes its
 own posted messages once they pass 14 days — died with the timer in phase 3,
 so whatever the backups channel still holds is stranded past the backup
 lifetime the privacy notice promises. Delete the remaining backup messages
-from the channel as the `overflow` identity, through the mailbox CLI the job
+from the channel as the job's identity, through the mailbox CLI the job
 itself used; the messages go and the channel stays, which is the disposal
 phase 7 already performs for the canary's webhook in an operator-held
 channel. A deletion failure is recorded, not retried forever, like phase 4's
 webhook sweep. Run in Bash: the block loads the file with the deploy's reader.
 
 ```sh
-# The channel id comes from the environment file the nightly unit read; this
-# phase runs before phase 7 destroys it. The overflow token is not in the file:
-# export DISCORD_TOKEN from the fleet's ~/.agent-bundle/discord/overflow.token
-# before running this block.
+# The channel id, the identity and its token come from the environment file
+# the nightly unit read; this phase runs before phase 7 destroys it.
 . /srv/overflow/scripts/systemd-env-file.sh; export_env_file /etc/overflow/backup.env
+identity=$OVERFLOW_BACKUP_DISCORD_IDENTITY
+# The token as the job takes it; with neither variable set the CLI finds it.
+if [ -n "${OVERFLOW_BACKUP_DISCORD_TOKEN:-}" ]; then
+    export DISCORD_TOKEN="$OVERFLOW_BACKUP_DISCORD_TOKEN"
+elif [ -n "${OVERFLOW_BACKUP_DISCORD_TOKEN_FILE:-}" ]; then
+    DISCORD_TOKEN=$(cat "$OVERFLOW_BACKUP_DISCORD_TOKEN_FILE") && export DISCORD_TOKEN
+fi
 
-# The disposal needs the overflow identity's connector, as the nightly job's was.
-python3 ~/.agent-bundle/scripts/discord_mb.py connector overflow &
+# The disposal needs the identity's connector, as the nightly job's was.
+python3 ~/.agent-bundle/scripts/discord_mb.py connector "$identity" &
 connector_pid=$!
 
 # One page of 100 per pass, then strictly backwards with --before, so the
@@ -610,7 +617,7 @@ connector_pid=$!
 # channel's whole legal backlog, so this is a page or two at most.
 before_args=
 while :; do
-    if ! page=$(python3 ~/.agent-bundle/scripts/discord_mb.py conversation overflow 100 \
+    if ! page=$(python3 ~/.agent-bundle/scripts/discord_mb.py conversation "$identity" 100 \
             --channel "$OVERFLOW_BACKUP_DISCORD_CHANNEL" --json $before_args); then
         printf 'FAILED to read the backups channel — clear any remaining backup messages by hand and record it\n' >&2
         break
@@ -618,16 +625,16 @@ while :; do
     ids=$(printf '%s' "$page" | python3 -c '
 import json, sys
 for message in json.load(sys.stdin):
-    if message.get("from") != "overflow" or not message.get("msg_id"):
+    if message.get("from") != sys.argv[1] or not message.get("msg_id"):
         continue
-    print(message["msg_id"])')
+    print(message["msg_id"])' "$identity")
     oldest=$(printf '%s' "$page" | python3 -c '
 import json, sys
 messages = json.load(sys.stdin)
 print(messages[-1].get("msg_id", "") if messages else "")')
     [ -n "$oldest" ] || break
     for id in $ids; do
-        if python3 ~/.agent-bundle/scripts/discord_mb.py message overflow delete "$id" \
+        if python3 ~/.agent-bundle/scripts/discord_mb.py message "$identity" delete "$id" \
                 --channel "$OVERFLOW_BACKUP_DISCORD_CHANNEL"; then
             printf 'deleted backup message %s\n' "$id"
         else
@@ -662,10 +669,11 @@ rm -rf /etc/overflow
 - `backup.env` — the backup role's `OVERFLOW_DATABASE_URL` and password
   ([backup-restore.md](backup-restore.md#b-the-least-privilege-backup-role)),
   plus, on a deployment running the off-host copy, the age recipient public
-  key and the backups channel id. The `overflow` identity's token is not in the
-  file: the off-host unit loads it from the fleet's
-  `~/.agent-bundle/discord/overflow.token` at each start — a fleet-side file other
-  products share, not part of this host's disposal inventory
+  key, the backups channel id, the Discord identity, and the identity's bot
+  token when it is set as `OVERFLOW_BACKUP_DISCORD_TOKEN`. A token set as
+  `OVERFLOW_BACKUP_DISCORD_TOKEN_FILE` lives at the path the file names; a
+  path outside `/etc/overflow` is the identity's own token file, kept by
+  whoever holds that identity and not part of this host's disposal inventory
   ([backup-restore.md](backup-restore.md#i-the-encrypted-off-host-copy)).
 - `alert-recipient`, `canary-recipient` — the two mail addresses alerts and
   canary probes are sent to, off this host.
@@ -701,8 +709,8 @@ channel's integration settings, which invalidates the URL whose local copy
 was destroyed above. Record both closures in the preflight record. The
 backups channel's posted copies were disposed of in
 [phase 6](#6-backup-disposal), which had to run first: that disposal reads
-the channel id out of the `backup.env` this phase destroys, and speaks as
-`overflow` through a token the operator supplies from the fleet's canonical file.
+the channel id, the identity and its token out of the `backup.env` this
+phase destroys.
 
 ## 8. Remaining stores
 
@@ -885,10 +893,12 @@ Discord channel carries no Overflow webhook in its integration settings.
 The backups channel carries no remaining backup messages:
 
 ```sh
-# Read-only. The overflow identity's connector serves the call, as in phase 6.
-python3 ~/.agent-bundle/scripts/discord_mb.py connector overflow &
+# Read-only. The job's identity's connector serves the call, as in phase 6;
+# export that identity's DISCORD_TOKEN first unless the CLI finds it itself.
+identity="<the job's Discord identity, from the preflight record>"
+python3 ~/.agent-bundle/scripts/discord_mb.py connector "$identity" &
 connector_pid=$!
-python3 ~/.agent-bundle/scripts/discord_mb.py conversation overflow 100 \
+python3 ~/.agent-bundle/scripts/discord_mb.py conversation "$identity" 100 \
     --channel "<the backups channel's id, from the preflight record>" --json
 kill "$connector_pid" 2>/dev/null || :
 ```

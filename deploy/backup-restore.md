@@ -752,9 +752,10 @@ The dump is compressed with `xz -9e`, encrypted with `age -r` to the
 operator's age public key — the only key material on the host — and
 installed in `/var/backups/overflow` as `overflow-reduced-<UTC
 timestamp>.sql.xz.age`, mode `0600` in the root-only `0700` directory like
-(d)'s dumps. The job then posts the file as the `overflow` identity to the
-dedicated private Discord channel through the mailbox CLI, bringing a
-connector up for itself and stopping it afterwards when none was running.
+(d)'s dumps. The job then posts the file as the Discord identity
+`OVERFLOW_BACKUP_DISCORD_IDENTITY` names to the dedicated private Discord
+channel through the mailbox CLI, bringing a connector up for itself and
+stopping it afterwards when none was running.
 Retention is 14 days on both copies: the job deletes its own posted messages
 older than 14 days from that channel — one generous page per run, and a
 message the page misses is swept on a later run — and prunes local
@@ -783,16 +784,24 @@ a single `BindReadOnlyPaths` entry with `ProtectHome` spelled `tmpfs` rather
 than `yes` — the pairing systemd.exec(5) sanctions for a bind destination
 under a protected directory, probed on this host's systemd (the unit file's
 comments carry the record). Nothing else under `/root` is reachable. The
-`overflow` token reaches the CLI as a systemd credential: the unit loads
-`~/.agent-bundle/discord/overflow.token` at every start and the job's script
-bridges it to `DISCORD_TOKEN` in the process environment, so the environment
-file carries no token and a rotation needs no Overflow-side edit.
+identity's bot token reaches the CLI through the environment file: the job
+exports `OVERFLOW_BACKUP_DISCORD_TOKEN`, or the contents of the file
+`OVERFLOW_BACKUP_DISCORD_TOKEN_FILE` names, as `DISCORD_TOKEN`; with neither
+set it exports nothing and the CLI looks the token up itself.
 
 **Operator setup.** The steps off the host come first (any machine that runs
 the fleet's mailbox CLI — the host does), then the host.
 
-**Off the host.** Generate the age keypair — the private half must not stay
-wherever this runs, so plan its removal before generating:
+**Off the host.** Pick the mailbox identity the job will post as (lowercase
+letters, digits and `_`) and set it in the shell for the commands below; the
+same value goes into `backup.env` on the host:
+
+```bash
+OVERFLOW_BACKUP_DISCORD_IDENTITY="<identity>"
+```
+
+Generate the age keypair — the private half must not stay wherever this
+runs, so plan its removal before generating:
 
 ```bash
 umask 077
@@ -804,7 +813,7 @@ Store the private key once in #credentials, through the mailbox CLI's `creds`
 subcommand — never in the backups channel:
 
 ```bash
-~/.agent-bundle/scripts/discord_mb.py creds overflow add overflow-backup age \
+~/.agent-bundle/scripts/discord_mb.py creds "$OVERFLOW_BACKUP_DISCORD_IDENTITY" add overflow-backup age \
   "$(grep -v '^#' overflow-offhost-age.txt)"
 ```
 
@@ -820,34 +829,40 @@ rm overflow-offhost-age.txt
 
 Still in Discord: create the dedicated backups channel and make it private.
 The CLI creates the channel but cannot set permission overwrites, so
-restricting who may view it — only the `overflow` identity's account and the
+restricting who may view it — only that identity's account and the
 maintainer's own — is the operator's Discord-side step, in the channel's
 settings. The job posts ciphertext and file names there and nothing else,
 ever: never point `OVERFLOW_BACKUP_DISCORD_CHANNEL` at a chat channel.
 
 ```bash
-~/.agent-bundle/scripts/discord_mb.py channels overflow create overflow-backups \
+~/.agent-bundle/scripts/discord_mb.py channels "$OVERFLOW_BACKUP_DISCORD_IDENTITY" create overflow-backups \
   --topic "Overflow encrypted off-host database backups"
-~/.agent-bundle/scripts/discord_mb.py channels overflow list
+~/.agent-bundle/scripts/discord_mb.py channels "$OVERFLOW_BACKUP_DISCORD_IDENTITY" list
 ```
 
 Copy the numeric channel id from the list output.
 
 **On the host.** Add the off-host entries to `/etc/overflow/backup.env`
 (root:root `0600`, created in (c)). `OVERFLOW_BACKUP_AGE_RECIPIENT` is the
-public key age-keygen printed (`age1...`) and
-`OVERFLOW_BACKUP_DISCORD_CHANNEL` is the numeric channel id:
+public key age-keygen printed (`age1...`),
+`OVERFLOW_BACKUP_DISCORD_CHANNEL` is the numeric channel id,
+`OVERFLOW_BACKUP_DISCORD_IDENTITY` is the identity chosen above, and exactly
+one of `OVERFLOW_BACKUP_DISCORD_TOKEN` (the identity's bot token itself) or
+`OVERFLOW_BACKUP_DISCORD_TOKEN_FILE` (a file holding it) carries the token:
 
 ```bash
 OVERFLOW_BACKUP_AGE_RECIPIENT="age1..."
 OVERFLOW_BACKUP_DISCORD_CHANNEL="<numeric channel id>"
+OVERFLOW_BACKUP_DISCORD_IDENTITY="<identity>"
+OVERFLOW_BACKUP_DISCORD_TOKEN_FILE="<path to the identity's token file>"
 ```
 
-No `DISCORD_TOKEN` line: the token is not configured in the file at all. The
-unit loads `~/.agent-bundle/discord/overflow.token` as a systemd credential at
-every start and the job bridges it to `DISCORD_TOKEN` in the process
-environment, so rotating the `overflow` token edits only that canonical file and
-needs no Overflow-side edit — the next unit start picks the new value up.
+The job refuses to run with both token variables set, or with a token file
+it cannot read or that is empty. A token file must be outside `/root`: the
+unit's sandbox mounts `/root` empty, so a path there is unreadable to the
+job. Pointing `OVERFLOW_BACKUP_DISCORD_TOKEN_FILE` at the file the identity's
+token is kept in means a rotation of that file needs no edit here; the next
+unit start reads the new value.
 
 The optional `OVERFLOW_BACKUP_MAX_BYTES` overrides the 9.5 MiB posting
 limit; nothing else in the file changes, and the full backup keeps running
