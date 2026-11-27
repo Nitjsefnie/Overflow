@@ -622,7 +622,9 @@ cp .github/workflows/*.yml .github/workflows-pr/
   });
 
   it("runs the pr suite plan's Node version step on a merge commit: base and head runtimes once each, refusing a non-N.N.N one", async () => {
-    for (const [base, head, versions] of [["24.17.0", "24.22.3", ["24.17.0", "24.22.3"]], ["24.22.3", "24.22.3", ["24.22.3"]], ["^24", "24.22.3", undefined]] as const) {
+    // Each refused base is N.N.N but for one thing: a prefix, a suffix, a missing part, another separator.
+    const refused = ["^24", "v24.17.0", "24.17.0-rc.1", "24.17", "24-17-0"].map((base) => [base, "24.22.3", undefined] as const);
+    for (const [base, head, versions] of [["24.17.0", "24.22.3", ["24.17.0", "24.22.3"]], ["24.22.3", "24.22.3", ["24.22.3"]], ...refused] as const) {
       const { status, values } = await prSuiteRuntimes(base, head);
       expect({ ran: status === 0, values }, `base ${base}, head ${head}`).toEqual({ ran: versions !== undefined, values: versions });
     }
@@ -1640,19 +1642,21 @@ async function readWorkflow(name: string): Promise<Workflow> { return parse(awai
 const scratch = createOwnedTempDirectoryRegistry(join(tmpdir(), "overflow-pr-suite-nodes-"));
 
 // The pr suite test job's runtime axis on a pull_request merge commit (HEAD^1 the base, HEAD^2 the head) whose package.json names
-// `base` and `head` as engines.node: plan's `run:` steps run there as the runner runs a step with no `shell:` (`bash -e`, with
-// RUNNER_TEMP and GITHUB_OUTPUT), and what they wrote rendered through plan's declared outputs into the axis's fromJSON.
+// `base` and `head` as engines.node, the base having moved to its version after the branch point: plan's `run:` steps run there as the
+// runner runs a step with no `shell:` (`bash -e`, RUNNER_TEMP, GITHUB_OUTPUT), and what they wrote rendered through plan's declared outputs into the axis's fromJSON.
 async function prSuiteRuntimes(base: string, head: string): Promise<{ status: number | null; axis?: string; values?: string[] }> {
   const { jobs } = await readWorkflow("pr-suite.yml");
   const root = await scratch.createAsync();
   try {
     const manifest = (node: string) => ({ "package.json": JSON.stringify({ engines: { node } }) });
     git(root, "init", "-qb", "main");
-    await commitFiles(root, manifest(base), "base");
+    await commitFiles(root, manifest("18.0.0"), "branch point");
     git(root, "checkout", "-qb", "head");
     await commitFiles(root, { ...manifest(head), head: "" }, "head");
     git(root, "checkout", "-q", "main");
-    git(root, "merge", "-q", "--no-ff", "head", "-m", "merge");
+    await commitFiles(root, { ...manifest(base), advance: "" }, "base");
+    // Both sides rewrote the one line; the merge commit carries the head's, as the head's own tree does.
+    git(root, "merge", "-q", "--no-ff", "-X", "theirs", "head", "-m", "merge");
     const steps: Record<string, { outputs: Record<string, string> }> = {};
     for (const step of jobs.plan!.steps.filter((planStep) => planStep.run)) {
       const output = join(root, "output");
