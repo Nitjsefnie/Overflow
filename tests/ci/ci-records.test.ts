@@ -122,8 +122,7 @@ print(json.dumps(answer))
 
   it("finds the tested push past both a running record report and a runless commit in that push", () => {
     const result = source(fixture());
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe("run-id=11");
+    expect(result.status, result.stderr).toBe(0); expect(result.stdout.trim()).toBe("run-id=11");
   });
 
   // Issue 1772's source run: plan done, the shard running for two polls, then its success and artifact
@@ -196,8 +195,7 @@ print(json.dumps(answer))
 
   it("refuses a successful run from before a runless code change", () => {
     const result = source(fixture({}, git("rev-parse", code + "^")));
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("run 11 is not a main push over the same code");
+    expect(result.status).not.toBe(0); expect(result.stderr).toContain("run 11 is not a main push over the same code");
   });
 
   it.each([
@@ -219,8 +217,7 @@ print(json.dumps(answer))
   it.each([{ event: "pull_request" }, { head_branch: "other" }, { path: ".github/workflows/pr-suite.yml" }, { head_sha: "0".repeat(40) }, { head_repository: { full_name: "other/fork" } }])(
     "refuses artifacts with mismatched provenance %o", override => {
       const result = source(fixture(override));
-      expect(result.status).not.toBe(0);
-      expect(result.stdout).not.toContain("run-id=");
+      expect(result.status).not.toBe(0); expect(result.stdout).not.toContain("run-id=");
     });
 
   it("counts both sides of a rename into the allowlist, including a newline in the old path", () => {
@@ -285,8 +282,7 @@ describe("main push workflow routing", () => {
   });
 
   it("passes the record source's declared outputs from real steps to inputs of dependent jobs", () => {
-    const name = "record-source";
-    const producer = ci[name]!;
+    const name = "record-source"; const producer = ci[name]!;
     const consumers = Object.values(ci).filter(job => [job.needs].flat().includes(name));
     const reads = consumers.flatMap(job => job.steps.flatMap(step => Object.values(step.with ?? {}))).flatMap(input => typeof input === "string" ? [...input.matchAll(/\bneeds\.([\w-]+)\.outputs\.([\w-]+)/g)] : []);
     const outputs = Object.entries(producer.outputs ?? {});
