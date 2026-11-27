@@ -12,16 +12,12 @@
     3682
   ],
   ".github/workflows/ci-pr.yml": [
-    15668,
-    36056
+    14977,
+    35365
   ],
   ".github/workflows/ci.yml": [
-    7458,
-    14914
-  ],
-  ".github/workflows/claim.yml": [
-    2092,
-    2648
+    7386,
+    14842
   ],
   ".github/workflows/code-scanning.yml": [
     620,
@@ -1092,8 +1088,8 @@
     17897
   ],
   "tests/api/ci-workflows.test.ts": [
-    25435,
-    66265
+    23896,
+    65737
   ],
   "tests/api/instrumentation-fail-closed.test.ts": [
     820,
