@@ -64,15 +64,7 @@ import { parse } from "yaml";
 /** A verify-job step as this suite reads it. `if` and `continue-on-error` are
  *  typed as `unknown` because they are precisely the two fields a mutation
  *  rewrites into a shape this suite must fail on rather than read past. */
-type WorkflowStep = {
-  name?: string;
-  id?: string;
-  run?: string;
-  uses?: string;
-  with?: Record<string, unknown>;
-  if?: unknown;
-  "continue-on-error"?: unknown;
-};
+type WorkflowStep = { name?: string; id?: string; run?: string; uses?: string; with?: Record<string, unknown>; if?: unknown; "continue-on-error"?: unknown; };
 
 /**
  * Everything a GitHub expression operand can hold once evaluated. Objects and
@@ -543,9 +535,7 @@ function contextFor(scenario: Scenario): ActionsContext {
       event,
     },
     inputs: {},
-    steps: {
-      ...(scenario.event === "workflow_run" ? { pr: { outputs: { pr_number: 849, base_sha: BASE_SHA, base_ref: "main", head_sha: MERGE_SHA } } } : {}),
-    },
+    steps: { ...(scenario.event === "workflow_run" ? { pr: { outputs: { pr_number: 849, base_sha: BASE_SHA, base_ref: "main", head_sha: MERGE_SHA } } } : {}) },
     needs: {},
     env: {},
     job: { status: "success" },
@@ -1569,10 +1559,7 @@ for (const scenario of PRT_SCENARIOS) {
       const used = selected().flatMap((step) => (step.uses ? [step.uses] : []));
       expect(used.length).toBeGreaterThan(0);
       for (const uses of used) {
-        expect(
-          PRT_ACTIONS.some((prefix) => uses.startsWith(prefix)),
-          `${uses} is reachable under workflow_run; only ${PRT_ACTIONS.join(", ")} may be`,
-        ).toBe(true);
+        expect(PRT_ACTIONS.some((prefix) => uses.startsWith(prefix)), `${uses} is reachable under workflow_run; only ${PRT_ACTIONS.join(", ")} may be`).toBe(true);
       }
     });
 
