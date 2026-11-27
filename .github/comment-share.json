@@ -36,8 +36,8 @@
     1095
   ],
   ".github/workflows/pr-gates.yml": [
-    12029,
-    21196
+    11328,
+    27627
   ],
   ".github/workflows/pr-suite.yml": [
     5811,
@@ -52,8 +52,8 @@
     1710
   ],
   ".github/workflows/secret-scan.yml": [
-    3932,
-    5375
+    2311,
+    3887
   ],
   "db/migrations/008_moderator_role_changes.sql": [
     433,
@@ -436,8 +436,8 @@
     10949
   ],
   "scripts/secret-scan-baseline.sh": [
-    2781,
-    5495
+    2368,
+    5067
   ],
   "scripts/seed-board-benchmark.ts": [
     5646,
