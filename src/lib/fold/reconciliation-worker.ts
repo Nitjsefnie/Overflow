@@ -152,7 +152,7 @@ export const RECONCILIATION_WORKER_POLL_INTERVAL_MS = 5_000;
  * That reclaim has already replaced the lease token, so the original fold has
  * lost authority over its own queue bookkeeping even though the competing
  * fold was stopped: its completion only consumes its captured sweep, if no
- * newer one arrived, and like its deferral refunds its attempt. Neither
+ * newer one arrived, and, like its deferral, refunds its attempt. Neither
  * mechanism fences writes after session loss; that belongs to issue 210.
  * Different repositories can proceed independently, but a due job behind four
  * occupied slots still waits for
