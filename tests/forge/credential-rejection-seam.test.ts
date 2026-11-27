@@ -90,6 +90,13 @@ describe("sponsor gateway marks a rejected GitLab credential", () => {
     expect(mark).toHaveBeenCalledExactlyOnceWith("identity-1");
   });
 
+  it("marks a rejected credential on the open issue listing", async () => {
+    stubTransport(async () => new Response("denied", { status: 401 }));
+    const mark = vi.fn(async () => {});
+    await expect(gatewayFor(repositoryRow(), mark).listOpenIssueIds!(DIFF_REQUEST[0])).rejects.toBeInstanceOf(ForgeCredentialRejectedError);
+    expect(mark).toHaveBeenCalledExactlyOnceWith("identity-1");
+  });
+
   it("marks the identity and rethrows the typed error on a 401 read", async () => {
     // The planted body stands in for upstream error text; the typed error's
     // fixed sentence must never carry it.
