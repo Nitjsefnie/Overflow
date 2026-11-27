@@ -559,10 +559,10 @@ jobs:
           # Main can carry these findings already (its own push and schedule
           # legs report those), so the base's manifests are audited the same
           # way and each finding is keyed as (GHSA, package@version, path) on
-          # both sides. pnpm audit names ONE path per finding however many
-          # dependents the package has, so the paths are enumerated from
-          # `pnpm why`: a pull request adding a new dependent to a version main
-          # already carries adds a path, and fails here.
+          # both sides: a pull request adding a new dependent to a version main
+          # already carries adds a path, and fails here. pnpm 12.23.0 reports
+          # every path of a finding, but a report path does not say where its
+          # importer id ends, so the paths are enumerated from `pnpm why`.
           echo "auditing the base ${OVERFLOW_BASE_SHA} to tell the findings this pull request introduces from those main already carries"
           cd -- "${workspace}"
           materialize "${OVERFLOW_BASE_SHA}" "${base_manifests}" "base commit's tree"
