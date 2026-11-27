@@ -77,8 +77,7 @@ print(json.dumps(answer))
 
   it("keeps dispatches, other refs, empty diffs and unknown bases on the full path", () => {
     for (const [before, env] of [
-      [size, { GITHUB_EVENT_NAME: "workflow_dispatch" }], [size, { GITHUB_REF: "refs/heads/other" }],
-      [head, {}], ["0".repeat(40), {}], ["", {}],
+      [size, { GITHUB_EVENT_NAME: "workflow_dispatch" }], [size, { GITHUB_REF: "refs/heads/other" }], [head, {}], ["0".repeat(40), {}], ["", {}],
     ] as const) expect(run("classify", before, env).stdout.trim()).toBe("records-only=false");
   });
 
