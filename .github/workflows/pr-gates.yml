@@ -483,9 +483,8 @@ jobs:
               blob=$(manifest_blob_of "${1:?}" "${manifest}" "${3:?}")
               git cat-file blob "${blob}" > "${2}/${manifest}"
             done
-            # The audit request drops an importer name that collides with an
-            # object prototype key, so neither the audit nor the importer
-            # check below would see it. YAML spells that name directly or
+            # An importer name that collides with an object prototype key can
+            # drop out of the audit, so the importer check below would miss it. YAML spells that name directly or
             # through \x, \u and \U escapes, which the text is decoded for,
             # and the name is refused wherever it then sits. An escaped line
             # break, which joins the pieces of a string across lines, is
@@ -614,8 +613,7 @@ jobs:
           audit_here
           node -e '
           const fs = require("node:fs");
-          const http = require("node:http");
-          const { execFile, execFileSync } = require("node:child_process");
+          const { execFileSync } = require("node:child_process");
           // Every name and version this step prints or keys is held to this
           // alphabet: no lockfile byte can carry a newline, a percent sign or
           // a colon (a workflow command) or the path separator into the log.
@@ -632,45 +630,16 @@ jobs:
             console.log("::error::" + message);
             process.exit(1);
           };
-          // The step walks the importers that the pnpm audit request contains
-          // (materialize refuses an importer name that collides with an object
-          // prototype key before that); pnpm why places paths from the root
-          // project alone. The importer set is read from that request, sent
-          // here to a local endpoint, since pnpm parses YAML the step cannot
-          // reproduce by reading the text.
-          const importersOf = (dir) => new Promise((resolve, reject) => {
-            const server = http.createServer((request, response) => {
-              const chunks = [];
-              request.on("data", (chunk) => chunks.push(chunk));
-              request.on("end", () => {
-                response.end(JSON.stringify({ advisories: {}, metadata: { vulnerabilities: {} } }));
-                try {
-                  const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-                  const listed = body && typeof body.dependencies === "object" && body.dependencies && !Array.isArray(body.dependencies)
-                    ? Object.keys(body.dependencies)
-                    : body && typeof body === "object" && !Array.isArray(body) && Object.values(body).every((value) => Array.isArray(value))
-                      ? ["."]
-                      : null;
-                  if (!listed) throw new Error("audit request shape");
-                  resolve(listed);
-                } catch (error) {
-                  reject(error);
-                }
-              });
-            });
-            server.listen(0, "127.0.0.1", () => {
-              const registry = "http://127.0.0.1:" + server.address().port + "/";
-              execFile("pnpm", ["audit", "--json", "--registry", registry], { cwd: dir, maxBuffer: 1 << 26 }, () => {
-                server.close();
-                reject(new Error("pnpm audit sent no request"));
-              });
-            });
-          });
+          // pnpm why places paths from the root project alone. The audit report
+          // names every path of every importer, each starting with its importer,
+          // so a finding that starts anywhere else cannot be placed here.
           const triples = async (dir) => {
             const findings = [];
             for (const advisory of Object.values(JSON.parse(fs.readFileSync(dir + "/audit.json", "utf8")).advisories)) {
               if (advisory.findings.length === 0) throw new Error("an advisory without findings");
               for (const finding of advisory.findings) {
+                if (finding.paths.length === 0) throw new Error("a finding without paths");
+                if (finding.paths.some((path) => path.split(">")[0] !== ".")) refuse("the lockfile in " + label + " names an importer other than the root project, whose paths this step cannot place; refusing");
                 const pkg = advisory.module_name + "@" + finding.version;
                 if (!SAFE.test(pkg)) refuse("a package name or version in " + label + " is outside the npm alphabet; refusing to print or key it");
                 if (!GHSA.test(advisory.github_advisory_id)) refuse("a finding on " + pkg + " in " + label + " carries no github_advisory_id; refusing to key it");
@@ -681,8 +650,6 @@ jobs:
             const paths = new Map(selectors.map((pkg) => [pkg, new Set()]));
             let out = "[]";
             if (selectors.length > 0) {
-              const importers = await importersOf(dir);
-              if (importers.length !== 1 || importers[0] !== ".") refuse("the lockfile in " + label + " names an importer other than the root project, whose paths this step cannot place; refusing");
               try {
                 out = execFileSync("pnpm", ["why", "--json", ...selectors], { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 26 });
               } catch {
