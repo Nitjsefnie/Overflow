@@ -6,7 +6,9 @@ import { listEligibleIssues } from "@/lib/dashboard/eligible-issues";
 import type { DashboardSql } from "@/lib/dashboard/queries";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
+import { unlistedOpenIssues } from "@/lib/fold/unlisted-open-issues";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
+import { GitHubResponseTooLargeError, MAX_SUCCESS_BODY_BYTES } from "@/lib/github/response-text";
 import type { GitHubIssue } from "@/lib/github/types";
 import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
@@ -63,6 +65,21 @@ describe("an issue the forge no longer has", () => {
     expect(await f.fold("WEBHOOK")).toMatchObject({ skipped: false, removed: 0 });
     expect(await f.board()).toEqual([f.cheapest.number]);
     expect(f.issueReads).toEqual([f.cheapest.number]);
+  });
+
+  it("keeps an unlisted issue whose read is discarded for a reason other than not found", async () => {
+    const f = await fixture();
+    await f.fold();
+    f.forget(f.cheapest, async () => { throw new GitHubResponseTooLargeError(MAX_SUCCESS_BODY_BYTES); });
+    expect(await quietly(() => f.fold("WEBHOOK"))).toMatchObject({ skipped: false, removed: 0 });
+    expect(await f.board()).toEqual([f.cheapest.number]);
+  });
+
+  it("asks for no open listing when no cached issue is open", async () => {
+    const listOpenIssueIds = vi.fn(async () => []);
+    const cached = new Map([[1, { id: 1, number: 1, state: "CLOSED" as const }]]);
+    expect(await unlistedOpenIssues({ listOpenIssueIds }, { owner: "octo", name: "repo" }, cached)).toEqual([]);
+    expect(listOpenIssueIds).not.toHaveBeenCalled();
   });
 
   it("fails the run and keeps the issue when its read fails transiently", async () => {
