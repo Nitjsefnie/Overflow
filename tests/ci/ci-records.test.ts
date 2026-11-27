@@ -115,9 +115,10 @@ print(json.dumps(answer))
       [jobsOf(11)]: [poll(running), poll(running), poll(passed, job("report", null, "queued")), poll(passed, job("report", "success"), job("verify", null, "in_progress"))] });
     expect([result.stdout, result.sleeps]).toEqual(["run-id=11\n", [20, 20]]);
     for (const conclusion of ["failure", "cancelled"]) expect(source(fixture({ conclusion })).stdout, `the source run ended ${conclusion} after its shards`).toBe("run-id=11\n");
-    const failed = source({ ...fixture({ status: "in_progress", conclusion: null }), [jobsOf(11)]: { jobs: [job("plan", "success"), job("test (1/1)", "failure"), job("report", null, "queued")] },
-      [actions + "runs/11"]: { status: "completed", conclusion: "failure", run_attempt: 1 } });
-    expect([failed.stdout, failed.sleeps]).toEqual(["run-id=\n", []]);
+    for (const jobs of [[job("plan", "success"), job("test (1/1)", "failure"), job("report", null, "queued")], [job("plan", "failure")]]) {
+      const failed = source({ ...fixture({ status: "in_progress", conclusion: null }), [jobsOf(11)]: { jobs }, [actions + "runs/11"]: { status: "completed", conclusion: "failure", run_attempt: 1 } });
+      expect([failed.stdout, failed.sleeps], jobs.map(item => `${item.name} ${item.conclusion}`).join(", ")).toEqual(["run-id=\n", []]);
+    }
   });
 
   // Rerun all jobs lists attempt 1's jobs until attempt 2 creates its own; a failed-jobs rerun relists attempt 1's
