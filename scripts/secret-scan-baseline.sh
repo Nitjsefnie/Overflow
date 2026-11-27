@@ -38,12 +38,13 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 REPO_ROOT="$(dirname -- "$SCRIPT_DIR")"
 readonly REPO_ROOT
-readonly BASELINE_PATH="$REPO_ROOT/.gitleaksignore"
+readonly BASELINE="HEAD:.gitleaksignore"
 
-if [ ! -f "$BASELINE_PATH" ]; then
-  echo "secret-scan-baseline: the committed ignore list is missing: $BASELINE_PATH" >&2
+if ! BASELINE_TEXT="$(git -C "$REPO_ROOT" cat-file blob "$BASELINE")"; then
+  echo "secret-scan-baseline: the committed ignore list is missing: $BASELINE in $REPO_ROOT" >&2
   exit 1
 fi
+readonly BASELINE_TEXT
 
 if [ "$(git -C "$REPO_ROOT" rev-parse --is-shallow-repository)" = "true" ]; then
   echo "secret-scan-baseline: $REPO_ROOT is a SHALLOW checkout, so it cannot tell a commit this" >&2
@@ -93,12 +94,12 @@ while IFS= read -r line || [ -n "$line" ]; do
   printf 'secret-scan-baseline: %s names commit %s, which is in the object store but is not an ancestor of %s.\n' \
     "$fingerprint" "$commit" "$REACHABILITY_ROOTS" >&2
   orphans=$((orphans + 1))
-done < "$BASELINE_PATH"
+done <<< "$BASELINE_TEXT"
 
 # An ignore list this read nothing from has certified nothing: `0 checked, all
 # reachable` is the shape of the vacuous pass.
 if [ "$checked" -eq 0 ]; then
-  echo "secret-scan-baseline: checked nothing: $BASELINE_PATH yielded no entries naming a commit," >&2
+  echo "secret-scan-baseline: checked nothing: $BASELINE yielded no entries naming a commit," >&2
   echo "secret-scan-baseline: so no verdict about reachability means anything." >&2
   exit 1
 fi
