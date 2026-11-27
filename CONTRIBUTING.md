@@ -215,7 +215,7 @@ coverage and gates it against the floor in `.github/ci-thresholds.json`.
 On a push changing only `.github/{size-baseline,comment-share,ci-thresholds,test-times}.json`,
 CI skips the matrix and gives `report` the successful main push run that tested the same code,
 walking past earlier pushes that have no ci run and retrying a failed GitHub API call up to four
-times. When the newest main push run over the same code failed, was cancelled or left an
+times. When the newest code push's run over the same code failed, was cancelled or left an
 incomplete shard or artifact set, the push runs its own matrix instead.
 The report checks the pushed tip against its own previous thresholds and can commit records
 deferred when main moved during the original run. CodeQL skips these pushes. The required
