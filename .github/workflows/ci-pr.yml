@@ -406,9 +406,9 @@ jobs:
           
           # Measured on the pinned pnpm: workspace auditConfig and auditLevel bind;
           # pnpm_config_registry outranks .npmrc registry= and workspace registries.
-          # .npmrc strict-ssl=false plus cafile= reaches a local TLS endpoint;
-          # pnpm_config_strict_ssl=true fails closed; pnpm_config_cafile does not.
-          # .npmrc audit-level, proxy and https-proxy are unread. Both files are
+          # .npmrc strict-ssl=false or cafile= reaches a TLS server;
+          # pnpm_config_strict_ssl=true beats only the first, pnpm_config_cafile neither.
+          # .npmrc proxy and https-proxy are read, audit-level is not. Both files are
           # compared with package.json; absent equals no audited keys; a changed
           # unparseable file is a refusal.
           

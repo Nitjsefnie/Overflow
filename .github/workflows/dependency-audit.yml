@@ -67,17 +67,17 @@ jobs:
       # holds the audit at the registry this repository chose even if a future
       # edit to main's `.npmrc` names another one.
       pnpm_config_registry: "https://registry.npmjs.org/"
-      # The transport half. Measured on pnpm 12.23.0 against a local TLS
-      # endpoint: `.npmrc` `proxy=` and `https-proxy=` are not read; workspace
-      # `proxy`/`httpsProxy` are, a non-empty `pnpm_config_proxy` outranks them,
-      # and an empty one does not, so no proxy pin exists. `.npmrc`
-      # `strict-ssl=false` plus `cafile=` of that endpoint's certificate makes
-      # the audit POST reach the intercepting server. `pnpm_config_strict_ssl`
-      # at `true` outranks that and the connection fails closed.
-      # `pnpm_config_cafile` does not outrank `.npmrc` `cafile=` (`pnpm config
-      # get cafile` still reports the file, and the POST still arrives), so
-      # there is no env pin for the trust store — the file comparison below is
-      # the control for `cafile`.
+      # The transport half. Measured on pnpm 12.23.0 against local endpoints:
+      # `.npmrc` `proxy=` and `https-proxy=` are read and route the audit
+      # request, as workspace `proxy`/`httpsProxy` are; a non-empty
+      # `pnpm_config_proxy` or `pnpm_config_https_proxy` outranks its key, an
+      # empty one does not. `.npmrc` `strict-ssl=false` or a `cafile=` of the
+      # server's issuer lets the audit POST reach an intercepting server, via
+      # `https-proxy=` too; `pnpm_config_strict_ssl` at `true` outranks only
+      # `strict-ssl=false`. `pnpm_config_cafile` does not outrank `.npmrc`
+      # `cafile=` (`pnpm config get cafile` still reports the file, and the POST
+      # still arrives), so there is no env pin for the trust store — the file
+      # comparison below is the control for the proxy keys and `cafile`.
       pnpm_config_strict_ssl: "true"
       # low is pnpm's lowest reportable severity; a higher bar hides findings.
       # Measured on pnpm 12.23.0: `.npmrc` `audit-level` is not read, workspace
@@ -109,9 +109,9 @@ jobs:
           
           # Measured on the pinned pnpm: workspace auditConfig and auditLevel bind;
           # pnpm_config_registry outranks .npmrc registry= and workspace registries.
-          # .npmrc strict-ssl=false plus cafile= reaches a local TLS endpoint;
-          # pnpm_config_strict_ssl=true fails closed; pnpm_config_cafile does not.
-          # .npmrc audit-level, proxy and https-proxy are unread. Both files are
+          # .npmrc strict-ssl=false or cafile= reaches a TLS server;
+          # pnpm_config_strict_ssl=true beats only the first, pnpm_config_cafile neither.
+          # .npmrc proxy and https-proxy are read, audit-level is not. Both files are
           # compared with package.json; absent equals no audited keys; a changed
           # unparseable file is a refusal.
           
