@@ -622,9 +622,9 @@ cp .github/workflows/*.yml .github/workflows-pr/
   });
 
   it("runs the pr suite plan's Node version step on a merge commit: base and head runtimes once each, refusing a non-N.N.N one", async () => {
-    // Each refused base is N.N.N but for one thing: a prefix, a suffix, a missing part, another separator.
-    const refused = ["^24", "v24.17.0", "24.17.0-rc.1", "24.17", "24-17-0"].map((base) => [base, "24.22.3", undefined] as const);
-    for (const [base, head, versions] of [["24.17.0", "24.22.3", ["24.17.0", "24.22.3"]], ["24.22.3", "24.22.3", ["24.22.3"]], ...refused] as const) {
+    // Each refused base is N.N.N but for one thing: a prefix, a suffix, a missing, fourth or empty part, another separator.
+    const refused = ["^24", "v24.17.0", "24.17.0-rc.1", "24.17", "24.17.0.1", ".17.0", "24..0", "24.17.", "24-17-0"].map((base) => [base, "24.22.3", undefined] as const);
+    for (const [base, head, versions] of [["24.17.0", "24.22.3", ["24.17.0", "24.22.3"]], ["24.22.3", "24.22.3", ["24.22.3"]], ["24.22.3", "18.0.0", ["24.22.3"]], ...refused] as const) {
       const { status, values } = await prSuiteRuntimes(base, head);
       expect({ ran: status === 0, values }, `base ${base}, head ${head}`).toEqual({ ran: versions !== undefined, values: versions });
     }
@@ -1655,7 +1655,7 @@ async function prSuiteRuntimes(base: string, head: string): Promise<{ status: nu
     await commitFiles(root, { ...manifest(head), head: "" }, "head");
     git(root, "checkout", "-q", "main");
     await commitFiles(root, { ...manifest(base), advance: "" }, "base");
-    // Both sides rewrote the one line; the merge commit carries the head's, as the head's own tree does.
+    // Where both sides rewrote the one line the merge commit carries the head's; a head still at the branch point's takes the base's.
     git(root, "merge", "-q", "--no-ff", "-X", "theirs", "head", "-m", "merge");
     const steps: Record<string, { outputs: Record<string, string> }> = {};
     for (const step of jobs.plan!.steps.filter((planStep) => planStep.run)) {
@@ -1668,7 +1668,7 @@ async function prSuiteRuntimes(base: string, head: string): Promise<{ status: nu
     }
     const outputs = Object.fromEntries(Object.entries(jobs.plan!.outputs ?? {}).map(([name, value]) => [name, renderExpressions(value, { steps })]));
     const axes = Object.entries(jobs.test!.strategy!.matrix).flatMap(([axis, source]) => {
-      const inner = /^\$\{\{\s*fromJSON\((.*)\)\s*\}\}$/i.exec(String(source))?.[1];
+      const inner = /^\$\{\{\s*fromJSON\s*\((.*)\)\s*\}\}$/i.exec(String(source))?.[1];
       return inner === undefined ? [] : [{ axis, values: JSON.parse(String(evaluateExpression(inner, { needs: { plan: { outputs } } })) || "null") as string[] }];
     });
     expect(axes, "pr-suite.yml jobs.test: one matrix axis is a whole fromJSON(needs.plan.outputs.<name>)").toHaveLength(1);
