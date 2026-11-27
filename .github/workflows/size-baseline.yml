@@ -27,13 +27,13 @@ jobs:
         uses: Nitjsefnie-Actions/size-ratchet@84009b67a653bd057115a0318b61da7b937d810a # v4.0.3
         with:
           ceilings: ''
-          # Test fixtures need more room. Keep migrations small.
+          # Allow room for fold/store logic, deploy scripts and test fixtures; keep migrations small.
           overrides: |
             src/: 800
             tests/: 2500
             scripts/: 800
             db/migrations/: 400
-          # CI, dependency records and Compose are outside source ceilings.
+          # CI and Compose declare orchestration; pnpm files describe the dependency graph. Neither measures source size.
           exclude: |
             .github/
             docker-compose.yml

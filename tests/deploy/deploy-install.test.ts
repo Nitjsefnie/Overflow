@@ -3,7 +3,7 @@ import MarkdownIt from "markdown-it";
 import { expect, it } from "vitest";
 
 const canonicalInstall = "npm_config_package_import_method=copy pnpm install --frozen-lockfile";
-const otherPnpmShapes = [
+const otherShellShapes = [
   /^pnpm (?:--version|db:migrate|build|test|lint|typecheck)$/,
   /^OVERFLOW_NEXT_DIST_DIR="\$release" pnpm build$/,
   /^pnpm release:switch \/srv\/overflow "\$(?:release|previous_release)" --expect-current (?:absent|"\$expected_serving")$/,
@@ -11,6 +11,14 @@ const otherPnpmShapes = [
   // The package-manager version is the deploy script's business
   // (fleet-rules, "Merging and CI"): an exact pnpm release, nothing else.
   /^corepack prepare pnpm@\d+\.\d+\.\d+ --activate$/,
+  /^curl -fsSLO https:\/\/nodejs\.org\/dist\/v(\d+\.\d+\.\d+)\/node-v\1-linux-x64\.tar\.xz$/,
+  /^curl -fsSLO https:\/\/nodejs\.org\/dist\/v\d+\.\d+\.\d+\/SHASUMS256\.txt$/,
+  /^grep node-v\d+\.\d+\.\d+-linux-x64\.tar\.xz SHASUMS256\.txt \| sha256sum --check$/,
+  /^tar -xJf node-v\d+\.\d+\.\d+-linux-x64\.tar\.xz -C \/usr\/local\/lib\/nodejs$/,
+  /^mv \/usr\/local\/lib\/nodejs\/node-v(\d+\.\d+\.\d+)-linux-x64 \/usr\/local\/lib\/nodejs\/node-v\1$/,
+  /^ln -sfn \/usr\/local\/lib\/nodejs\/node-v\d+\.\d+\.\d+\/bin\/node \/usr\/local\/bin\/node$/,
+  /^ln -sfn \/usr\/local\/lib\/nodejs\/node-v\d+\.\d+\.\d+\/bin\/corepack \/usr\/local\/sbin\/corepack$/,
+  /^for path in \/root\/overflow\.service\.pre-hardening \/root\/overflow \/root\/\.nvm\/versions\/node\/v\d+\.\d+\.\d+\/bin\/pnpm ; do$/,
 ];
 
 // This is a closed vocabulary, not a shell interpreter. Every logical shell
@@ -22,15 +30,8 @@ const otherShellLines = new Set([
   "groupadd --system overflow",
   "useradd --system --gid overflow --home-dir /srv/overflow   --shell /usr/sbin/nologin --no-create-home overflow",
   "cd /tmp",
-  "curl -fsSLO https://nodejs.org/dist/v24.22.3/node-v24.22.3-linux-x64.tar.xz",
-  "curl -fsSLO https://nodejs.org/dist/v24.22.3/SHASUMS256.txt",
-  "grep node-v24.22.3-linux-x64.tar.xz SHASUMS256.txt | sha256sum --check",
   "mkdir -p /usr/local/lib/nodejs",
-  "tar -xJf node-v24.22.3-linux-x64.tar.xz -C /usr/local/lib/nodejs",
-  "mv /usr/local/lib/nodejs/node-v24.22.3-linux-x64 /usr/local/lib/nodejs/node-v24.22.3",
-  "ln -sfn /usr/local/lib/nodejs/node-v24.22.3/bin/node /usr/local/bin/node",
   "/usr/local/bin/node --version",
-  "ln -sfn /usr/local/lib/nodejs/node-v24.22.3/bin/corepack /usr/local/sbin/corepack",
   "corepack enable --install-directory /usr/local/sbin",
   "install -d -o root -g root -m 0700 /etc/overflow",
   "[ -e /etc/overflow/overflow.env ]   || install -o root -g root -m 0600 /dev/null /etc/overflow/overflow.env",
@@ -74,7 +75,6 @@ const otherShellLines = new Set([
   "ps -o user=,pid=,args= -p \"$(systemctl show overflow.service -p MainPID --value)\"",
   "journalctl -u overflow.service -n 100 --no-pager",
   "missing=0",
-  "for path in /root/overflow.service.pre-hardening /root/overflow             /root/.nvm/versions/node/v24.17.0/bin/pnpm; do",
   "if [ -e \"$path\" ]; then",
   "echo \"present: $path\"",
   "else",
@@ -485,7 +485,7 @@ function validateBlock(info: string, body: string): number {
       } else if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) commandPosition = false;
     }
     if (line === canonicalInstall) installs++;
-    else if (!otherShellLines.has(line) && !otherPnpmShapes.some((shape) => shape.test(line))
+    else if (!otherShellLines.has(line) && !otherShellShapes.some((shape) => shape.test(line))
       && !/^install -d \/[A-Za-z0-9_./-]+$/.test(line)) {
       throw new Error(`Unsupported ${mentionsPnpm(line) ? "pnpm" : "shell"} shape in ${info}: ${source}`);
     }

@@ -30,6 +30,7 @@ type Workflow = {
     needs?: string | string[];
     outputs?: Record<string, string>;
     permissions?: Record<string, string>;
+    strategy?: { matrix: Record<string, unknown> };
     services?: Record<string, { image?: string; options?: string }>;
     env?: Record<string, string>;
     steps: Array<{
@@ -44,14 +45,7 @@ type Workflow = {
   }>;
 };
 
-// What this file asserts is derived structure, never a dependency value: the
-// workflows' triggers, permissions, step identities, behavioural commands, and
-// the cross-file agreements (one revision per action family across the
-// workflow files and both actionlint legs' toolchain env). A legitimate
-// dependency bump moves the tree and these follow it
-// (fleet-rules, "Merging and CI"); which revision is the RIGHT one is zizmor's
-// and Dependabot's to hold — no network fetch happens here. Read a green run
-// as "structure intact", never as "this pin is the right fork".
+// Compare dependency references across files so coordinated upgrades still pass.
 
 describe("GitHub Actions release gates", () => {
   it("carries the shared action's reference block: condition, queued concurrency, permission scope and claim policy", async () => {
@@ -468,19 +462,11 @@ fi
   it("the two CI postgres services read one Dockerfile", async () => {
     const ci = await readWorkflow("ci.yml");
     const prSuite = await readWorkflow("pr-suite.yml");
-    const image = "${{ needs.postgres-image.outputs.image }}";
-    expect(
-      ci.jobs.verify!.services?.postgres?.image,
-      "ci.yml's verify service image must be resolved from the postgres-image job's output",
-    ).toBe(image);
-    expect(
-      prSuite.jobs.suite!.services?.postgres?.image,
-      "pr-suite.yml's suite service image must be resolved from the postgres-image job's output",
-    ).toBe(image);
     for (const [file, workflow, consumer] of [
       ["ci.yml", ci, ci.jobs.verify!],
       ["pr-suite.yml", prSuite, prSuite.jobs.suite!],
     ] as const) {
+      expect(consumer.services?.postgres?.image, file).toBe("${{ needs.postgres-image.outputs.image }}");
       const producer = workflow.jobs["postgres-image"];
       expect(producer, `${file} must carry the postgres-image job`).toBeDefined();
       expect(
@@ -492,11 +478,7 @@ fi
         `${file}'s consuming job must declare postgres-image in needs`,
       ).toContain("postgres-image");
     }
-    // Neither source holds a digest-literal image: the reference is
-    // resolved at run time from the Dockerfile the postgres-image job reads.
-    // The Dockerfile's own pin — which tag and which digest — is asserted by
-    // no test here: which pin is right is the Dependabot /ci/ docker lane's
-    // judgment, and this file reads the path, never the pin's value.
+    // Also reject a second service with a literal postgres image.
     for (const file of ["ci.yml", "pr-suite.yml"]) {
       const source = await readFile(resolve(".github/workflows", file), "utf8");
       expect(source, `${file} must not carry a literal postgres service image`).not.toMatch(
@@ -647,17 +629,36 @@ cp .github/workflows/*.yml .github/workflows-pr/
     }
   });
 
+  it("uses the package Node version for setup and coverage, and labels each PR matrix leg with its runtime", async () => {
+    const { engines }: { engines: { node: string } } = JSON.parse(await readFile(resolve("package.json"), "utf8"));
+    expect(engines.node).toMatch(/^\d+\.\d+\.\d+$/);
+    for (const file of await workflowFiles()) {
+      for (const [jobName, job] of Object.entries((await readWorkflow(file)).jobs)) {
+        const location = `${file} jobs.${jobName}`;
+        let version = engines.node;
+        // On an upgrade this job also measures the base runtime for the relay on main.
+        if (file === "pr-suite.yml" && jobName === "test") {
+          const runtimeAxes = Object.entries(job.strategy!.matrix).filter(([, source]) =>
+            source === "${{ fromJSON(needs.plan.outputs.nodes) }}");
+          expect(runtimeAxes, location).toHaveLength(1);
+          version = "${{ matrix." + runtimeAxes[0]![0] + " }}";
+          expect(job.steps.filter((s) => s.uses?.startsWith("actions/setup-node@")), location).toHaveLength(1);
+          expect(job.steps.filter((s) => s.uses?.startsWith("Nitjsefnie-Actions/test-ratchet/run@")), location).toHaveLength(1);
+        }
+        for (const step of job.steps) {
+          if (step.uses?.startsWith("actions/setup-node@")) {
+            expect(step.with?.["node-version"], location).toBe(version);
+          }
+          if (step.uses?.startsWith("Nitjsefnie-Actions/test-ratchet/")) {
+            expect(step.with?.cell, `${location} ${step.uses}`).toBe(`ubuntu-latest-node${version}`);
+          }
+        }
+      }
+    }
+  });
+
   it("keeps each action family to one revision across all workflow files", async () => {
-    // The consistency check fleet-rules "Merging and CI" explicitly RETAINS:
-    // "one revision per action across the workflows, derived from the
-    // workflows themselves (pr-gate#77's `_shipped_action_pin`)". Identity
-    // matchers elsewhere fold a revision away, so a bump landing in only one
-    // file — the half-applied edit — is invisible to them; this sweep is what
-    // names it. No revision value is quoted here: both sides come out of the
-    // workflow files, so a coordinated bump moves them together and stays
-    // green.
-    const files = (await readdir(resolve(".github/workflows")))
-      .filter((name) => name.endsWith(".yml"));
+    const files = await workflowFiles();
     const revisionsByFamily = new Map<string, Map<string, string[]>>();
     const usesRef = /^\s*(?:-\s+)?uses:\s*([^\s@]+)@(\S+)/;
     for (const name of files) {
@@ -1071,28 +1072,16 @@ exit 1
       }>;
     };
 
-    // The real `uses:` inventory, read from the shipped workflows, so a group
-    // that silently stopped covering an action dies here instead of splitting
-    // that action's bump into its own pull request.
-    //
-    // Both walks dereference a key every shipped workflow carries, and both are
-    // left to THROW when one is absent — `Object.values(workflow.on)` and
-    // `for (const step of job.steps)` each raise a TypeError. That is a
-    // deliberate choice, matching the job-level `uses:` case this file already
-    // crashes on: a loud failure forces a maintainer to look, where a silent
-    // `?? {}` would shrink the inventory or the cron set and let the gate pass
-    // on less coverage than it claims to have read.
-    const workflowDirectory = resolve(".github/workflows");
-    const workflowFiles = (await readdir(workflowDirectory)).filter((file) =>
-      /\.ya?ml$/.test(file));
-    expect(workflowFiles.length).toBeGreaterThan(0);
+    // Read every shipped job and trigger. Missing keys must fail the inventory.
+    const files = await workflowFiles();
+    expect(files.length).toBeGreaterThan(0);
     const actionNames = new Set<string>();
     // The weekday each weekday-pinned workflow in this repository fires on,
     // read from the workflows themselves rather than transcribed, so the
     // dependabot lanes' collision check cannot drift from the real crons.
     const cronDays = new Set<string>();
-    for (const file of workflowFiles) {
-      const workflow = parse(await readFile(resolve(workflowDirectory, file), "utf8")) as Workflow;
+    for (const file of files) {
+      const workflow = await readWorkflow(file);
       for (const job of Object.values(workflow.jobs)) {
         for (const step of job.steps) {
           // A local action (`./path`) is not in the dependency graph dependabot
@@ -1637,6 +1626,10 @@ exit 1
     ).toEqual([]);
   });
 });
+
+async function workflowFiles() {
+  return (await readdir(resolve(".github/workflows"))).filter((file) => /\.ya?ml$/.test(file));
+}
 
 async function readWorkflow(name: string): Promise<Workflow> { return parse(await readFile(resolve(".github/workflows", name), "utf8")) as Workflow; }
 
