@@ -448,8 +448,6 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
     ["passes a cycle mark whose name an earlier sibling shares", { [H]: audit([G1, X]), [B]: audit([G1, X]), [headWhy(X)]: why(SIBLING), [baseWhy(X)]: why(SIBLING) }, 0, [pre(G1)], ["::error::"]],
     ["passes a cycle mark that names its node by version as well as name", { [H]: audit([G1, X]), [B]: audit([G1, X]), [headWhy(X)]: why(TWO_A), [baseWhy(X)]: why(TWO_A) }, 0, [pre(G1)], ["::error::"]],
     // pnpm why places paths from the root project alone, while the audit report names every lockfile importer's paths.
-    ["fails a second lockfile importer adding an edge onto a version the base already carries", { [H]: audit([G1, X], [G1, X, "packages__x>x"]), [B]: audit([G1, X]) }, 1, ["::error::the lockfile in the merge tree names an importer other than the root project, whose paths this step cannot place; refusing"], ["::warning::"]],
-    ["fails closed on a base lockfile whose one importer is not the root", { [H]: audit([G1, X]), [B]: audit([G1, X, "sub>x"]), [headWhy(X)]: why(node(X, IMPORTER)) }, 1, ["::error::the lockfile in the base names an importer other than the root project"]],
     ["fails closed past the cap counted across a directory's roots", { [H]: audit([G1, X], [G1, "y@1.0.0"]), [B]: audit(), [headWhy(X, "y@1.0.0")]: why(lattice(15), lattice(15, "y@1.0.0")) },
       1, ["::error::the paths in the merge tree need more than 100000 steps to enumerate; refusing"]],
     ["refuses a cycle mark naming no node above it", { [H]: audit([G1, X]), [B]: audit(), [headWhy(X)]: why(node(X, node("a@1.0.0", IMPORTER, marked("q@1.0.0", "circular")))) }, 1, [UNPARSEABLE]],
@@ -476,6 +474,36 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
     expect(outcome.invocations).toEqual(served(calls));
     for (const text of present) expect(outcome.stdout + outcome.stderr).toContain(text);
     for (const text of absent) expect(outcome.stdout + outcome.stderr).not.toContain(text);
+  });
+
+  const REFUSED = (side: string): string => `::error::the lockfile in ${side} names an importer other than the root project, whose paths this step cannot place; refusing`;
+  const locked = (...lines: string[]): string => `${BASE_LOCKFILE}${lines.map((line) => `${line}\n`).join("")}`;
+  // pnpm why places paths from the root project alone, so a side with findings must lock the root importer and no other, spelled as pnpm writes it.
+  const BOTH = audit([G1, X, "packages__x>x"]).map((outcome) => ({ ...outcome, stdout: outcome.stdout.replace('"packages__x>x"', '"packages__x>x",".>x"') }));
+  const OTHERS: Array<[string, string, Outcome[]?]> = [["a second importer sharing the root's finding", locked("  packages/x: {}"), BOTH], ["an importer whose id starts with a dot", locked("  .foo: {}"), audit([G1, X, ".foo>x"])],
+    ["an importer whose paths read as the root's", locked("  .>evil: {}"), audit([G1, X, ".>evil>x"])], ["a quoted importer", locked("  'sub': {}")], ["an explicit importer key", locked("  ? sub", "  : {}")], ["a quoted importers key", locked('"importers":', "  sub: {}")],
+    ["a flow value left open over a column-zero line", locked("    a: {", "b: 1}", "  sub: {}")], ["a quoted value left open", locked('    a: "', '  sub: {}"')], ["an importer behind a lone carriage return", locked("    a: 1\r  sub: {}")], ["an importer behind a line separator", locked("    a: 1\u2028  sub: {}")],
+    ["an indented second document", locked("---", "  importers:", "    sub: {}")], ["a second document naming another importer", locked("---", "importers:", "", "  sub: {}")], ["no importers at all", "lockfileVersion: '9.0'\n"], ["importers written inline", "importers: {.: {}, sub: {}}\n"]];
+  it.each(OTHERS)("refuses findings in a merge tree whose lockfile holds %s", async (_name, lockfile, headAudit = audit([G1, X])) => {
+    const outcome = await runStep(await fixture({ "package.json": BASE_PACKAGE, "pnpm-lock.yaml": BASE_LOCKFILE }, { "pnpm-lock.yaml": lockfile }), { [H]: headAudit, [B]: audit([G1, X]), [headWhy(X)]: why(node(X, IMPORTER)), [baseWhy(X)]: why(node(X, IMPORTER)) });
+    expect(outcome.status).toBe(1);
+    expect(outcome.stdout).toContain(REFUSED("the merge tree"));
+    expect(outcome.stdout).not.toContain("::warning::");
+  });
+
+  it("refuses findings on a base whose lockfile names another importer", async () => {
+    const fx = await fixture({ "package.json": BASE_PACKAGE, "pnpm-lock.yaml": locked("  sub: {}") }, { "pnpm-lock.yaml": BASE_LOCKFILE });
+    const outcome = await runStep(fx, { [H]: audit([G1, X]), [B]: audit([G1, X]), [headWhy(X)]: why(node(X, IMPORTER)) });
+    expect(outcome.status).toBe(1);
+    expect(outcome.stdout).toContain(REFUSED("the base"));
+  });
+
+  it("reads the lockfile this repository commits as naming the root alone", async () => {
+    const committed = readFileSync(resolve("pnpm-lock.yaml"), "utf8");
+    const calls = { [H]: audit([G1, X]), [B]: audit([G1, X]), [headWhy(X)]: why(node(X, IMPORTER)), [baseWhy(X)]: why(node(X, IMPORTER)) };
+    const outcome = await runStep(await fixture({ "package.json": BASE_PACKAGE, "pnpm-lock.yaml": committed }, { "README.md": "docs only\n" }), calls);
+    expect(outcome.status).toBe(0);
+    expect(outcome.stdout).toContain(pre(G1));
   });
 
   it("passes a no-manifest pull request on the base's unchanged bytes", async () => {
