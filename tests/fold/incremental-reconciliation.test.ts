@@ -81,8 +81,7 @@ describe("incremental reconciliation", () => {
     // The rows stop holding body text; the evidence keeps it, so the
     // sanitized values are still asserted below against the evidence.
     expect(issueRow).toMatchObject({ title: "Issue\uFFFDtitle", body: null });
-    expect(prRow).toMatchObject({ title: "PR\uFFFDtitle", body: null,
-      proof_sha256: createHash("sha256").update("diff\uFFFDbody").digest("hex") });
+    expect(prRow).toMatchObject({ title: "PR\uFFFDtitle", body: null, proof_sha256: createHash("sha256").update("diff\uFFFDbody").digest("hex") });
     const [cachedIssueFact] = await sql<{ payload: { body?: string; comments: Array<{ body: string }>; closingPullRequests: Array<Record<string, unknown>> } }[]>`
       select payload from repository_reconciliation_evidence_facts where repository_id = ${f.id} and kind = 'issue' and subject_key = ${String(issue.id)}`;
     const [cachedPrFact] = await sql<{ payload: { id: number; rawDiff: string } }[]>`
@@ -588,22 +587,16 @@ describe("incremental reconciliation", () => {
     const f = await fixture();
     await f.dirty("ISSUE", f.issues[0]!);
     const [subject] = await f.store.getDirtyReconciliationSubjects(f.id);
-    await f.store.discardDirtyReconciliationSubject({
-      repositoryId: f.id, kind: subject!.kind, githubSubjectId: subject!.id, generation: subject!.generation,
-    });
+    await f.store.discardDirtyReconciliationSubject({ repositoryId: f.id, kind: subject!.kind, githubSubjectId: subject!.id, generation: subject!.generation });
     expect(await f.store.getDirtyReconciliationSubjects(f.id)).toEqual([]);
     await f.dirty("ISSUE", f.issues[0]!);
     const [fresh] = await f.store.getDirtyReconciliationSubjects(f.id);
     expect(fresh).toMatchObject({ kind: "ISSUE", id: subject!.id, number: subject!.number });
     expect(BigInt(fresh!.generation)).toBeGreaterThan(BigInt(subject!.generation));
     // A stale generation must not delete a row a webhook re-enqueued meanwhile.
-    await f.store.discardDirtyReconciliationSubject({
-      repositoryId: f.id, kind: subject!.kind, githubSubjectId: subject!.id, generation: subject!.generation,
-    });
+    await f.store.discardDirtyReconciliationSubject({ repositoryId: f.id, kind: subject!.kind, githubSubjectId: subject!.id, generation: subject!.generation });
     expect(await f.store.getDirtyReconciliationSubjects(f.id)).toEqual([fresh]);
-    await f.store.discardDirtyReconciliationSubject({
-      repositoryId: f.id, kind: fresh!.kind, githubSubjectId: fresh!.id, generation: fresh!.generation,
-    });
+    await f.store.discardDirtyReconciliationSubject({ repositoryId: f.id, kind: fresh!.kind, githubSubjectId: fresh!.id, generation: fresh!.generation });
     expect(await f.store.getDirtyReconciliationSubjects(f.id)).toEqual([]);
   });
 });

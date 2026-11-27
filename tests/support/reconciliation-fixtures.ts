@@ -219,10 +219,7 @@ export function pagedReconciliationGateway(
       mergeCommit: merged ? { oid: pullRequest.mergeCommitOid } : null,
       commits: { nodes: [{ commit: { committedDate: pullRequest.finalCommitAt } }] },
       author: { __typename: "User", login: pullRequest.authorLogin, databaseId: pullRequest.authorGitHubUserId },
-      repository: {
-        databaseId: pullRequest.repositoryGitHubId,
-        nameWithOwner: pullRequest.repositoryNameWithOwner,
-      },
+      repository: { databaseId: pullRequest.repositoryGitHubId, nameWithOwner: pullRequest.repositoryNameWithOwner },
     };
   };
   const timelineNodes = (number: number) => {
@@ -235,11 +232,7 @@ export function pagedReconciliationGateway(
         label: { name: event.label },
         assignee: { login: event.assigneeLogin },
       })),
-      ...issue.comments.map((comment) => ({
-        ...comment,
-        __typename: "IssueComment",
-        author: { login: comment.authorLogin, databaseId: comment.authorGitHubUserId },
-      })),
+      ...issue.comments.map((comment) => ({ ...comment, __typename: "IssueComment", author: { login: comment.authorLogin, databaseId: comment.authorGitHubUserId } })),
     ];
   };
   const closingReferences = (number: number) => [
@@ -296,10 +289,7 @@ export function pagedReconciliationGateway(
               },
             };
           });
-          return Response.json({ data: { repository: { issues: {
-            nodes,
-            pageInfo: variables.cursor === null ? { hasNextPage: true, endCursor: "issues-next" } : pageInfo,
-          } } } });
+          return Response.json({ data: { repository: { issues: { nodes, pageInfo: variables.cursor === null ? { hasNextPage: true, endCursor: "issues-next" } : pageInfo } } } });
         }
         if (operation === "RepositoryIssue") {
           const issueNumber = variables.issueNumber as number;
@@ -323,9 +313,7 @@ export function pagedReconciliationGateway(
           ])) } });
         }
         if (operation === "IssueTimeline") {
-          return Response.json({ data: { repository: { issue: { timelineItems: {
-            nodes: timelineNodes(variables.issueNumber), pageInfo,
-          } } } } });
+          return Response.json({ data: { repository: { issue: { timelineItems: { nodes: timelineNodes(variables.issueNumber), pageInfo } } } } });
         }
         if (operation === "ClosingPullRequests") {
           assertClosingPullRequestQuery(query, operation);

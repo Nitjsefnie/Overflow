@@ -685,9 +685,7 @@ describe("reconcileRepository", () => {
 
   it("journals the GitHub refusal without the reflected access token", async () => {
     const token = createHash("sha256").update("reconciliation diagnostic fixture").digest("hex");
-    const upstream = new GitHubApiError(403, true, 60, `Secondary rate limit: ${token}`, {
-      "retry-after": "60", "x-github-request-id": "request-reconcile",
-    }, token);
+    const upstream = new GitHubApiError(403, true, 60, `Secondary rate limit: ${token}`, { "retry-after": "60", "x-github-request-id": "request-reconcile" }, token);
     const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockRejectedValue(upstream) } });
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const budgetLog = vi.spyOn(console, "info").mockImplementation(() => {});
@@ -761,9 +759,7 @@ describe("reconcileRepository", () => {
     repository!.active = active;
     await reconcileRepository({ ...dependencies, now }, "repository");
     if (active) {
-      expect(dependencies.store.materialize).toHaveBeenCalledWith(expect.objectContaining({
-        synchronization: expect.objectContaining({ full: true }),
-      }));
+      expect(dependencies.store.materialize).toHaveBeenCalledWith(expect.objectContaining({ synchronization: expect.objectContaining({ full: true }) }));
       expect(dependencies.store.setReconciliationCooldown).not.toHaveBeenCalled();
     } else {
       expect(dependencies.store.setReconciliationCooldown).toHaveBeenCalledWith("repository", null);
@@ -858,9 +854,7 @@ describe("reconcileRepository", () => {
     expect(fold.pullRequests.map(({ authorGitHubUserId }) => authorGitHubUserId)).toEqual([2001, 2001, 2001]);
     expect(fold.settlements.map(({ creditorGitHubUserId }) => creditorGitHubUserId)).toEqual([2001, 2001, 2001]);
     expect(fold.settlements.map(({ donationCommentId }) => donationCommentId)).toEqual([null, null, null]);
-    expect(fold.issues.map((issue) => issue.updatedAt)).toEqual([
-      "2026-09-01T12:05:00.000Z", "2026-09-01T12:05:00.000Z", "2026-09-01T12:05:00.000Z",
-    ]);
+    expect(fold.issues.map((issue) => issue.updatedAt)).toEqual(["2026-09-01T12:05:00.000Z", "2026-09-01T12:05:00.000Z", "2026-09-01T12:05:00.000Z"]);
     // Keep the baseline digest comparable without the provenance fields.
     const legacyFold = JSON.stringify(fold, (key, value) => (
       key === "authorGitHubUserId" || key === "creditorGitHubUserId"
@@ -1153,11 +1147,7 @@ describe("reconcileRepository", () => {
   });
 
   it.each([false, true])("preserves every author's identity across reconciliation (reverse order: %s)", async (reverse) => {
-    const issues = [
-      reconciliationIssue({ id: 101, number: 1 }),
-      reconciliationIssue({ id: 102, number: 2 }),
-      reconciliationIssue({ id: 103, number: 3 }),
-    ];
+    const issues = [reconciliationIssue({ id: 101, number: 1 }), reconciliationIssue({ id: 102, number: 2 }), reconciliationIssue({ id: 103, number: 3 })];
     const pullRequests = new Map([
       [1, [{ ...reconciliationPullRequest({ id: 201, number: 11 }), authorLogin: "alice" }]],
       [2, [{ ...reconciliationPullRequest({ id: 202, number: 12 }), authorLogin: "bob", authorGitHubUserId: 3001 }]],
@@ -1210,17 +1200,11 @@ describe("reconcileRepository", () => {
     const snapshots = [
       {
         issues: [reconciliationIssue({ id: 101, number: 1 }), reconciliationIssue({ id: 102, number: 2 })],
-        closingPullRequests: new Map([
-          [1, [reconciliationPullRequest({ id: 201, number: 11 })]],
-          [2, [reconciliationPullRequest({ id: 202, number: 12 })]],
-        ]),
+        closingPullRequests: new Map([[1, [reconciliationPullRequest({ id: 201, number: 11 })]], [2, [reconciliationPullRequest({ id: 202, number: 12 })]]]),
       },
       {
         issues: [reconciliationIssue({ id: 102, number: 2 }), reconciliationIssue({ id: 101, number: 1 })],
-        closingPullRequests: new Map([
-          [2, [reconciliationPullRequest({ id: 202, number: 12 })]],
-          [1, [reconciliationPullRequest({ id: 201, number: 11 })]],
-        ]),
+        closingPullRequests: new Map([[2, [reconciliationPullRequest({ id: 202, number: 12 })]], [1, [reconciliationPullRequest({ id: 201, number: 11 })]]]),
       },
     ];
     let snapshotIndex = 0;
@@ -1236,9 +1220,7 @@ describe("reconcileRepository", () => {
           if (snapshot === undefined) {
             throw new Error("No authoritative reconciliation snapshot remained.");
           }
-          return snapshot.issues.map((issue) => ({
-            ...issue, closingPullRequests: snapshot.closingPullRequests.get(issue.number) ?? [],
-          }));
+          return snapshot.issues.map((issue) => ({ ...issue, closingPullRequests: snapshot.closingPullRequests.get(issue.number) ?? [] }));
         }),
       },
     });
@@ -1287,10 +1269,7 @@ describe("reconcileRepository", () => {
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
-      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
-        message: "Unable to reconcile repository.",
-        cause: overCap,
-      });
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ message: "Unable to reconcile repository.", cause: overCap });
       expect(dependencies.store.failRun).toHaveBeenCalledWith("run-1", "Reconciliation failed.", null);
       expect(dependencies.store.discardDirtyReconciliationSubject).not.toHaveBeenCalled();
       expect(dependencies.store.materialize).not.toHaveBeenCalled();
@@ -1337,10 +1316,7 @@ describe("reconcileRepository", () => {
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
-      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({
-        message: "Unable to reconcile repository.",
-        cause: upstream,
-      });
+      await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ message: "Unable to reconcile repository.", cause: upstream });
       expect(dependencies.store.failRun.mock.calls).toEqual([["run-1", "Reconciliation failed.", null]]);
       // The log carries the encoded token; the body stays on the cause object the
       // rethrow attaches, out of the product-readable row.
@@ -1369,9 +1345,7 @@ describe("reconcileRepository", () => {
 
   it("finds the credential rejection nested in the fold error's cause chain", async () => {
     const rejection = new ForgeCredentialRejectedError();
-    const dependencies = reconciliationDependencies({
-      github: { listIssues: vi.fn().mockRejectedValue(new Error("aggregate wrapper", { cause: rejection })) },
-    });
+    const dependencies = reconciliationDependencies({ github: { listIssues: vi.fn().mockRejectedValue(new Error("aggregate wrapper", { cause: rejection })) } });
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
@@ -1552,10 +1526,7 @@ describe("reconcileRepository", () => {
         github: {
           listIssues: vi.fn().mockResolvedValue([{
             ...reconciliationIssue({ id: 101, number: 1 }),
-            closingPullRequests: [
-              reconciliationPullRequest({ id: 201, number: 11 }),
-              reconciliationPullRequest({ id: 202, number: 12 }),
-            ],
+            closingPullRequests: [reconciliationPullRequest({ id: 201, number: 11 }), reconciliationPullRequest({ id: 202, number: 12 })],
           }]),
           getPullRequestReviews: vi.fn(async (_reference: GitHubRepositoryReference, number: number) => {
             if (failingFetch === "reviews" && number === 11) throw notFound;
@@ -1567,9 +1538,7 @@ describe("reconcileRepository", () => {
           }),
         },
       });
-      dependencies.store.getDirtyReconciliationSubjects = async () => [
-        { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" },
-      ];
+      dependencies.store.getDirtyReconciliationSubjects = async () => [{ kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" }];
       const discard = vi.fn().mockResolvedValue(undefined);
       dependencies.store.discardDirtyReconciliationSubject = discard;
       const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1687,10 +1656,7 @@ describe("reconcileRepository", () => {
         github: {
           listIssues: vi.fn().mockResolvedValue([{
             ...reconciliationIssue({ id: 101, number: 1 }),
-            closingPullRequests: [
-              reconciliationPullRequest({ id: 201, number: 11 }),
-              reconciliationPullRequest({ id: 202, number: 12 }),
-            ],
+            closingPullRequests: [reconciliationPullRequest({ id: 201, number: 11 }), reconciliationPullRequest({ id: 202, number: 12 })],
           }]),
           getPullRequestReviews: vi.fn(async (_reference: GitHubRepositoryReference, number: number) => {
             if (failingFetch === "reviews" && number === 11) throw overCap;
@@ -1702,9 +1668,7 @@ describe("reconcileRepository", () => {
           }),
         },
       });
-      dependencies.store.getDirtyReconciliationSubjects = vi.fn(async () => [
-        { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" },
-      ]);
+      dependencies.store.getDirtyReconciliationSubjects = vi.fn(async () => [{ kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" }]);
       const discard = vi.fn().mockResolvedValue(undefined);
       dependencies.store.discardDirtyReconciliationSubject = discard;
       const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1750,10 +1714,7 @@ describe("reconcileRepository", () => {
         github: {
           listIssues: vi.fn().mockResolvedValue([{
             ...reconciliationIssue({ id: 101, number: 1 }),
-            closingPullRequests: [
-              reconciliationPullRequest({ id: 201, number: 11 }),
-              reconciliationPullRequest({ id: 202, number: 12 }),
-            ],
+            closingPullRequests: [reconciliationPullRequest({ id: 201, number: 11 }), reconciliationPullRequest({ id: 202, number: 12 })],
           }]),
           getPullRequestReviews: vi.fn(async (_reference: GitHubRepositoryReference, number: number) => {
             if (failingFetch === "reviews" && number === 11) throw serverError;
@@ -1765,9 +1726,7 @@ describe("reconcileRepository", () => {
           }),
         },
       });
-      dependencies.store.getDirtyReconciliationSubjects = async () => [
-        { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" },
-      ];
+      dependencies.store.getDirtyReconciliationSubjects = async () => [{ kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" }];
       const discard = vi.fn().mockResolvedValue(undefined);
       dependencies.store.discardDirtyReconciliationSubject = discard;
       const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1818,10 +1777,7 @@ describe("reconcileRepository", () => {
       github: {
         listIssues: vi.fn().mockResolvedValue([{
           ...reconciliationIssue({ id: 101, number: 1 }),
-          closingPullRequests: [
-            reconciliationPullRequest({ id: 201, number: 11 }),
-            reconciliationPullRequest({ id: 202, number: 12 }),
-          ],
+          closingPullRequests: [reconciliationPullRequest({ id: 201, number: 11 }), reconciliationPullRequest({ id: 202, number: 12 })],
         }]),
         getPullRequestReviews: vi.fn(async (_reference: GitHubRepositoryReference, number: number) => {
           if (number === 12) throw notFound;
@@ -1832,9 +1788,7 @@ describe("reconcileRepository", () => {
     });
     // Pull request 12 fails while carrying no dirty row at all: nothing is
     // discarded, and pull request 11's healthy row is not touched either.
-    dependencies.store.getDirtyReconciliationSubjects = async () => [
-      { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" },
-    ];
+    dependencies.store.getDirtyReconciliationSubjects = async () => [{ kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" }];
     const discard = vi.fn().mockResolvedValue(undefined);
     dependencies.store.discardDirtyReconciliationSubject = discard;
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1859,19 +1813,9 @@ describe("reconcileRepository", () => {
     // diff cap), and the cached entry keeps flowing instead of being blanked. The final
     // assertion also pins the refresh filter's selection: a dirty cached
     // pull request is in the refresh set.
-    const cachedReview = {
-      id: 3001,
-      state: "CHANGES_REQUESTED" as const,
-      submittedAt: "2026-09-01T09:30:00.000Z",
-      dismissal: null,
-    };
+    const cachedReview = { id: 3001, state: "CHANGES_REQUESTED" as const, submittedAt: "2026-09-01T09:30:00.000Z", dismissal: null };
     const dependencies = reconciliationDependencies({
-      github: {
-        getPullRequestReviews: vi.fn().mockResolvedValue([]),
-        getPullRequestDiff: vi.fn(async () => {
-          throw new GitHubApiError(status);
-        }),
-      },
+      github: { getPullRequestReviews: vi.fn().mockResolvedValue([]), getPullRequestDiff: vi.fn(async () => { throw new GitHubApiError(status); }) },
     });
     dependencies.store.getReconciliationEvidence = async () => ({
       version: 1,
@@ -1882,9 +1826,7 @@ describe("reconcileRepository", () => {
       issues: [],
       pullRequests: [{ id: 201, reviews: [cachedReview], rawDiff: "cached diff" }],
     });
-    dependencies.store.getDirtyReconciliationSubjects = async () => [
-      { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" },
-    ];
+    dependencies.store.getDirtyReconciliationSubjects = async () => [{ kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" }];
     const discard = vi.fn().mockResolvedValue(undefined);
     dependencies.store.discardDirtyReconciliationSubject = discard;
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1912,18 +1854,10 @@ describe("reconcileRepository", () => {
     // decides which closing pull requests are re-read: the dirty cached one
     // is fetched again, the healthy cached one is not, and both keep their
     // cached evidence flowing.
-    const cachedReview = {
-      id: 3001,
-      state: "CHANGES_REQUESTED" as const,
-      submittedAt: "2026-09-01T09:30:00.000Z",
-      dismissal: null,
-    };
+    const cachedReview = { id: 3001, state: "CHANGES_REQUESTED" as const, submittedAt: "2026-09-01T09:30:00.000Z", dismissal: null };
     const referencedIssue = {
       ...reconciliationIssue({ id: 101, number: 1 }),
-      closingPullRequests: [
-        reconciliationPullRequest({ id: 201, number: 11 }),
-        reconciliationPullRequest({ id: 210, number: 21 }),
-      ],
+      closingPullRequests: [reconciliationPullRequest({ id: 201, number: 11 }), reconciliationPullRequest({ id: 210, number: 21 })],
     };
     const dependencies = reconciliationDependencies({
       github: {
@@ -1942,14 +1876,9 @@ describe("reconcileRepository", () => {
       lastFullPassAt: new Date(),
       omittedOversizedFacts: 0,
       issues: [referencedIssue],
-      pullRequests: [
-        { id: 201, reviews: [cachedReview], rawDiff: "cached diff 201" },
-        { id: 210, reviews: [], rawDiff: "cached diff 210" },
-      ],
+      pullRequests: [{ id: 201, reviews: [cachedReview], rawDiff: "cached diff 201" }, { id: 210, reviews: [], rawDiff: "cached diff 210" }],
     });
-    dependencies.store.getDirtyReconciliationSubjects = async () => [
-      { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" },
-    ];
+    dependencies.store.getDirtyReconciliationSubjects = async () => [{ kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" }];
     const discard = vi.fn().mockResolvedValue(undefined);
     dependencies.store.discardDirtyReconciliationSubject = discard;
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1978,12 +1907,7 @@ describe("reconcileRepository", () => {
   it("fails the run without discarding when a merged closing pull request's evidence fetch fails transiently", async () => {
     const transient = new GitHubApiError(403, true, 60);
     const dependencies = reconciliationDependencies({
-      github: {
-        getPullRequestReviews: vi.fn(async (_reference: GitHubRepositoryReference, number: number) => {
-          if (number === 11) throw transient;
-          return [];
-        }),
-      },
+      github: { getPullRequestReviews: vi.fn(async (_reference: GitHubRepositoryReference, number: number) => { if (number === 11) throw transient; return []; }) },
     });
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
@@ -2008,9 +1932,7 @@ describe("reconcileRepository", () => {
         }),
       },
     });
-    dependencies.store.getDirtyReconciliationSubjects = async () => [
-      { kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" },
-    ];
+    dependencies.store.getDirtyReconciliationSubjects = async () => [{ kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "7" }];
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       await expect(reconcileRepository(dependencies, "repository")).rejects.toMatchObject({ message: "Unable to reconcile repository." });
@@ -2025,13 +1947,7 @@ describe("reconcileRepository", () => {
 
   it("fails the run without discarding when a dirty subject fails transiently", async () => {
     const transient = new GitHubApiError(403, true, 60);
-    const dependencies = reconciliationDependencies({
-      github: {
-        getIssue: vi.fn(async () => {
-          throw transient;
-        }),
-      },
-    });
+    const dependencies = reconciliationDependencies({ github: { getIssue: vi.fn(async () => { throw transient; }) } });
     dependencies.store.getReconciliationEvidence = async () => ({
       version: 1,
       formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
@@ -2065,11 +1981,7 @@ describe("reconcileRepository", () => {
       repository!.sponsor.enforcementState = enforcementState;
       (dependencies.store.getRepository as ReturnType<typeof vi.fn>).mockResolvedValue(repository);
 
-      await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({
-        adds: 1,
-        changes: 0,
-        removals: 0,
-      });
+      await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ adds: 1, changes: 0, removals: 0 });
       expect(dependencies.github.listIssues).toHaveBeenCalledWith({ owner: "octo", name: "example" }, expect.objectContaining({ timelineWatchedLabels: new Set(["M"]) }));
       expect(materialize).toHaveBeenCalledOnce();
     },
@@ -2077,11 +1989,7 @@ describe("reconcileRepository", () => {
 
   it("crawls the path the registered numeric identity resolves to, not the stored one", async () => {
     const dependencies = reconciliationDependencies({
-      github: {
-        getRepositoryById: vi.fn().mockResolvedValue(
-          verifiedRepository({ owner: "new-owner", name: "repo", fullName: "new-owner/repo" }),
-        ),
-      },
+      github: { getRepositoryById: vi.fn().mockResolvedValue( verifiedRepository({ owner: "new-owner", name: "repo", fullName: "new-owner/repo" }), ) },
     });
     const repository = await dependencies.store.getRepository("repository");
     repository!.ownerName = "old-owner/repo";
@@ -2094,11 +2002,7 @@ describe("reconcileRepository", () => {
     expect(dependencies.github.getPullRequestReviews).toHaveBeenCalledWith(reference, 11);
     expect(dependencies.github.getPullRequestDiff).toHaveBeenCalledWith(reference, 11);
     expect(dependencies.github.getRepositoryById).toHaveBeenCalledWith(5001);
-    expect(dependencies.store.recordVerifiedRepositoryIdentity).toHaveBeenCalledWith({
-      repositoryId: "repository",
-      ownerName: "new-owner/repo",
-      visibility: "PUBLIC",
-    });
+    expect(dependencies.store.recordVerifiedRepositoryIdentity).toHaveBeenCalledWith({ repositoryId: "repository", ownerName: "new-owner/repo", visibility: "PUBLIC" });
   });
 
   it.each([
@@ -2111,22 +2015,8 @@ describe("reconcileRepository", () => {
 
     const summary = await reconcileRepository({ ...dependencies, now }, "repository");
 
-    expect(summary).toEqual({
-      repositoryId: "repository",
-      runId: "run-1",
-      skipped: false,
-      adds: 0,
-      changes: 0,
-      removals: 0,
-      added: 0,
-      changed: 0,
-      removed: 0,
-    });
-    expect(dependencies.store.markRepositoryUnavailable).toHaveBeenCalledExactlyOnceWith({
-      repositoryId: "repository",
-      reason,
-      at: now(),
-    });
+    expect(summary).toEqual({ repositoryId: "repository", runId: "run-1", skipped: false, adds: 0, changes: 0, removals: 0, added: 0, changed: 0, removed: 0 });
+    expect(dependencies.store.markRepositoryUnavailable).toHaveBeenCalledExactlyOnceWith({ repositoryId: "repository", reason, at: now() });
     expect(dependencies.store.completeRun).toHaveBeenCalledWith("run-1");
     expect(dependencies.store.setReconciliationCooldown).toHaveBeenCalledWith("repository", null);
     expect(dependencies.store.failRun).not.toHaveBeenCalled();
@@ -2139,12 +2029,7 @@ describe("reconcileRepository", () => {
   it("records the verified identity of an unrenamed repository and reconciles it", async () => {
     const dependencies = reconciliationDependencies();
 
-    await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({
-      runId: "run-1",
-      adds: 1,
-      changes: 0,
-      removals: 0,
-    });
+    await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ runId: "run-1", adds: 1, changes: 0, removals: 0 });
 
     expect(dependencies.store.recordVerifiedRepositoryIdentity).toHaveBeenCalledExactlyOnceWith({
       repositoryId: "repository",
@@ -2236,11 +2121,7 @@ describe("reconcileRepository", () => {
       }];
       (dependencies.store.getRepository as ReturnType<typeof vi.fn>).mockResolvedValue(repository);
 
-      await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({
-        adds: 1,
-        changes: 0,
-        removals: 0,
-      });
+      await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ adds: 1, changes: 0, removals: 0 });
       expect(dependencies.store.materialize).toHaveBeenCalledWith(expect.objectContaining({
         fold: expect.objectContaining({ settlements: [expect.objectContaining({ credits: 6 })] }),
       }));
@@ -2266,14 +2147,7 @@ describe("reconcileRepository", () => {
   });
 
   it("rejects malformed CLI arguments instead of broadening a scoped reconciliation", async () => {
-    const dependencies = {
-      store: {
-        findRepositoryByOwnerName: vi.fn(),
-        listActiveRepositoryIds: vi.fn(),
-      },
-      reconcile: vi.fn(),
-      write: vi.fn(),
-    };
+    const dependencies = { store: { findRepositoryByOwnerName: vi.fn(), listActiveRepositoryIds: vi.fn() }, reconcile: vi.fn(), write: vi.fn() };
 
     await expect(runReconciliationCli(["--repository", "octo/example", "unexpected"], dependencies)).rejects.toThrow(
       "Usage: pnpm reconcile [--repository owner/name]",
