@@ -1885,7 +1885,8 @@
         0.01
       ],
       "tests/ci/pnpm-install-retry.test.ts": [
-        0.86
+        0.86,
+        1.92
       ],
       "tests/ci/pr-data-triggers.test.ts": [
         0.02
