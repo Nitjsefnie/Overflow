@@ -179,15 +179,15 @@ describe("running the next reconciliation job", () => {
     expect(line).not.toContain(token);
   });
 
-  it("passes the request generation captured at claim time to completion", async () => {
+  it("passes the request and sweep generations captured at claim time to completion", async () => {
     const captured = 7;
     const { store, calls } = createFakeStore({ jobs: [job({
-      rederivationRequestedAt: new Date("2026-09-01T10:00:00.123Z"), rederivationGeneration: captured,
+      rederivationRequestedAt: new Date("2026-09-01T10:00:00.123Z"), rederivationGeneration: captured, sweepGeneration: 11,
     })] });
     expect(await runNextReconciliationJob({
       store, reconcile: async () => {}, scheduleLeaseRenewal: () => () => {},
     })).toBe("RECONCILED");
-    expect(calls.at(-1)).toEqual({ method: "complete", args: ["job-1", "lease-1", captured] });
+    expect(calls.at(-1)).toEqual({ method: "complete", args: ["job-1", "lease-1", captured, 11] });
   });
 
   it("keeps repository exclusion after a lost-lease heartbeat stops", async () => {
@@ -435,7 +435,7 @@ describe("running the next reconciliation job", () => {
     expect(reconciled).toEqual(["repo-a"]);
     expect(calls).toEqual([
       { method: "claim", args: [] },
-      { method: "complete", args: ["job-1", "lease-1", 0] },
+      { method: "complete", args: ["job-1", "lease-1", 0, null] },
     ]);
   });
 
@@ -983,7 +983,7 @@ describe("reconciliation lease heartbeat", () => {
       expect(timer.cancellations).toBe(0);
       fold.resolve();
       await expect(running).resolves.toBe("RECONCILED");
-      expect(calls.at(-1)).toEqual({ method: "complete", args: ["job-1", "lease-1", 0] });
+      expect(calls.at(-1)).toEqual({ method: "complete", args: ["job-1", "lease-1", 0, null] });
       expect(timer.cancellations).toBe(1);
     } finally {
       fold.resolve();
@@ -1011,7 +1011,7 @@ describe("reconciliation lease heartbeat", () => {
       expect(calls.filter(({ method }) => method === "renew")).toHaveLength(1);
       fold.resolve();
       await expect(running).resolves.toBe("LEASE_LOST");
-      expect(calls.at(-1)).toEqual({ method: "complete", args: ["job-1", "lease-1", 0] });
+      expect(calls.at(-1)).toEqual({ method: "complete", args: ["job-1", "lease-1", 0, null] });
       expect(timer.cancellations).toBe(1);
     } finally {
       fold.resolve();
@@ -2300,7 +2300,7 @@ function createFakeStore(
     // Interaction recorder only: PostgreSQL tests prove ownership/state guards;
     // this fake deliberately does not model lease ownership or row lifecycle.
     renewReconciliationJobLease: async (jobId, leaseToken) => { record("renew", [jobId, leaseToken]); return true; },
-    completeReconciliationJob: async (jobId, leaseToken, rederivationGeneration) => { record("complete", [jobId, leaseToken, rederivationGeneration]); return true; },
+    completeReconciliationJob: async (jobId, leaseToken, rederivationGeneration, sweepGeneration) => { record("complete", [jobId, leaseToken, rederivationGeneration, sweepGeneration]); return true; },
     deferReconciliationJob: async (jobId, leaseToken, runAfter) => { record("defer", [jobId, leaseToken, runAfter]); return true; },
     retryReconciliationJob: async (jobId, leaseToken, runAfter) => { record("retry", [jobId, leaseToken, runAfter]); return true; },
     failReconciliationJob: async (jobId, leaseToken) => { record("fail", [jobId, leaseToken]); return true; },

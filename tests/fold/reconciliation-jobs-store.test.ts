@@ -605,6 +605,20 @@ describe("PostgreSQL reconciliation job queue", () => {
     expect(await store.completeReconciliationJob(first.id, first.leaseToken, first.rederivationGeneration, first.sweepGeneration)).toBe(false);
   });
 
+  it("lets a superseded fold's completion consume its sweep and nothing else, leaving the reclaimer's live lease", async () => {
+    const repositoryId = await insertRepository();
+    await store.enqueueReconciliationJob(repositoryId, "SWEEP");
+    await sql`update repository_reconciliation_jobs set sweep_generation = 7 where repository_id = ${repositoryId}`;
+    const first = await claimOrFail();
+    await expireLease(first.id);
+    const second = await claimOrFail();
+    const [before] = await sql`select * from repository_reconciliation_jobs where id = ${first.id}`;
+    expect(first.sweepGeneration).toBe(7);
+    expect(await store.completeReconciliationJob(first.id, first.leaseToken, first.rederivationGeneration, first.sweepGeneration)).toBe(false);
+    expect(await sql`select * from repository_reconciliation_jobs where id = ${first.id}`).toEqual([{ ...before, reason: "WEBHOOK" }]);
+    expect(await store.completeReconciliationJob(second.id, second.leaseToken, second.rederivationGeneration, second.sweepGeneration)).toBe(true);
+  });
+
   it("keeps a mid-fold enqueue's follow-up across a reclaimed lease", async () => {
     // The event arrived while the first worker held the job and that worker then
     // died. Clearing the flag on the reclaim would lose the event outright: the
