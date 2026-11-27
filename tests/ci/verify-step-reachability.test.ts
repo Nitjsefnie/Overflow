@@ -420,6 +420,14 @@ describe("the expression evaluator", () => {
     expect(evaluateExpression("inputs.simulate-refused-raise == true", pullRequest)).toBe(false);
   });
 
+  it("reads a function, a context and a property name in any case, as the runner does, and only `env`'s own keys exactly", () => {
+    expect(evaluateExpression("!Cancelled() && GitHub.Event_Name == 'push' && SUCCESS()", push)).toBe(true);
+    expect(evaluateExpression("Steps.PR.Outputs.Base_Ref", pullRequest)).toBe("main");
+    expect(["ENV.Home", "env.HOME"].map((path) => evaluateExpression(path, { env: { Home: "set" } }))).toEqual(["set", null]);
+    // The runner's keywords keep their case: `True` is a name there, and no context has it.
+    expect(captureError(() => evaluateExpression("True"))).toContain("True");
+  });
+
   it("casts a missing value to zero when the comparison crosses types", () => {
     // `castToNumber`'s null branch, which nothing else here pins: the string
     // branch does `value.trim()`, so a null reaching it throws rather than
