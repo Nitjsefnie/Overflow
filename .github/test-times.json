@@ -1833,25 +1833,29 @@
         0.01
       ],
       "tests/ci/advisory-tracking.test.ts": [
-        8.04
+        8.04,
+        5.77
       ],
       "tests/ci/audit-acceptance.test.ts": [
         0.0
       ],
       "tests/ci/audit-suppression-step.test.ts": [
-        21.71
+        21.71,
+        13.57
       ],
       "tests/ci/base-freshness.test.ts": [
         1.2
       ],
       "tests/ci/ci-records.test.ts": [
-        4.52
+        4.52,
+        2.69
       ],
       "tests/ci/comment-share.test.ts": [
         0.0
       ],
       "tests/ci/commit-scopes.test.ts": [
-        3.56
+        3.56,
+        2.27
       ],
       "tests/ci/concurrency.test.ts": [
         0.01
@@ -1866,7 +1870,8 @@
         0.71
       ],
       "tests/ci/dependency-audit-retry.test.ts": [
-        5.22
+        5.22,
+        3.61
       ],
       "tests/ci/event-policy-workflow.test.ts": [
         0.01
@@ -1947,7 +1952,8 @@
         0.02
       ],
       "tests/components/forge-identities-panel.test.tsx": [
-        2.25
+        2.25,
+        0.7
       ],
       "tests/components/github-budget-panel.test.tsx": [
         0.22
@@ -2085,7 +2091,8 @@
         0.06
       ],
       "tests/dashboard/queries-postgres.test.ts": [
-        3.18
+        3.18,
+        1.67
       ],
       "tests/dashboard/queries.test.ts": [
         9.59
@@ -2100,7 +2107,8 @@
         0.01
       ],
       "tests/dashboard/sponsor-credit-limit.test.ts": [
-        2.43
+        2.43,
+        1.09
       ],
       "tests/dashboard/sponsor-headroom-ordering.test.ts": [
         0.1
@@ -2124,7 +2132,8 @@
         0.14
       ],
       "tests/db/api-token-delivery-window.test.ts": [
-        3.54
+        3.54,
+        2.24
       ],
       "tests/db/api-token-expiry.test.ts": [
         0.54
@@ -2136,7 +2145,8 @@
         0.04
       ],
       "tests/db/backup-restore.test.ts": [
-        12.41
+        12.41,
+        4.71
       ],
       "tests/db/board-generic-plan.test.ts": [
         0.77
@@ -2169,7 +2179,8 @@
         4.02
       ],
       "tests/db/closed-pr-disputes-schema.test.ts": [
-        3.78
+        3.78,
+        1.41
       ],
       "tests/db/closesql-connection-death.test.ts": [
         0.05
@@ -2226,10 +2237,12 @@
         0.6
       ],
       "tests/db/migrate-default-branch-guard.test.ts": [
-        6.04
+        6.04,
+        2.96
       ],
       "tests/db/migration-checksum.test.ts": [
-        7.5
+        7.5,
+        5.11
       ],
       "tests/db/migration-compatibility.test.ts": [
         6.24
@@ -2361,7 +2374,8 @@
         11.84
       ],
       "tests/db/sweep-round-store.test.ts": [
-        5.24
+        5.24,
+        3.42
       ],
       "tests/db/sweep-walk-schema.test.ts": [
         0.35
@@ -2406,7 +2420,8 @@
         20.65
       ],
       "tests/deploy/account-cli.test.ts": [
-        5.25
+        5.25,
+        3.28
       ],
       "tests/deploy/alert-units.test.ts": [
         0.07
@@ -2427,7 +2442,8 @@
         3.43
       ],
       "tests/deploy/container-image.test.ts": [
-        131.39
+        131.39,
+        83.98
       ],
       "tests/deploy/csp-dynamic-pages.test.ts": [
         0.0
@@ -2436,16 +2452,19 @@
         0.54
       ],
       "tests/deploy/deploy-readme-fallback.test.ts": [
-        7.08
+        7.08,
+        3.19
       ],
       "tests/deploy/deploy-revision-ledger.test.ts": [
-        15.4
+        15.4,
+        7.73
       ],
       "tests/deploy/deploy-revision-startup-sweep.test.ts": [
         40.09
       ],
       "tests/deploy/deploy-revision.test.ts": [
-        40.85
+        40.85,
+        26.37
       ],
       "tests/deploy/edge-instrumentation-bundle.test.ts": [
         138.26
@@ -2457,7 +2476,8 @@
         0.07
       ],
       "tests/deploy/next-config.test.ts": [
-        31.27
+        31.27,
+        19.8
       ],
       "tests/deploy/postgres-patch.test.ts": [
         0.08
@@ -2466,7 +2486,8 @@
         0.26
       ],
       "tests/deploy/reconcile-cli.test.ts": [
-        30.43
+        30.43,
+        19.73
       ],
       "tests/deploy/register-path-aliases.test.ts": [
         0.52
@@ -2475,10 +2496,12 @@
         169.85
       ],
       "tests/deploy/release-check.test.ts": [
-        9.46
+        9.46,
+        5.59
       ],
       "tests/deploy/release-prepare.test.ts": [
-        5.91
+        5.91,
+        4.0
       ],
       "tests/deploy/release-script.test.ts": [
         13.11
@@ -2877,10 +2900,12 @@
         74.23
       ],
       "tests/lib/http-surface-snapshot.test.ts": [
-        61.63
+        61.63,
+        34.87
       ],
       "tests/lib/http-surface-type-edges.test.ts": [
-        157.41
+        157.41,
+        56.16
       ],
       "tests/lib/http/error-response.test.ts": [
         5.44
@@ -2916,7 +2941,8 @@
         0.04
       ],
       "tests/lib/snapshot-updater-cli.test.ts": [
-        513.24
+        513.24,
+        262.82
       ],
       "tests/lib/strip-name-prefix.test.ts": [
         0.0
@@ -3144,7 +3170,8 @@
         0.08
       ],
       "tests/security/local-database-exposure.test.ts": [
-        0.34
+        0.34,
+        1.68
       ],
       "tests/security/privileged-action-log.test.ts": [
         0.01
