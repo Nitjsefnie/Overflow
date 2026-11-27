@@ -30,7 +30,6 @@
 !.github/size-baseline.json
 !.github/requirements-zizmor.txt
 !.github/requirements-pyyaml.txt
-!.github/gitleaks-baseline.json
 !.github/codeql-config.yml
 !.github/ci-thresholds.json
 !.github/test-times.json
@@ -414,7 +413,6 @@ scripts/*
 !scripts/ci-base-freshness.sh
 !scripts/ci_records.py
 !scripts/commit_scopes.py
-!scripts/secret-scan.sh
 !scripts/secret-scan-baseline.sh
 !scripts/overflow-alert.sh
 !scripts/overflow-canary.sh

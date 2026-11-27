@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Every commit the committed baseline names must be reachable from this
-# checkout's HEAD or the optional additional reachability root (first argument).
+# Every commit .gitleaksignore names must be reachable from this checkout's
+# HEAD or the optional additional reachability root (first argument).
 # "Reachable" is a question about the REF SET, not the object store: an entry
 # naming a commit no ref this checkout scans contains is a
 # defect in a tracked artefact. It suppresses nothing — gitleaks walks
 # `git log --all`, so it never even produces a record equal to one — it misleads
-# every reader who consults the baseline to decide what was deliberately
-# allowed, and it will never be found by the scan it belongs to.
+# every reader who consults the ignore list to decide what was deliberately
+# allowed, and it will never be found by the scan it belongs to. An entry is a
+# gitleaks fingerprint, `commit:file:rule:line`; `#` lines are comments.
 #
 # Full-depth workflow checkouts can prove ancestry; a shallow checkout
 # cannot distinguish an orphan from a commit it never fetched. On a PR run,
@@ -28,19 +29,19 @@
 # fetches the whole history, so this never fires on the surface that owns it.
 set -euo pipefail
 
-# Resolved from this script's own location, as in secret-scan.sh: the baseline
-# and the history it must be reachable from are this checkout's, not the
-# caller's working directory's. Assigned before the readonly so a failing
+# Resolved from this script's own location: the ignore list and the history
+# it must be reachable from are this checkout's, not the caller's working
+# directory's. Assigned before the readonly so a failing
 # command substitution still fails the script under `set -e` instead of
 # hiding behind the declaration's own exit status.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 REPO_ROOT="$(dirname -- "$SCRIPT_DIR")"
 readonly REPO_ROOT
-readonly BASELINE_PATH="$REPO_ROOT/.github/gitleaks-baseline.json"
+readonly BASELINE_PATH="$REPO_ROOT/.gitleaksignore"
 
 if [ ! -f "$BASELINE_PATH" ]; then
-  echo "secret-scan-baseline: the committed baseline is missing: $BASELINE_PATH" >&2
+  echo "secret-scan-baseline: the committed ignore list is missing: $BASELINE_PATH" >&2
   exit 1
 fi
 
@@ -60,21 +61,16 @@ if [ -n "${1:-}" ]; then
 fi
 readonly REACHABILITY_ROOTS="$HEAD_SHA${additional_sha:+ or $additional_sha}"
 
-# jq reads the baseline into a file BEFORE the loop, not into the loop's stdin
-# through a pipe. A pipeline would put the reader in a subshell, where its exit
-# status is the last command's — so a jq that failed on malformed JSON would
-# leave an empty loop, an empty loop would report success, and the check would
-# pass without having read anything. `set -e` on the redirect makes that failure
-# fatal here instead. `@tsv` is what keeps a fingerprint containing a separator
-# from splitting into fields.
-ENTRIES_FILE="$(mktemp)"
-readonly ENTRIES_FILE
-trap 'rm -f "$ENTRIES_FILE"' EXIT
-jq -r '.[] | [.Fingerprint, .Commit] | @tsv' "$BASELINE_PATH" > "$ENTRIES_FILE"
-
 checked=0
 orphans=0
-while IFS=$'\t' read -r fingerprint commit; do
+while IFS= read -r line || [ -n "$line" ]; do
+  fingerprint="${line#"${line%%[![:space:]]*}"}"
+  fingerprint="${fingerprint%"${fingerprint##*[![:space:]]}"}"
+  case "$fingerprint" in '' | '#'*) continue ;; esac
+  commit="${fingerprint%%:*}"
+  # A fingerprint with no commit field is global: it names no commit to check.
+  case "$commit" in *[!0-9a-f]*) continue ;; esac
+  [ "${#commit}" -eq 40 ] || continue
   checked=$((checked + 1))
   # The two faults get separate sentences because they have different fixes. An
   # absent commit means the entry was generated against a ref set wider than the
@@ -97,16 +93,13 @@ while IFS=$'\t' read -r fingerprint commit; do
   printf 'secret-scan-baseline: %s names commit %s, which is in the object store but is not an ancestor of %s.\n' \
     "$fingerprint" "$commit" "$REACHABILITY_ROOTS" >&2
   orphans=$((orphans + 1))
-done < "$ENTRIES_FILE"
+done < "$BASELINE_PATH"
 
-# A baseline this read nothing from has certified nothing. `0 checked, all
-# reachable` is the shape of the vacuous pass, and an empty or reshaped baseline
-# is the way in: `.[]` over a document that is not the array gitleaks emits
-# yields no entries and fails nothing.
+# An ignore list this read nothing from has certified nothing: `0 checked, all
+# reachable` is the shape of the vacuous pass.
 if [ "$checked" -eq 0 ]; then
-  echo "secret-scan-baseline: checked nothing: $BASELINE_PATH yielded no entries to check, so no" >&2
-  echo "secret-scan-baseline: verdict about reachability means nothing. The file must be the array" >&2
-  echo "secret-scan-baseline: gitleaks --report-format json emits; see scripts/secret-scan.sh." >&2
+  echo "secret-scan-baseline: checked nothing: $BASELINE_PATH yielded no entries naming a commit," >&2
+  echo "secret-scan-baseline: so no verdict about reachability means anything." >&2
   exit 1
 fi
 
@@ -116,7 +109,7 @@ if [ "$orphans" -ne 0 ]; then
   echo "secret-scan-baseline: every one of them suppresses nothing, and the scan that just ran" >&2
   echo "secret-scan-baseline: reported whatever was really there regardless. REMOVE each entry named" >&2
   echo "secret-scan-baseline: above and keep the reachable one for the same finding — same file, line" >&2
-  echo "secret-scan-baseline: and rule. Do not regenerate the whole baseline to clear them: that" >&2
+  echo "secret-scan-baseline: and rule. Do not regenerate the whole ignore list to clear them: that" >&2
   echo "secret-scan-baseline: absorbs a genuinely new finding and buries it." >&2
   exit 1
 fi

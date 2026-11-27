@@ -121,8 +121,8 @@ jobs:
 
   # One shard of the suite with coverage measured over src/, against the real
   # migration path on PostgreSQL. Full history: the suite includes the
-  # secret-scan baseline's provenance check, which skips wherever the checkout
-  # is shallower than the baseline's entries. This is MAIN's own history, so
+  # .gitleaksignore line check, which skips wherever the checkout is
+  # shallower than the ignore list's entries. This is MAIN's own history, so
   # the depth carries no pull-request data into a privileged job.
   test:
     needs: [postgres-image, plan]
@@ -429,9 +429,8 @@ jobs:
   #
   # WHY THE VERSION IS PINNED, AND WHY v0.11.0. New shellcheck releases grow
   # new checks, and a floating version would redden main for reasons no change
-  # in this repository caused — the same argument secret-scan.sh makes for its
-  # gitleaks pin. v0.11.0 is the latest release, so nothing newer exists for a
-  # dependabot lane to propose. The binary comes from the release itself and is
+  # in this repository caused. v0.11.0 is the latest release, so nothing
+  # newer exists for a dependabot lane to propose. The binary comes from the release itself and is
   # checksum-verified before it runs, exactly as the actionlint workflows
   # install theirs; that release publishes no checksums file of its own, so the
   # sha256 below was computed from the downloaded artifact and pins its bytes.
