@@ -4,15 +4,25 @@ import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
-const read = (file: string): Promise<string> => readFile(resolve(root, file), "utf8");
 
-it("accepts no advisory, in package.json or in the workspace file", async () => {
-  const [pkg, workspace] = await Promise.all(["package.json", "pnpm-workspace.yaml"].map(read));
-  expect([JSON.parse(pkg).pnpm, workspace.match(/auditConfig|GHSA-/g)]).toStrictEqual([{ auditConfig: { ignoreGhsas: [] } }, null]);
+it("records exactly the accepted advisory ids, scoped to the audited picomatch", async () => {
+  const [workspace, lock] = await Promise.all(["pnpm-workspace.yaml", "pnpm-lock.yaml"].map((file) => readFile(resolve(root, file), "utf8")));
+  const ids = [...workspace.matchAll(/^    - (GHSA-[\w-]+)$/gm)].map((match) => match[1]);
+  expect([ids, new Set(lock.match(/picomatch@\d+\.\d+\.\d+/g))]).toStrictEqual([["GHSA-fc5q-39xc-vjpf"], new Set(["picomatch@4.0.7"])]);
+});
+
+/** Why each `pnpm.auditConfig.ignoreGhsas` id is accepted: the recorded disposition advisory-tracking.yml's listing stops naming it for. */
+const REASONS: Record<string, string> = {
+  "GHSA-fc5q-39xc-vjpf": "unpatched (4.0.7 is picomatch's newest release), and every copy is reached only through the dev-only vite, vitest and tinyglobby",
+};
+
+it("records exactly one non-blank reason per accepted advisory id", async () => {
+  const ids = [...(await readFile(resolve(root, "pnpm-workspace.yaml"), "utf8")).matchAll(/^    - (GHSA-[\w-]+)$/gm)].map((match) => match[1]);
+  expect([[...ids].sort(), Object.values(REASONS).filter((reason) => reason.trim() === "")]).toStrictEqual([Object.keys(REASONS).sort(), []]);
 });
 
 it("pins allowBuilds false for every ignored install script", async () => {
-  const workspace = await read("pnpm-workspace.yaml");
+  const workspace = await readFile(resolve(root, "pnpm-workspace.yaml"), "utf8");
   for (const name of ["cpu-features", "protobufjs", "ssh2"]) {
     expect(workspace, name).toMatch(new RegExp(`^  ${name}: false$`, "m"));
   }
