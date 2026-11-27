@@ -1868,7 +1868,8 @@
       ],
       "tests/ci/dependency-audit-pr.test.ts": [
         30.66,
-        39.69
+        39.69,
+        21.52
       ],
       "tests/ci/dependency-audit-push.test.ts": [
         0.71
@@ -2257,7 +2258,8 @@
       "tests/db/migration-checksum.test.ts": [
         7.5,
         5.11,
-        3.05
+        3.05,
+        9.72
       ],
       "tests/db/migration-compatibility.test.ts": [
         6.24,
@@ -2390,7 +2392,8 @@
         0.55
       ],
       "tests/db/sweep-pass-store.test.ts": [
-        3.31
+        3.31,
+        1.43
       ],
       "tests/db/sweep-repository-share.test.ts": [
         11.84,
@@ -2399,7 +2402,8 @@
       "tests/db/sweep-round-store.test.ts": [
         5.24,
         3.42,
-        6.99
+        6.99,
+        12.18
       ],
       "tests/db/sweep-walk-schema.test.ts": [
         0.35
@@ -3034,7 +3038,8 @@
       ],
       "tests/moderation/credit-adjustment-store.test.ts": [
         3.01,
-        4.03
+        4.03,
+        6.4
       ],
       "tests/moderation/current-role.test.ts": [
         0.06
@@ -3098,7 +3103,8 @@
       ],
       "tests/scripts/check-legal-revisions.test.ts": [
         3.37,
-        5.87
+        5.87,
+        2.02
       ],
       "tests/scripts/check-page-geometry-board.test.ts": [
         0.38
