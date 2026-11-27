@@ -324,7 +324,7 @@ describe("running the next reconciliation job", () => {
     const entered = signal();
     const { store, calls } = createFakeStore({ jobs: [
       job(),
-      job({ leaseToken: "reclaimed" }),
+      job({ leaseToken: "reclaimed", attemptCount: 2 }),
       job({ id: "job-b", repositoryId: "repo-b" }),
       job({ leaseToken: "after-release" }),
     ] });
@@ -345,7 +345,7 @@ describe("running the next reconciliation job", () => {
       await expect(drainReconciliationJobs(dependencies, { maxJobs: 1 })).resolves.toEqual(["DEFERRED"]);
       expect(heartbeats).toBe(1);
       expect(folded).toEqual(["repo-a"]);
-      expect(calls).toContainEqual({ method: "defer", args: ["job-1", "reclaimed", new Date("2030-01-02T03:04:10.000Z"), 1] });
+      expect(calls).toContainEqual({ method: "defer", args: ["job-1", "reclaimed", new Date("2030-01-02T03:04:10.000Z"), 2] });
       await expect(drainReconciliationJobs(dependencies, { maxJobs: 1 })).resolves.toEqual(["RECONCILED"]);
       expect(folded).toEqual(["repo-a", "repo-b"]);
       held.resolve();
@@ -841,10 +841,10 @@ describe("reconciliation lease heartbeat", () => {
     const write = signal();
     const enteredWrite = signal();
     const original = store[writer].bind(store);
-    store[writer] = async (id: string, token: string, runAfterOrGeneration?: Date | number) => {
+    store[writer] = async (...args: unknown[]) => {
       enteredWrite.resolve();
       await write.promise;
-      return Reflect.apply(original, store, [id, token, runAfterOrGeneration]);
+      return Reflect.apply(original, store, args);
     };
     const running = runNextReconciliationJob({
       store,

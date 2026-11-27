@@ -750,9 +750,13 @@ describe("PostgreSQL reconciliation job queue", () => {
     const stale = await claimOrFail();
     await expireLease(stale.id);
     await act(await claimOrFail());
-    const before = await jobById(stale.id);
+    // A released job of another repository at the stale count: the refund is keyed on the job, not the count.
+    const bystander = await insertRepository();
+    await sql`insert into repository_reconciliation_jobs (repository_id, reason, attempt_count, run_after)
+      values (${bystander}, 'WEBHOOK', ${stale.attemptCount}, now() + interval '1 hour')`;
+    const [before, bystanderBefore] = [await jobById(stale.id), await onlyJobFor(bystander)];
     expect(await store.deferReconciliationJob(stale.id, stale.leaseToken, new Date(Date.now() + 600_000), stale.attemptCount)).toBe(false);
-    expect(await jobById(stale.id)).toEqual({ ...before, attempt_count: refunded });
+    expect([await jobById(stale.id), await onlyJobFor(bystander)]).toEqual([{ ...before, attempt_count: refunded }, bystanderBefore]);
   });
 
   it("preserves a fairness deadline and rederivation through webhook coalescing", async () => {
