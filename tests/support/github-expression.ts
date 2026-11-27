@@ -322,3 +322,8 @@ export function selectSteps(steps: readonly WorkflowStep[], context: ActionsCont
   return steps.filter((step) => isSelected(step, context, status));
 }
 
+// A job's status for its `if:`: the run's when cancelled, else success only when every listed need succeeded.
+// shortcut: a skipped need reads as failure(), which no routed `if:` calls; model a skipped status if one starts to.
+export const jobStatus = (results: readonly (string | undefined)[], cancelled = false): JobStatus =>
+  cancelled ? "cancelled" : results.every((result) => result === "success") ? "success" : "failure";
+
