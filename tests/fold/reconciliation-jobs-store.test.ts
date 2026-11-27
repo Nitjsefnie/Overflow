@@ -731,7 +731,7 @@ describe("PostgreSQL reconciliation job queue", () => {
 
   // The stale claim's outcome write matches no row after a reclaim; its refund applies only to the count that claim left.
   it.each(([
-    { later: "a reclaim deferred itself", start: 0, refunded: 0,
+    { later: "a reclaim deferred itself", start: 2, refunded: 2,
       act: async (job: ClaimedReconciliationJob) => { await store.deferReconciliationJob(job.id, job.leaseToken, new Date(), job.attemptCount); } },
     { later: "a reclaim kept its attempt in a retry", start: 0, refunded: 2,
       act: async (job: ClaimedReconciliationJob) => { await store.retryReconciliationJob(job.id, job.leaseToken, new Date()); } },
