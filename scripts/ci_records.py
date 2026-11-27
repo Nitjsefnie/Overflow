@@ -30,7 +30,15 @@ def records_only(before):
 
 
 def api(endpoint):
-    return json.loads(subprocess.check_output(["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/{endpoint}"]))
+    command = ["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/{endpoint}"]
+    # A transient 5xx or rate-limit answer must not decide the push; the last attempt's error propagates.
+    for delay in (5, 10, 20, 40):
+        try:
+            return json.loads(subprocess.check_output(command))
+        except subprocess.CalledProcessError as error:
+            print(f"gh api {endpoint} exited {error.returncode}; retrying in {delay} s", file=sys.stderr, flush=True)
+            time.sleep(delay)
+    return json.loads(subprocess.check_output(command))
 
 
 def items(endpoint, key):

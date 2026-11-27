@@ -198,11 +198,13 @@ jobs:
           javascript: src/**
 
   # Keep all repository code and API polling outside the job holding the deploy key.
+  # It waits for the code push it borrows, whose longest needs chain of timeouts
+  # is 115 minutes, plus queueing and retry sleeps.
   record-source:
     needs: postgres-image
     if: needs.postgres-image.outputs.records-only == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 150
     permissions:
       contents: read
       actions: read

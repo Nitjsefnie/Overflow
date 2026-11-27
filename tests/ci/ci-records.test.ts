@@ -50,7 +50,12 @@ describe("ratchet record pushes", () => {
     for (const file of records.slice(1)) writeFileSync(join(root, file), "record");
     head = commit();
     mkdirSync(join(root, "bin"));
-    writeFileSync(join(root, "bin/sitecustomize.py"), "import time\ntime.sleep = lambda seconds: None\n");
+    // time.sleep only records its argument; a list answer is consumed one element per call; {"fail": text} makes gh exit 1.
+    writeFileSync(join(root, "bin/sitecustomize.py"), `import os, time
+def sleep(seconds, log=os.path.join(os.path.dirname(__file__), "sleeps")):
+    with open(log, "a") as file: file.write(f"{seconds}\\n")
+time.sleep = sleep
+`);
     writeFileSync(join(root, "bin/gh"), `#!/usr/bin/env python3
 import json, sys
 from pathlib import Path
@@ -61,6 +66,8 @@ answer = responses[sys.argv[2]]
 if isinstance(answer, list):
     answer = answer.pop(0)
     path.write_text(json.dumps(responses))
+if isinstance(answer, dict) and "fail" in answer:
+    sys.exit(answer["fail"])
 print(json.dumps(answer))
 `, { mode: 0o755 });
   });
@@ -81,7 +88,9 @@ print(json.dumps(answer))
 
   function source(responses: Record<string, unknown>) {
     writeFileSync(join(root, "bin/responses.json"), JSON.stringify(responses));
-    return run("source", size, { PYTHONPATH: join(root, "bin") });
+    writeFileSync(join(root, "bin/sleeps"), "");
+    const result = run("source", size, { PYTHONPATH: join(root, "bin") });
+    return { ...result, sleeps: readFileSync(join(root, "bin/sleeps"), "utf8").split("\n").filter(Boolean).map(Number) };
   }
   function fixture(override: Record<string, unknown> = {}, measured = code) {
     const main = { path: ".github/workflows/ci.yml", event: "push", head_branch: "main",
@@ -118,6 +127,14 @@ print(json.dumps(answer))
   it("waits for the preceding push to appear in the workflow runs listing", () => {
     const responses = fixture();
     expect(source({ ...responses, [runsAt(size)]: [{ workflow_runs: [] }, responses[runsAt(size)]] }).stdout.trim()).toBe("run-id=11");
+  });
+
+  it("retries a failed GitHub API call with growing sleeps, a bounded number of times", () => {
+    const once = source({ ...fixture(), [runsAt(code)]: [{ fail: "HTTP 502: Bad Gateway" }, fixture()[runsAt(code)]] });
+    expect([once.stdout, once.sleeps]).toEqual(["run-id=11\n", [5]]);
+    expect(once.stderr).toContain("retrying in 5 s");
+    const always = source({ ...fixture(), [runsAt(code)]: { fail: "HTTP 502: Bad Gateway" } });
+    expect([always.status, always.stdout, always.sleeps]).toEqual([1, "", [5, 10, 20, 40]]);
   });
 
   it("uses the successful rerun of a shard that failed on the first attempt", () => {
@@ -164,7 +181,7 @@ print(json.dumps(answer))
 });
 
 interface Step { id?: string; run?: string; env?: Record<string, string>; with?: Record<string, unknown> }
-interface Job { if?: string; needs?: string | string[]; steps: Step[]; outputs?: Record<string, string> }
+interface Job { if?: string; needs?: string | string[]; steps: Step[]; outputs?: Record<string, string>; "timeout-minutes"?: number }
 function workflow(file: string): { on: { push: unknown }; jobs: Record<string, Job> } {
   return parse(readFileSync(`.github/workflows/${file}.yml`, "utf8"));
 }
@@ -182,6 +199,15 @@ describe("main push workflow routing", () => {
     expect(ci["record-source"]!.if).toBe("needs.postgres-image.outputs.records-only == 'true'");
     expect(ci["record-source"]!.steps.at(-1)?.run).toBe('python3 scripts/ci_records.py source >> "$GITHUB_OUTPUT"');
     expect(scan.changes!.if).toBe("github.event_name == 'push'");
+  });
+
+  it("lets record-source outwait the longest needs chain of job timeouts in the code push it waits for", () => {
+    const own = (name: string) => ci[name]!["timeout-minutes"]!;
+    const chain = (name: string): number => own(name) + Math.max(0, ...[ci[name]!.needs ?? []].flat().filter(need => need !== "record-source").map(chain));
+    const names = Object.keys(ci).filter(name => name !== "record-source");
+    const longest = Math.max(...names.map(chain));
+    expect(longest).toBeGreaterThan(Math.max(...names.map(own)));
+    expect(own("record-source")).toBeGreaterThanOrEqual(longest);
   });
 
   it("runs report after the record source has succeeded on a record-only push", () => {
