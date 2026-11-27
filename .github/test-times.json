@@ -1841,14 +1841,16 @@
       ],
       "tests/ci/audit-suppression-step.test.ts": [
         21.71,
-        13.57
+        13.57,
+        27.76
       ],
       "tests/ci/base-freshness.test.ts": [
         1.2
       ],
       "tests/ci/ci-records.test.ts": [
         4.52,
-        2.69
+        2.69,
+        10.04
       ],
       "tests/ci/comment-share.test.ts": [
         0.0
@@ -1898,7 +1900,8 @@
         0.0
       ],
       "tests/ci/verify-pr-tree.test.ts": [
-        8.77
+        8.77,
+        4.73
       ],
       "tests/ci/verify-step-reachability.test.ts": [
         0.03
@@ -1989,7 +1992,8 @@
         0.27
       ],
       "tests/components/open-audit-form.test.tsx": [
-        2.66
+        2.66,
+        1.35
       ],
       "tests/components/pickup.test.tsx": [
         0.45
@@ -2176,7 +2180,8 @@
         4.22
       ],
       "tests/db/closed-pr-dispute-url.test.ts": [
-        4.02
+        4.02,
+        2.56
       ],
       "tests/db/closed-pr-disputes-schema.test.ts": [
         3.78,
@@ -2242,10 +2247,12 @@
       ],
       "tests/db/migration-checksum.test.ts": [
         7.5,
-        5.11
+        5.11,
+        3.05
       ],
       "tests/db/migration-compatibility.test.ts": [
-        6.24
+        6.24,
+        4.36
       ],
       "tests/db/migration-immutability.test.ts": [
         0.15
@@ -2260,7 +2267,8 @@
         0.06
       ],
       "tests/db/migration-upgrade.test.ts": [
-        114.06
+        114.06,
+        46.79
       ],
       "tests/db/pickup.test.ts": [
         0.05
@@ -2341,7 +2349,8 @@
         1.36
       ],
       "tests/db/retention-traversal.test.ts": [
-        3.16
+        3.16,
+        1.2
       ],
       "tests/db/sanction-contest-store.test.ts": [
         0.39
@@ -2371,11 +2380,13 @@
         3.31
       ],
       "tests/db/sweep-repository-share.test.ts": [
-        11.84
+        11.84,
+        4.29
       ],
       "tests/db/sweep-round-store.test.ts": [
         5.24,
-        3.42
+        3.42,
+        6.99
       ],
       "tests/db/sweep-walk-schema.test.ts": [
         0.35
@@ -2453,7 +2464,8 @@
       ],
       "tests/deploy/deploy-readme-fallback.test.ts": [
         7.08,
-        3.19
+        3.19,
+        1.19
       ],
       "tests/deploy/deploy-revision-ledger.test.ts": [
         15.4,
@@ -2467,7 +2479,8 @@
         26.37
       ],
       "tests/deploy/edge-instrumentation-bundle.test.ts": [
-        138.26
+        138.26,
+        67.23
       ],
       "tests/deploy/eslint-config.test.ts": [
         0.45
@@ -2894,10 +2907,12 @@
         1.44
       ],
       "tests/lib/http-surface-non-envelope.test.ts": [
-        155.4
+        155.4,
+        81.77
       ],
       "tests/lib/http-surface-record.test.ts": [
-        74.23
+        74.23,
+        34.25
       ],
       "tests/lib/http-surface-snapshot.test.ts": [
         61.63,
@@ -2987,7 +3002,8 @@
         0.01
       ],
       "tests/moderation/postgres-store.test.ts": [
-        2.79
+        2.79,
+        4.1
       ],
       "tests/moderation/service.test.ts": [
         0.05
@@ -3059,10 +3075,12 @@
         2.25
       ],
       "tests/scripts/db-offhost-backup.test.ts": [
-        7.44
+        7.44,
+        9.59
       ],
       "tests/scripts/generate-third-party-notices.test.ts": [
-        2.04
+        2.04,
+        0.98
       ],
       "tests/scripts/ledger-relay-app-key-rotation.test.ts": [
         0.49
@@ -3131,7 +3149,8 @@
         0.01
       ],
       "tests/scripts/perf-workloads.test.ts": [
-        30.44
+        30.44,
+        11.51
       ],
       "tests/scripts/ratchets.test.ts": [
         6.49
