@@ -801,7 +801,7 @@ jobs:
       # the comment job below posts it.
       - name: Coverage gate over the suite's artifacts
         if: ${{ steps.pr.outputs.superseded != 'true' }}
-        uses: Nitjsefnie-Actions/test-ratchet/report@96562a47e9b7fe74b55cc70a4636d1b5d7b542e2 # v2.4.2
+        uses: Nitjsefnie-Actions/test-ratchet/report@caf72ff77921794d9573c8b8aabe008946dcca45 # v2.5.0
         with:
           github-token: ${{ github.token }}
           cell: ubuntu-latest-node24.22.3
@@ -855,7 +855,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: Nitjsefnie-Actions/test-ratchet/report@96562a47e9b7fe74b55cc70a4636d1b5d7b542e2 # v2.4.2
+      - uses: Nitjsefnie-Actions/test-ratchet/report@caf72ff77921794d9573c8b8aabe008946dcca45 # v2.5.0
         with:
           github-token: ${{ github.token }}
           cell: ubuntu-latest-node24.22.3

@@ -110,7 +110,7 @@ jobs:
         with:
           persist-credentials: false
       - id: plan
-        uses: Nitjsefnie-Actions/test-ratchet/plan@96562a47e9b7fe74b55cc70a4636d1b5d7b542e2 # v2.4.2
+        uses: Nitjsefnie-Actions/test-ratchet/plan@caf72ff77921794d9573c8b8aabe008946dcca45 # v2.5.0
         with:
           tests: |
             tests/**/*.test.ts
@@ -188,7 +188,7 @@ jobs:
       - name: Apply PostgreSQL migrations
         run: pnpm db:migrate
 
-      - uses: Nitjsefnie-Actions/test-ratchet/run@96562a47e9b7fe74b55cc70a4636d1b5d7b542e2 # v2.4.2
+      - uses: Nitjsefnie-Actions/test-ratchet/run@caf72ff77921794d9573c8b8aabe008946dcca45 # v2.5.0
         with:
           runner: vitest
           tests: |
@@ -244,7 +244,7 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: Nitjsefnie-Actions/test-ratchet/report@96562a47e9b7fe74b55cc70a4636d1b5d7b542e2 # v2.4.2
+      - uses: Nitjsefnie-Actions/test-ratchet/report@caf72ff77921794d9573c8b8aabe008946dcca45 # v2.5.0
         with:
           github-token: ${{ github.token }}
           run-id: ${{ needs.record-source.outputs.run-id || github.run_id }}
