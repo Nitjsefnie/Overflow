@@ -1632,6 +1632,1568 @@
       "tests/webhooks/repository-progress.test.ts": [
         0.13
       ]
+    },
+    "ubuntu-latest-node24.22.3": {
+      "tests/api/account-delete-route.test.ts": [
+        0.04
+      ],
+      "tests/api/account-export-route.test.ts": [
+        0.02
+      ],
+      "tests/api/account-work-mail-route.test.ts": [
+        0.28
+      ],
+      "tests/api/api-md-route-coverage.test.ts": [
+        0.01
+      ],
+      "tests/api/app-webhook.test.ts": [
+        0.81
+      ],
+      "tests/api/body-limits.test.ts": [
+        0.03
+      ],
+      "tests/api/calibration-read.test.ts": [
+        0.01
+      ],
+      "tests/api/ci-workflows.test.ts": [
+        0.66
+      ],
+      "tests/api/contests.test.ts": [
+        0.03
+      ],
+      "tests/api/dashboard-read.test.ts": [
+        0.05
+      ],
+      "tests/api/disputes.test.ts": [
+        0.06
+      ],
+      "tests/api/instrumentation-fail-closed.test.ts": [
+        0.09
+      ],
+      "tests/api/instrumentation-wiring.test.ts": [
+        0.14
+      ],
+      "tests/api/instrumentation-work-mail.test.ts": [
+        0.19
+      ],
+      "tests/api/issues.test.ts": [
+        0.02
+      ],
+      "tests/api/mcp-production-wiring.test.ts": [
+        0.09
+      ],
+      "tests/api/mcp.test.ts": [
+        0.1
+      ],
+      "tests/api/member-route-auth.test.ts": [
+        0.06
+      ],
+      "tests/api/moderation-audits-read.test.ts": [
+        0.08
+      ],
+      "tests/api/moderation-contests.test.ts": [
+        0.06
+      ],
+      "tests/api/moderation-disputes.test.ts": [
+        0.07
+      ],
+      "tests/api/moderation-unwritable-closures-read.test.ts": [
+        0.01
+      ],
+      "tests/api/moderation-warmed-module-isolation.test.ts": [
+        0.02
+      ],
+      "tests/api/moderation.test.ts": [
+        0.17
+      ],
+      "tests/api/privileged-action-routes.test.ts": [
+        0.11
+      ],
+      "tests/api/protected-resource-metadata.test.ts": [
+        0.01
+      ],
+      "tests/api/readiness.test.ts": [
+        5.54
+      ],
+      "tests/api/reconciliation-wiring.test.ts": [
+        0.07
+      ],
+      "tests/api/rederivation-audit-interleaving.test.ts": [
+        0.11
+      ],
+      "tests/api/rederivation.test.ts": [
+        0.04
+      ],
+      "tests/api/registration-attempt-counts.test.ts": [
+        0.09
+      ],
+      "tests/api/registration-counts-wiring-postgres.test.ts": [
+        0.17
+      ],
+      "tests/api/repositories-app.test.ts": [
+        0.49
+      ],
+      "tests/api/repositories-errors.test.ts": [
+        0.02
+      ],
+      "tests/api/repositories-labels.test.ts": [
+        0.11
+      ],
+      "tests/api/repositories.test.ts": [
+        0.28
+      ],
+      "tests/api/route-rate-limits.test.ts": [
+        0.11
+      ],
+      "tests/api/scoped-webhooks.test.ts": [
+        0.02
+      ],
+      "tests/api/settlement-overrides.test.ts": [
+        0.05
+      ],
+      "tests/api/settlements-read.test.ts": [
+        0.01
+      ],
+      "tests/api/teams.test.ts": [
+        0.11
+      ],
+      "tests/api/tokens-session-cookie.test.ts": [
+        0.09
+      ],
+      "tests/api/tokens.test.ts": [
+        0.03
+      ],
+      "tests/api/webhook-gitlab.test.ts": [
+        0.18
+      ],
+      "tests/api/webhook-wiring.test.ts": [
+        0.01
+      ],
+      "tests/api/webhook.test.ts": [
+        0.4
+      ],
+      "tests/api/work-mail-unsubscribe-route.test.ts": [
+        0.01
+      ],
+      "tests/async/map-with-concurrency.test.ts": [
+        0.01
+      ],
+      "tests/auth/account-deletion-sign-in-action.test.ts": [
+        0.0
+      ],
+      "tests/auth/bounded-logger.test.ts": [
+        0.01
+      ],
+      "tests/auth/github-granted-scopes.test.ts": [
+        0.06
+      ],
+      "tests/auth/github-oauth-scopes.test.ts": [
+        0.01
+      ],
+      "tests/auth/github-userinfo.test.ts": [
+        0.03
+      ],
+      "tests/auth/recent-sign-in.test.ts": [
+        0.0
+      ],
+      "tests/auth/session-authenticated-at.test.ts": [
+        0.04
+      ],
+      "tests/auth/session-cookie-content.test.ts": [
+        0.09
+      ],
+      "tests/auth/session-deletion.test.ts": [
+        0.05
+      ],
+      "tests/auth/session-guard.test.ts": [
+        0.05
+      ],
+      "tests/auth/session-lifetime.test.ts": [
+        0.0
+      ],
+      "tests/auth/session-recovery-reasons.test.ts": [
+        0.0
+      ],
+      "tests/auth/session-revocation.test.ts": [
+        0.1
+      ],
+      "tests/auth/sign-in-decision.test.ts": [
+        0.04
+      ],
+      "tests/auth/sign-in-token-continuity.test.ts": [
+        0.16
+      ],
+      "tests/auth/trusted-host.test.ts": [
+        0.28
+      ],
+      "tests/auth/undecryptable-session-logging.test.ts": [
+        0.03
+      ],
+      "tests/calibration/statistics.test.ts": [
+        0.01
+      ],
+      "tests/ci/advisory-tracking.test.ts": [
+        8.04
+      ],
+      "tests/ci/audit-acceptance.test.ts": [
+        0.0
+      ],
+      "tests/ci/audit-suppression-step.test.ts": [
+        21.71
+      ],
+      "tests/ci/base-freshness.test.ts": [
+        1.2
+      ],
+      "tests/ci/ci-records.test.ts": [
+        4.52
+      ],
+      "tests/ci/comment-share.test.ts": [
+        0.0
+      ],
+      "tests/ci/commit-scopes.test.ts": [
+        3.56
+      ],
+      "tests/ci/concurrency.test.ts": [
+        0.01
+      ],
+      "tests/ci/conflict-markers.test.ts": [
+        0.57
+      ],
+      "tests/ci/dependency-audit-pr.test.ts": [
+        30.66
+      ],
+      "tests/ci/dependency-audit-push.test.ts": [
+        0.71
+      ],
+      "tests/ci/dependency-audit-retry.test.ts": [
+        5.22
+      ],
+      "tests/ci/event-policy-workflow.test.ts": [
+        0.01
+      ],
+      "tests/ci/ledger-relay-workflow.test.ts": [
+        0.01
+      ],
+      "tests/ci/pr-data-triggers.test.ts": [
+        0.02
+      ],
+      "tests/ci/pr-suite-workflow.test.ts": [
+        0.04
+      ],
+      "tests/ci/required-checks.test.ts": [
+        0.19
+      ],
+      "tests/ci/secret-scan-script.test.ts": [
+        0.57
+      ],
+      "tests/ci/secret-scan-workflow.test.ts": [
+        1.24
+      ],
+      "tests/ci/verify-fetch-provenance.test.ts": [
+        0.0
+      ],
+      "tests/ci/verify-pr-tree.test.ts": [
+        8.77
+      ],
+      "tests/ci/verify-step-reachability.test.ts": [
+        0.03
+      ],
+      "tests/ci/verify-suite-chain.test.ts": [
+        0.0
+      ],
+      "tests/ci/verify-suppression-step.test.ts": [
+        41.85
+      ],
+      "tests/ci/verify-workflow.test.ts": [
+        0.06
+      ],
+      "tests/ci/verify-zizmor-step.test.ts": [
+        2.16
+      ],
+      "tests/components/account-controls-panel.test.tsx": [
+        0.66
+      ],
+      "tests/components/account-data-page.test.tsx": [
+        1.08
+      ],
+      "tests/components/api-token-panel.test.tsx": [
+        1.41
+      ],
+      "tests/components/app-shell.test.tsx": [
+        0.36
+      ],
+      "tests/components/calibration-panel.test.tsx": [
+        0.52
+      ],
+      "tests/components/card-section-styles.test.tsx": [
+        0.02
+      ],
+      "tests/components/contests-page.test.tsx": [
+        0.63
+      ],
+      "tests/components/credit-issued.test.tsx": [
+        0.42
+      ],
+      "tests/components/dashboard.test.tsx": [
+        0.91
+      ],
+      "tests/components/disputes-page.test.tsx": [
+        0.85
+      ],
+      "tests/components/error-boundaries.test.tsx": [
+        0.54
+      ],
+      "tests/components/field-control-styles.test.tsx": [
+        0.02
+      ],
+      "tests/components/forge-identities-panel.test.tsx": [
+        2.25
+      ],
+      "tests/components/github-budget-panel.test.tsx": [
+        0.22
+      ],
+      "tests/components/issue-card.test.tsx": [
+        0.31
+      ],
+      "tests/components/issues-board.test.tsx": [
+        0.34
+      ],
+      "tests/components/landing-chrome.test.tsx": [
+        0.38
+      ],
+      "tests/components/landing.test.tsx": [
+        1.28
+      ],
+      "tests/components/legal-revisions-marker.test.tsx": [
+        0.38
+      ],
+      "tests/components/members-standings.test.tsx": [
+        0.38
+      ],
+      "tests/components/moderation-budget.test.tsx": [
+        0.62
+      ],
+      "tests/components/moderation-controls.test.tsx": [
+        0.52
+      ],
+      "tests/components/moderator-roster.test.tsx": [
+        0.32
+      ],
+      "tests/components/not-found.test.tsx": [
+        0.27
+      ],
+      "tests/components/open-audit-form.test.tsx": [
+        2.66
+      ],
+      "tests/components/pickup.test.tsx": [
+        0.45
+      ],
+      "tests/components/processing-record.test.ts": [
+        0.3
+      ],
+      "tests/components/repository-form.test.tsx": [
+        8.14
+      ],
+      "tests/components/repository-registration-gate.test.tsx": [
+        1.35
+      ],
+      "tests/components/rules.test.tsx": [
+        0.86
+      ],
+      "tests/components/sanction-contest-decision.test.tsx": [
+        0.34
+      ],
+      "tests/components/session-chrome.test.tsx": [
+        0.2
+      ],
+      "tests/components/session-recovery.test.tsx": [
+        0.33
+      ],
+      "tests/components/settlement-corrections.test.tsx": [
+        0.1
+      ],
+      "tests/components/settlement-history.test.tsx": [
+        0.51
+      ],
+      "tests/components/settlement-override-decision.test.tsx": [
+        0.37
+      ],
+      "tests/components/settlement-override-queue.test.tsx": [
+        0.35
+      ],
+      "tests/components/settlement-override-request.test.tsx": [
+        0.31
+      ],
+      "tests/components/settlement-proof.test.tsx": [
+        0.47
+      ],
+      "tests/components/site-header-wrap.test.tsx": [
+        0.02
+      ],
+      "tests/components/stats-page.test.tsx": [
+        1.02
+      ],
+      "tests/components/team-page.test.tsx": [
+        0.75
+      ],
+      "tests/components/terms-page.test.tsx": [
+        0.54
+      ],
+      "tests/components/unregister-repository-control.test.tsx": [
+        0.46
+      ],
+      "tests/components/unwritable-closure-history.test.tsx": [
+        0.21
+      ],
+      "tests/components/unwritable-closure-queue.test.tsx": [
+        0.87
+      ],
+      "tests/components/work-mail-disclosure.test.tsx": [
+        0.08
+      ],
+      "tests/components/work-mail-panel.test.tsx": [
+        0.46
+      ],
+      "tests/components/work-mail-unsubscribe.test.tsx": [
+        0.09
+      ],
+      "tests/config/dev-bind.test.ts": [
+        0.0
+      ],
+      "tests/config/issue-admission.test.ts": [
+        0.01
+      ],
+      "tests/config/next-config-agent-rules.test.ts": [
+        0.0
+      ],
+      "tests/dashboard/labels.test.ts": [
+        0.01
+      ],
+      "tests/dashboard/page-module-moderator-standing.test.ts": [
+        0.29
+      ],
+      "tests/dashboard/page-module-redirect-guard.test.ts": [
+        0.02
+      ],
+      "tests/dashboard/page-module-work-mail.test.ts": [
+        0.18
+      ],
+      "tests/dashboard/public-stats-postgres.test.ts": [
+        0.71
+      ],
+      "tests/dashboard/queries-postgres-snapshot.test.ts": [
+        0.06
+      ],
+      "tests/dashboard/queries-postgres.test.ts": [
+        3.18
+      ],
+      "tests/dashboard/queries.test.ts": [
+        9.59
+      ],
+      "tests/dashboard/redirect-loop.test.ts": [
+        0.18
+      ],
+      "tests/dashboard/registration-attempts-postgres.test.ts": [
+        0.11
+      ],
+      "tests/dashboard/session.test.ts": [
+        0.01
+      ],
+      "tests/dashboard/sponsor-credit-limit.test.ts": [
+        2.43
+      ],
+      "tests/dashboard/sponsor-headroom-ordering.test.ts": [
+        0.1
+      ],
+      "tests/dashboard/sponsor-reservation-identity.test.ts": [
+        0.36
+      ],
+      "tests/db/abandoned-reconciliation-runs.test.ts": [
+        0.81
+      ],
+      "tests/db/account-deletion.test.ts": [
+        0.56
+      ],
+      "tests/db/account-pseudonymisation-schema.test.ts": [
+        0.04
+      ],
+      "tests/db/account-reregistration.test.ts": [
+        0.13
+      ],
+      "tests/db/account-self-service.test.ts": [
+        0.14
+      ],
+      "tests/db/api-token-delivery-window.test.ts": [
+        3.54
+      ],
+      "tests/db/api-token-expiry.test.ts": [
+        0.54
+      ],
+      "tests/db/api-token-last-used.test.ts": [
+        0.23
+      ],
+      "tests/db/avatar-url-nulling-migration.test.ts": [
+        0.04
+      ],
+      "tests/db/backup-restore.test.ts": [
+        12.41
+      ],
+      "tests/db/board-generic-plan.test.ts": [
+        0.77
+      ],
+      "tests/db/board-read-indexes.test.ts": [
+        0.14
+      ],
+      "tests/db/body-minimisation.test.ts": [
+        0.37
+      ],
+      "tests/db/calibration-cohorts-snapshot.test.ts": [
+        0.03
+      ],
+      "tests/db/client-deadlines.test.ts": [
+        15.74
+      ],
+      "tests/db/client-notices.test.ts": [
+        0.01
+      ],
+      "tests/db/client.test.ts": [
+        0.01
+      ],
+      "tests/db/closed-pr-dispute-reconciliation.test.ts": [
+        0.65
+      ],
+      "tests/db/closed-pr-dispute-store.test.ts": [
+        4.22
+      ],
+      "tests/db/closed-pr-dispute-url.test.ts": [
+        4.02
+      ],
+      "tests/db/closed-pr-disputes-schema.test.ts": [
+        3.78
+      ],
+      "tests/db/closesql-connection-death.test.ts": [
+        0.05
+      ],
+      "tests/db/closesql-shutdown-before-death.test.ts": [
+        0.12
+      ],
+      "tests/db/closesql-socket-error.test.ts": [
+        0.08
+      ],
+      "tests/db/connect-phase-death.test.ts": [
+        5.82
+      ],
+      "tests/db/credit-adjustment-view.test.ts": [
+        0.18
+      ],
+      "tests/db/credit-issued.test.ts": [
+        1.13
+      ],
+      "tests/db/data-subject-requests.test.ts": [
+        2.83
+      ],
+      "tests/db/deploy-migration-status.test.ts": [
+        0.97
+      ],
+      "tests/db/donated-settlements.test.ts": [
+        0.32
+      ],
+      "tests/db/eligible-issues-query-scoping.test.ts": [
+        0.14
+      ],
+      "tests/db/eligible-issues-query-shape.test.ts": [
+        0.44
+      ],
+      "tests/db/evidence-completeness.test.ts": [
+        0.19
+      ],
+      "tests/db/fold-revision.test.ts": [
+        1.35
+      ],
+      "tests/db/forge-identities.test.ts": [
+        0.28
+      ],
+      "tests/db/gitlab-webhook-retry.test.ts": [
+        0.27
+      ],
+      "tests/db/gitlab-webhook.test.ts": [
+        0.11
+      ],
+      "tests/db/identity-claim-publication.test.ts": [
+        0.68
+      ],
+      "tests/db/max-dirty-generation.test.ts": [
+        0.6
+      ],
+      "tests/db/migrate-default-branch-guard.test.ts": [
+        6.04
+      ],
+      "tests/db/migration-checksum.test.ts": [
+        7.5
+      ],
+      "tests/db/migration-compatibility.test.ts": [
+        6.24
+      ],
+      "tests/db/migration-immutability.test.ts": [
+        0.15
+      ],
+      "tests/db/migration-manifest.test.ts": [
+        0.0
+      ],
+      "tests/db/migration-numbering.test.ts": [
+        0.01
+      ],
+      "tests/db/migration-reporting.test.ts": [
+        0.06
+      ],
+      "tests/db/migration-upgrade.test.ts": [
+        114.06
+      ],
+      "tests/db/pickup.test.ts": [
+        0.05
+      ],
+      "tests/db/pipelined-query-after-build-failure.test.ts": [
+        0.03
+      ],
+      "tests/db/policy-violation-recording.test.ts": [
+        0.77
+      ],
+      "tests/db/postgres-queue.test.ts": [
+        0.0
+      ],
+      "tests/db/postgres-url-host.test.ts": [
+        0.06
+      ],
+      "tests/db/privileged-action-credentials-migration.test.ts": [
+        22.18
+      ],
+      "tests/db/prune-noop-reconciliation-changes.test.ts": [
+        0.5
+      ],
+      "tests/db/reason-length-limits.test.ts": [
+        0.1
+      ],
+      "tests/db/reconciliation-auth-path-retired.test.ts": [
+        0.24
+      ],
+      "tests/db/reconciliation-cost.test.ts": [
+        2.0
+      ],
+      "tests/db/reconciliation-evidence.test.ts": [
+        1.49
+      ],
+      "tests/db/reconciliation-failure-cost.test.ts": [
+        0.3
+      ],
+      "tests/db/reconciliation-hold-status.test.ts": [
+        0.06
+      ],
+      "tests/db/reconciliation-lock-release.test.ts": [
+        0.0
+      ],
+      "tests/db/reconciliation-rate-limit.test.ts": [
+        0.04
+      ],
+      "tests/db/reconciliation-timestamp-canonical.test.ts": [
+        0.5
+      ],
+      "tests/db/redact-postgres-error.test.ts": [
+        0.0
+      ],
+      "tests/db/rederivation-requests.test.ts": [
+        0.16
+      ],
+      "tests/db/rederivation-status.test.ts": [
+        0.56
+      ],
+      "tests/db/repository-size-store.test.ts": [
+        0.14
+      ],
+      "tests/db/reserve-contract.test.ts": [
+        2.42
+      ],
+      "tests/db/reserve-end.test.ts": [
+        0.09
+      ],
+      "tests/db/reserve-shutdown-race.test.ts": [
+        0.06
+      ],
+      "tests/db/reserve-stranded-after-reconnect.test.ts": [
+        0.14
+      ],
+      "tests/db/retention-fk-indexes.test.ts": [
+        0.71
+      ],
+      "tests/db/retention-prune.test.ts": [
+        1.36
+      ],
+      "tests/db/retention-traversal.test.ts": [
+        3.16
+      ],
+      "tests/db/sanction-contest-store.test.ts": [
+        0.39
+      ],
+      "tests/db/scheduled-reconnect.test.ts": [
+        0.02
+      ],
+      "tests/db/schema.test.ts": [
+        13.04
+      ],
+      "tests/db/shutdown-backlog-drain.test.ts": [
+        3.1
+      ],
+      "tests/db/sql-array-cold-client.test.ts": [
+        0.25
+      ],
+      "tests/db/statement-deadline-waiters.test.ts": [
+        4.09
+      ],
+      "tests/db/sweep-authority.test.ts": [
+        1.33
+      ],
+      "tests/db/sweep-catchup.test.ts": [
+        0.55
+      ],
+      "tests/db/sweep-pass-store.test.ts": [
+        3.31
+      ],
+      "tests/db/sweep-repository-share.test.ts": [
+        11.84
+      ],
+      "tests/db/sweep-round-store.test.ts": [
+        5.24
+      ],
+      "tests/db/sweep-walk-schema.test.ts": [
+        0.35
+      ],
+      "tests/db/team-ledger.test.ts": [
+        0.57
+      ],
+      "tests/db/team-settlements.test.ts": [
+        1.39
+      ],
+      "tests/db/team-store.test.ts": [
+        0.51
+      ],
+      "tests/db/types-fetch-failure.test.ts": [
+        0.92
+      ],
+      "tests/db/unregistered-webhook-credentials.test.ts": [
+        1.3
+      ],
+      "tests/db/webhook-body-digest.test.ts": [
+        0.72
+      ],
+      "tests/db/webhook-credential-failure-log.test.ts": [
+        0.04
+      ],
+      "tests/db/webhook-issue-state.test.ts": [
+        1.0
+      ],
+      "tests/db/webhook-receipt-scope.test.ts": [
+        0.95
+      ],
+      "tests/db/work-mail-digest.test.ts": [
+        0.37
+      ],
+      "tests/db/work-mail-routes.test.ts": [
+        0.03
+      ],
+      "tests/db/work-mail-store.test.ts": [
+        0.72
+      ],
+      "tests/db/worker-failure-logging.test.ts": [
+        20.65
+      ],
+      "tests/deploy/account-cli.test.ts": [
+        5.25
+      ],
+      "tests/deploy/alert-units.test.ts": [
+        0.07
+      ],
+      "tests/deploy/bounce-units.test.ts": [
+        0.1
+      ],
+      "tests/deploy/build-telemetry.test.ts": [
+        0.0
+      ],
+      "tests/deploy/canary-units.test.ts": [
+        0.1
+      ],
+      "tests/deploy/compose-file.test.ts": [
+        0.0
+      ],
+      "tests/deploy/container-build-script.test.ts": [
+        3.43
+      ],
+      "tests/deploy/container-image.test.ts": [
+        131.39
+      ],
+      "tests/deploy/csp-dynamic-pages.test.ts": [
+        0.0
+      ],
+      "tests/deploy/deploy-install.test.ts": [
+        0.54
+      ],
+      "tests/deploy/deploy-readme-fallback.test.ts": [
+        7.08
+      ],
+      "tests/deploy/deploy-revision-ledger.test.ts": [
+        15.4
+      ],
+      "tests/deploy/deploy-revision-startup-sweep.test.ts": [
+        40.09
+      ],
+      "tests/deploy/deploy-revision.test.ts": [
+        40.85
+      ],
+      "tests/deploy/edge-instrumentation-bundle.test.ts": [
+        138.26
+      ],
+      "tests/deploy/eslint-config.test.ts": [
+        0.45
+      ],
+      "tests/deploy/gitignore-policy.test.ts": [
+        0.07
+      ],
+      "tests/deploy/next-config.test.ts": [
+        31.27
+      ],
+      "tests/deploy/postgres-patch.test.ts": [
+        0.08
+      ],
+      "tests/deploy/proxy-csp.test.ts": [
+        0.26
+      ],
+      "tests/deploy/reconcile-cli.test.ts": [
+        30.43
+      ],
+      "tests/deploy/register-path-aliases.test.ts": [
+        0.52
+      ],
+      "tests/deploy/release-build.test.ts": [
+        169.85
+      ],
+      "tests/deploy/release-check.test.ts": [
+        9.46
+      ],
+      "tests/deploy/release-prepare.test.ts": [
+        5.91
+      ],
+      "tests/deploy/release-script.test.ts": [
+        13.11
+      ],
+      "tests/deploy/tsconfig.test.ts": [
+        0.0
+      ],
+      "tests/deploy/unit-file.test.ts": [
+        0.11
+      ],
+      "tests/deploy/webhook-upgrade-cli.test.ts": [
+        4.94
+      ],
+      "tests/deploy/webhook-upgrade-order.test.ts": [
+        0.35
+      ],
+      "tests/docs/backup-restore-runbook.test.ts": [
+        0.24
+      ],
+      "tests/docs/decommission-runbook.test.ts": [
+        0.2
+      ],
+      "tests/docs/env-recovery-commands.test.ts": [
+        1.52
+      ],
+      "tests/docs/incident-response-recovery.test.ts": [
+        0.04
+      ],
+      "tests/docs/ledger-app-key-rotation.test.ts": [
+        0.02
+      ],
+      "tests/docs/root-documents.test.ts": [
+        0.07
+      ],
+      "tests/domain/claim-path-warnings.test.ts": [
+        0.01
+      ],
+      "tests/domain/claim-path.test.ts": [
+        0.1
+      ],
+      "tests/domain/difficulty-scheme.test.ts": [
+        0.01
+      ],
+      "tests/domain/ledger.test.ts": [
+        0.0
+      ],
+      "tests/domain/settlement.test.ts": [
+        0.0
+      ],
+      "tests/fold/cache-body-narrowing.test.ts": [
+        0.01
+      ],
+      "tests/fold/catalog-change.test.ts": [
+        0.25
+      ],
+      "tests/fold/diff-fingerprint.test.ts": [
+        0.01
+      ],
+      "tests/fold/donation-mark.test.ts": [
+        0.03
+      ],
+      "tests/fold/donation-materialization.test.ts": [
+        0.96
+      ],
+      "tests/fold/done-when.test.ts": [
+        0.03
+      ],
+      "tests/fold/evidence-facts.test.ts": [
+        0.01
+      ],
+      "tests/fold/fold-revision.test.ts": [
+        0.0
+      ],
+      "tests/fold/guarded-callback.test.ts": [
+        0.01
+      ],
+      "tests/fold/history-authority.test.ts": [
+        0.02
+      ],
+      "tests/fold/incremental-reconciliation.test.ts": [
+        3.28
+      ],
+      "tests/fold/materialization-removals.test.ts": [
+        0.85
+      ],
+      "tests/fold/moderation-history-postgres.test.ts": [
+        0.41
+      ],
+      "tests/fold/moderation-history.test.ts": [
+        0.03
+      ],
+      "tests/fold/opening-label-authority.test.ts": [
+        0.02
+      ],
+      "tests/fold/outside-repository-mark.test.ts": [
+        0.0
+      ],
+      "tests/fold/pre-registration-closures.test.ts": [
+        0.02
+      ],
+      "tests/fold/rationale-evidence-determinism.test.ts": [
+        0.02
+      ],
+      "tests/fold/reconcile-as-sponsor.test.ts": [
+        0.02
+      ],
+      "tests/fold/reconcile.test.ts": [
+        6.08
+      ],
+      "tests/fold/reconciliation-budget-hold.test.ts": [
+        1.67
+      ],
+      "tests/fold/reconciliation-cooldown.test.ts": [
+        0.56
+      ],
+      "tests/fold/reconciliation-coordination-pool.test.ts": [
+        0.09
+      ],
+      "tests/fold/reconciliation-fairness.test.ts": [
+        0.02
+      ],
+      "tests/fold/reconciliation-http-concurrency.test.ts": [
+        0.1
+      ],
+      "tests/fold/reconciliation-http-cooldown.test.ts": [
+        8.64
+      ],
+      "tests/fold/reconciliation-jobs-store.test.ts": [
+        1.61
+      ],
+      "tests/fold/reconciliation-lock-reclaim.test.ts": [
+        0.01
+      ],
+      "tests/fold/reconciliation-oauth-only.test.ts": [
+        0.18
+      ],
+      "tests/fold/reconciliation-retry.test.ts": [
+        0.03
+      ],
+      "tests/fold/reconciliation-stranded-reservation.test.ts": [
+        0.23
+      ],
+      "tests/fold/reconciliation-walk-adapters.test.ts": [
+        0.04
+      ],
+      "tests/fold/reconciliation-walk-completion.test.ts": [
+        0.31
+      ],
+      "tests/fold/reconciliation-walk-gitlab-adapter.test.ts": [
+        0.08
+      ],
+      "tests/fold/reconciliation-walk-gitlab.test.ts": [
+        0.12
+      ],
+      "tests/fold/reconciliation-walk-integration.test.ts": [
+        1.75
+      ],
+      "tests/fold/reconciliation-walk-selection.test.ts": [
+        0.07
+      ],
+      "tests/fold/reconciliation-walk.test.ts": [
+        0.25
+      ],
+      "tests/fold/reconciliation-worker.test.ts": [
+        0.23
+      ],
+      "tests/fold/reconciliation-write-fencing.test.ts": [
+        3.54
+      ],
+      "tests/fold/rederivation.test.ts": [
+        0.12
+      ],
+      "tests/fold/renamed-owner-reconciliation.test.ts": [
+        0.49
+      ],
+      "tests/fold/repository-fold.test.ts": [
+        0.04
+      ],
+      "tests/fold/repository-identity-store.test.ts": [
+        0.18
+      ],
+      "tests/fold/repository-ownership.test.ts": [
+        0.0
+      ],
+      "tests/fold/repository-progress.test.ts": [
+        0.34
+      ],
+      "tests/fold/repository-size-measure.test.ts": [
+        0.03
+      ],
+      "tests/fold/repository-size.test.ts": [
+        0.0
+      ],
+      "tests/fold/review-rounds.test.ts": [
+        0.0
+      ],
+      "tests/fold/settlement-evidence-authority.test.ts": [
+        0.07
+      ],
+      "tests/fold/settlement-override-apply.test.ts": [
+        0.0
+      ],
+      "tests/fold/settlement-override-materialization.test.ts": [
+        1.5
+      ],
+      "tests/fold/sponsor-account-rename.test.ts": [
+        0.01
+      ],
+      "tests/fold/sponsor-rename-reconciliation.test.ts": [
+        0.4
+      ],
+      "tests/fold/sweep-pass-page-ceiling.test.ts": [
+        0.0
+      ],
+      "tests/fold/sweep-request-budget.test.ts": [
+        0.1
+      ],
+      "tests/fold/sweep-size.test.ts": [
+        0.04
+      ],
+      "tests/fold/sweep.test.ts": [
+        0.17
+      ],
+      "tests/fold/team-membership.test.ts": [
+        0.02
+      ],
+      "tests/fold/unreadable-connection.test.ts": [
+        0.05
+      ],
+      "tests/forge/change-gitlab-catalog.test.ts": [
+        0.02
+      ],
+      "tests/forge/credential-rejection-seam.test.ts": [
+        0.02
+      ],
+      "tests/forge/fold-crediting.test.ts": [
+        0.41
+      ],
+      "tests/forge/gateway-destination-routes.test.ts": [
+        0.07
+      ],
+      "tests/forge/gateway-seam.test.ts": [
+        0.0
+      ],
+      "tests/forge/gitlab-client.test.ts": [
+        2.02
+      ],
+      "tests/forge/gitlab-commit-read-fold-boundary.test.ts": [
+        0.02
+      ],
+      "tests/forge/gitlab-subject-listing.test.ts": [
+        0.05
+      ],
+      "tests/forge/gitlab-webhook-schema.test.ts": [
+        0.05
+      ],
+      "tests/forge/gitlab-webhook-token.test.ts": [
+        0.0
+      ],
+      "tests/forge/identities-destination.test.ts": [
+        0.06
+      ],
+      "tests/forge/identities-route.test.ts": [
+        0.07
+      ],
+      "tests/forge/identities-service.test.ts": [
+        0.04
+      ],
+      "tests/forge/instance-transport-limits.test.ts": [
+        0.85
+      ],
+      "tests/forge/register-gitlab.test.ts": [
+        0.07
+      ],
+      "tests/forge/sanitize-forge-strings.test.ts": [
+        0.0
+      ],
+      "tests/github/app-installation-auth.test.ts": [
+        0.07
+      ],
+      "tests/github/app-registration-config.test.ts": [
+        0.0
+      ],
+      "tests/github/app-registration.test.ts": [
+        0.06
+      ],
+      "tests/github/claim-action-releases.test.ts": [
+        0.09
+      ],
+      "tests/github/client.test.ts": [
+        0.92
+      ],
+      "tests/github/commit-author.test.ts": [
+        0.0
+      ],
+      "tests/github/connection-nodes.test.ts": [
+        0.03
+      ],
+      "tests/github/failure-diagnostics.test.ts": [
+        2.01
+      ],
+      "tests/github/gather-issue.test.ts": [
+        0.05
+      ],
+      "tests/github/graphql-body-stream.test.ts": [
+        0.01
+      ],
+      "tests/github/graphql-budget.test.ts": [
+        0.8
+      ],
+      "tests/github/graphql-cost.test.ts": [
+        0.07
+      ],
+      "tests/github/graphql-rate-limit.test.ts": [
+        0.03
+      ],
+      "tests/github/graphql.test.ts": [
+        0.35
+      ],
+      "tests/github/pull-request.test.ts": [
+        0.0
+      ],
+      "tests/github/rate-limit-backoff.test.ts": [
+        0.04
+      ],
+      "tests/github/registration-app-display.test.ts": [
+        0.0
+      ],
+      "tests/github/repository-count.test.ts": [
+        0.01
+      ],
+      "tests/github/request-deadline.test.ts": [
+        2.7
+      ],
+      "tests/github/subject-listing.test.ts": [
+        0.06
+      ],
+      "tests/github/timeline-manifest-cap.test.ts": [
+        0.04
+      ],
+      "tests/github/webhook-schema.test.ts": [
+        0.02
+      ],
+      "tests/github/webhook-signature.test.ts": [
+        0.03
+      ],
+      "tests/github/webhook-upgrade.test.ts": [
+        0.06
+      ],
+      "tests/github/workflow-deadline.test.ts": [
+        1.3
+      ],
+      "tests/lib/api-version.test.ts": [
+        0.0
+      ],
+      "tests/lib/display-instant-format.test.ts": [
+        0.02
+      ],
+      "tests/lib/dispute-http-surface.test.ts": [
+        7.48
+      ],
+      "tests/lib/drain-summary-logger.test.ts": [
+        0.01
+      ],
+      "tests/lib/eligible-issues-page.test.ts": [
+        0.03
+      ],
+      "tests/lib/env.test.ts": [
+        0.0
+      ],
+      "tests/lib/failure-logger.test.ts": [
+        0.0
+      ],
+      "tests/lib/format-instant.test.ts": [
+        0.01
+      ],
+      "tests/lib/gitlab/api-error.test.ts": [
+        0.0
+      ],
+      "tests/lib/http-snapshot-updater.test.ts": [
+        0.02
+      ],
+      "tests/lib/http-surface-change.test.ts": [
+        0.43
+      ],
+      "tests/lib/http-surface-documented-fields.test.ts": [
+        0.01
+      ],
+      "tests/lib/http-surface-failures.test.ts": [
+        1.44
+      ],
+      "tests/lib/http-surface-non-envelope.test.ts": [
+        155.4
+      ],
+      "tests/lib/http-surface-record.test.ts": [
+        74.23
+      ],
+      "tests/lib/http-surface-snapshot.test.ts": [
+        61.63
+      ],
+      "tests/lib/http-surface-type-edges.test.ts": [
+        157.41
+      ],
+      "tests/lib/http/error-response.test.ts": [
+        5.44
+      ],
+      "tests/lib/journal-levels.test.ts": [
+        0.71
+      ],
+      "tests/lib/mcp-protocol.test.ts": [
+        0.01
+      ],
+      "tests/lib/mcp-snapshot-updater.test.ts": [
+        0.01
+      ],
+      "tests/lib/mcp-surface-change.test.ts": [
+        0.0
+      ],
+      "tests/lib/mcp-tools-parity.test.ts": [
+        0.03
+      ],
+      "tests/lib/mcp-tools-snapshot.test.ts": [
+        0.06
+      ],
+      "tests/lib/mcp-tools.test.ts": [
+        0.08
+      ],
+      "tests/lib/plural.test.ts": [
+        0.0
+      ],
+      "tests/lib/public-stats.test.ts": [
+        0.01
+      ],
+      "tests/lib/request-body.test.ts": [
+        0.04
+      ],
+      "tests/lib/snapshot-updater-cli.test.ts": [
+        513.24
+      ],
+      "tests/lib/strip-name-prefix.test.ts": [
+        0.0
+      ],
+      "tests/lib/surface-version.test.ts": [
+        0.02
+      ],
+      "tests/lib/validation/reason.test.ts": [
+        0.01
+      ],
+      "tests/lib/work-mail-config.test.ts": [
+        0.03
+      ],
+      "tests/lib/work-mail-digest.test.ts": [
+        0.03
+      ],
+      "tests/lib/work-mail-message.test.ts": [
+        0.02
+      ],
+      "tests/lib/work-mail-transport.test.ts": [
+        0.31
+      ],
+      "tests/lib/work-mail-unsubscribe.test.ts": [
+        0.01
+      ],
+      "tests/members/queries.test.ts": [
+        0.09
+      ],
+      "tests/moderation/adjustment.test.ts": [
+        0.01
+      ],
+      "tests/moderation/credential-reference.test.ts": [
+        0.15
+      ],
+      "tests/moderation/credit-adjustment-store.test.ts": [
+        3.01
+      ],
+      "tests/moderation/current-role.test.ts": [
+        0.06
+      ],
+      "tests/moderation/moderator-roles.test.ts": [
+        0.01
+      ],
+      "tests/moderation/postgres-store.test.ts": [
+        2.79
+      ],
+      "tests/moderation/service.test.ts": [
+        0.05
+      ],
+      "tests/moderation/settlement-override-service.test.ts": [
+        0.01
+      ],
+      "tests/moderation/settlement-override-store.test.ts": [
+        0.24
+      ],
+      "tests/moderation/transitions.test.ts": [
+        0.0
+      ],
+      "tests/moderation/writer-credential.test.ts": [
+        0.0
+      ],
+      "tests/repositories/app-registration.test.ts": [
+        0.16
+      ],
+      "tests/repositories/error-catalog.test.ts": [
+        0.16
+      ],
+      "tests/repositories/gitlab-forge-errors.test.ts": [
+        0.0
+      ],
+      "tests/repositories/gitlab-unregister.test.ts": [
+        0.01
+      ],
+      "tests/repositories/postgres-store.test.ts": [
+        0.56
+      ],
+      "tests/repositories/register.test.ts": [
+        0.15
+      ],
+      "tests/repositories/unregister-body-scrub.test.ts": [
+        0.23
+      ],
+      "tests/repositories/upgrade-webhooks.test.ts": [
+        0.09
+      ],
+      "tests/repositories/webhook-upgrade-postgres.test.ts": [
+        2.93
+      ],
+      "tests/scripts/await-pr-suite.test.ts": [
+        1.96
+      ],
+      "tests/scripts/check-actions-event-policy.test.ts": [
+        0.55
+      ],
+      "tests/scripts/check-legal-revisions.test.ts": [
+        3.37
+      ],
+      "tests/scripts/check-page-geometry-board.test.ts": [
+        0.38
+      ],
+      "tests/scripts/check-page-geometry-launch.test.ts": [
+        1.18
+      ],
+      "tests/scripts/check-page-geometry-ownership.test.ts": [
+        5.49
+      ],
+      "tests/scripts/check-page-geometry-session.test.ts": [
+        0.13
+      ],
+      "tests/scripts/check-prerendered-routes.test.ts": [
+        1.18
+      ],
+      "tests/scripts/db-migrate-env-file.test.ts": [
+        2.25
+      ],
+      "tests/scripts/db-offhost-backup.test.ts": [
+        7.44
+      ],
+      "tests/scripts/generate-third-party-notices.test.ts": [
+        2.04
+      ],
+      "tests/scripts/ledger-relay-app-key-rotation.test.ts": [
+        0.49
+      ],
+      "tests/scripts/ledger-relay-dependency-audit.test.ts": [
+        0.03
+      ],
+      "tests/scripts/ledger-relay-fork.test.ts": [
+        0.08
+      ],
+      "tests/scripts/ledger-relay-http.test.ts": [
+        0.16
+      ],
+      "tests/scripts/ledger-relay-job-budget.test.ts": [
+        0.08
+      ],
+      "tests/scripts/ledger-relay-mint-permissions.test.ts": [
+        0.03
+      ],
+      "tests/scripts/ledger-relay-never-started.test.ts": [
+        0.04
+      ],
+      "tests/scripts/ledger-relay-publication.test.ts": [
+        2.52
+      ],
+      "tests/scripts/ledger-relay-refused-producer.test.ts": [
+        0.02
+      ],
+      "tests/scripts/ledger-relay-secret-scan.test.ts": [
+        0.04
+      ],
+      "tests/scripts/ledger-relay-sweep-only.test.ts": [
+        0.11
+      ],
+      "tests/scripts/ledger-relay-sweep.test.ts": [
+        0.02
+      ],
+      "tests/scripts/ledger-relay-trusted-producer.test.ts": [
+        0.0
+      ],
+      "tests/scripts/ledger-relay-upstream.test.ts": [
+        0.28
+      ],
+      "tests/scripts/ledger-relay.test.ts": [
+        0.3
+      ],
+      "tests/scripts/overflow-alert.test.ts": [
+        13.06
+      ],
+      "tests/scripts/overflow-bounce.test.ts": [
+        1.05
+      ],
+      "tests/scripts/overflow-canary.test.ts": [
+        43.86
+      ],
+      "tests/scripts/owned-processes.test.ts": [
+        1.37
+      ],
+      "tests/scripts/perf-budget.test.ts": [
+        0.01
+      ],
+      "tests/scripts/perf-node-setup.test.ts": [
+        0.17
+      ],
+      "tests/scripts/perf-routing.test.ts": [
+        0.01
+      ],
+      "tests/scripts/perf-workloads.test.ts": [
+        30.44
+      ],
+      "tests/scripts/ratchets.test.ts": [
+        6.49
+      ],
+      "tests/scripts/resolve-suite-pull-request.test.ts": [
+        37.76
+      ],
+      "tests/scripts/seed-board-benchmark.test.ts": [
+        1.36
+      ],
+      "tests/scripts/third-party-notices-route.test.ts": [
+        0.02
+      ],
+      "tests/security/api-token.test.ts": [
+        0.02
+      ],
+      "tests/security/authorization-gate-failure-logging.test.ts": [
+        0.02
+      ],
+      "tests/security/credential-binding-postgres.test.ts": [
+        0.09
+      ],
+      "tests/security/credential-reencryption-cli.test.ts": [
+        5.03
+      ],
+      "tests/security/credential-reencryption-postgres.test.ts": [
+        5.16
+      ],
+      "tests/security/github-authorization-url.test.ts": [
+        0.27
+      ],
+      "tests/security/github-oauth-scope.test.ts": [
+        0.21
+      ],
+      "tests/security/identity-link-fetch.test.ts": [
+        0.08
+      ],
+      "tests/security/local-database-exposure.test.ts": [
+        0.34
+      ],
+      "tests/security/privileged-action-log.test.ts": [
+        0.01
+      ],
+      "tests/security/protected-resource-metadata.test.ts": [
+        0.0
+      ],
+      "tests/security/public-destination-deployment.test.ts": [
+        0.11
+      ],
+      "tests/security/public-destination.test.ts": [
+        4.24
+      ],
+      "tests/security/registration-sign-in-counts.test.ts": [
+        0.03
+      ],
+      "tests/security/request-origin.test.ts": [
+        0.06
+      ],
+      "tests/security/route-credential.test.ts": [
+        0.01
+      ],
+      "tests/security/server-action-origin.test.ts": [
+        0.12
+      ],
+      "tests/security/sign-in-actions.test.ts": [
+        0.2
+      ],
+      "tests/security/sign-out-action.test.ts": [
+        0.02
+      ],
+      "tests/security/token-cipher.test.ts": [
+        0.02
+      ],
+      "tests/webhooks/credentials.test.ts": [
+        0.0
+      ],
+      "tests/webhooks/log-field.test.ts": [
+        0.02
+      ],
+      "tests/webhooks/processor.test.ts": [
+        0.12
+      ],
+      "tests/webhooks/rate-limit.test.ts": [
+        0.01
+      ],
+      "tests/webhooks/repository-progress.test.ts": [
+        0.16
+      ]
     }
   }
 }
