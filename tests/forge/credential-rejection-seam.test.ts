@@ -13,9 +13,7 @@ afterAll(() => { vi.resetModules(); });
 // The sponsor gateway builds its GitLabGateway on the default transport, which
 // refuses a non-public instance and has no injection seam here; route it to
 // the global fetch each test stubs.
-vi.mock("@/lib/security/gitlab-api-fetch", () => ({
-  gitlabApiFetch: (input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init),
-}));
+vi.mock("@/lib/security/gitlab-api-fetch", () => ({ gitlabApiFetch: (input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init) }));
 
 afterEach(() => { vi.unstubAllGlobals(); });
 

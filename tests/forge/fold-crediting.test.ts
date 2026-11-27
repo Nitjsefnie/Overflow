@@ -171,14 +171,7 @@ async function createGitLabScenario(
     }],
   };
 
-  return {
-    store: new PostgresFoldStore(),
-    repositoryId: repository.id,
-    sponsorId: sponsor.id,
-    linkedUserId: linked.id,
-    forgeUserId: FORGE_USER_ID,
-    snapshot,
-  };
+  return { store: new PostgresFoldStore(), repositoryId: repository.id, sponsorId: sponsor.id, linkedUserId: linked.id, forgeUserId: FORGE_USER_ID, snapshot };
 }
 
 function foldOf(scenario: Scenario) {
