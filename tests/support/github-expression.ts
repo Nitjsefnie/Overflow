@@ -140,10 +140,10 @@ function parseExpression(source: string): Node {
           throw new Error(`function ${token.text}() is called with arguments; this evaluator implements only the argument-less status functions`);
         }
         take();
-        if (!Object.hasOwn(STATUS_FUNCTIONS, token.text)) {
+        if (!Object.hasOwn(STATUS_FUNCTIONS, token.text.toLowerCase())) {
           throw new Error(`${token.text}() is not implemented here — the subset is success(), always(), failure() and cancelled()`);
         }
-        return { kind: "status", name: token.text };
+        return { kind: "status", name: token.text.toLowerCase() };
       }
       const segments = [token.text];
       while (peek().kind === "punct" && peek().text === ".") {
@@ -229,18 +229,22 @@ function asScalar(value: unknown): ExpressionValue | undefined {
   return undefined;
 }
 
+// The runner reads a function, a context and a property name in any case; off Windows only `env`'s own keys keep theirs.
+const keyed = (holder: object, name: string, exact = false): unknown =>
+  Object.entries(holder).find(([key]) => (exact ? key === name : key.toLowerCase() === name.toLowerCase()))?.[1];
+
 function resolvePath(segments: string[], context: ActionsContext): ExpressionValue {
   const [root, ...rest] = segments;
-  if (!CONTEXT_ROOTS.includes(root)) {
+  if (!CONTEXT_ROOTS.includes(root.toLowerCase())) {
     throw new Error(
       `${root} is not a context this evaluator resolves; a path rooted outside a GitHub context is a typo, and reading it as null would disable every step that uses it`,
     );
   }
-  let current: unknown = context[root];
-  for (const segment of rest) {
+  let current: unknown = keyed(context, root);
+  for (const [depth, segment] of rest.entries()) {
     if (current === null || current === undefined) return null;
     if (typeof current !== "object") throw new Error(`cannot read ${segment} from a non-object value reached by ${segments.join(".")}`);
-    current = (current as Record<string, unknown>)[segment];
+    current = keyed(current, segment, depth === 0 && root.toLowerCase() === "env");
   }
   if (current === undefined) return null;
   const scalar = asScalar(current);

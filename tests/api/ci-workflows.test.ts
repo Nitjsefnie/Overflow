@@ -650,9 +650,9 @@ cp .github/workflows/*.yml .github/workflows-pr/
           const value = (input: unknown) => renderExpressions(String(input), legs ? { matrix: { [runtime.axis!]: version } } : {});
           for (const step of job.steps) {
             if (step.uses?.startsWith("actions/setup-node@")) {
-              // setup-node takes node-version over node-version-file; package.json is the one file read here.
+              // setup-node takes node-version over node-version-file, a path it resolves from the workspace; package.json is the one file read here.
               const { "node-version": pinned, "node-version-file": versionFile } = step.with ?? {};
-              expect(pinned === undefined ? (versionFile === "package.json" ? fromPackage : versionFile) : value(pinned), location).toBe(version);
+              expect(pinned === undefined ? (resolve(String(versionFile)) === resolve("package.json") ? fromPackage : versionFile) : value(pinned), location).toBe(version);
             }
             const cell = `ubuntu-latest-node${version}`;
             if (step.uses?.startsWith("Nitjsefnie-Actions/test-ratchet/plan@")) {
@@ -1664,7 +1664,7 @@ async function prSuiteRuntimes(base: string, head: string): Promise<{ status: nu
     }
     const outputs = Object.fromEntries(Object.entries(jobs.plan!.outputs ?? {}).map(([name, value]) => [name, renderExpressions(value, { steps })]));
     const axes = Object.entries(jobs.test!.strategy!.matrix).flatMap(([axis, source]) => {
-      const inner = /^\$\{\{\s*fromJSON\((.*)\)\s*\}\}$/.exec(String(source))?.[1];
+      const inner = /^\$\{\{\s*fromJSON\((.*)\)\s*\}\}$/i.exec(String(source))?.[1];
       return inner === undefined ? [] : [{ axis, values: JSON.parse(String(evaluateExpression(inner, { needs: { plan: { outputs } } })) || "null") as string[] }];
     });
     expect(axes, "pr-suite.yml jobs.test: one matrix axis is a whole fromJSON(needs.plan.outputs.<name>)").toHaveLength(1);
