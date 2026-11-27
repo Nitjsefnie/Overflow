@@ -1525,15 +1525,21 @@ differ.
    run only the block's `ln -sfn` line and its version check: the `mv` would
    move a newly extracted tree inside the existing directory instead of
    replacing it.
-3. Run section 3's second command block with `engines.node` in its `ln -sfn`
-   line and the version after `pnpm@` in `packageManager` in its
+3. From `/tmp`, run section 3's second command block with `engines.node` in
+   its `ln -sfn` line and the version after `pnpm@` in `packageManager` in its
    `corepack prepare` line. A revision that changes only `packageManager`
    needs only this block.
-4. Check from `/tmp`, where section 3's blocks run:
-   `/usr/local/bin/node --version` must print `v` followed by `engines.node`,
-   and `pnpm --version` must print the version after `pnpm@` in
-   `packageManager`. Inside `/srv/overflow` the same command reports the pin of
-   the checked-out `package.json`, whichever version was activated.
+4. Check, still from `/tmp`: `/usr/local/bin/node --version` must print `v`
+   followed by `engines.node`;
+   `readlink -f /usr/local/sbin/corepack /usr/local/sbin/pnpm` must print two
+   paths under `/usr/local/lib/nodejs/node-v<version>/`, `<version>` being
+   `engines.node`; and `pnpm --version` must print the version after `pnpm@`
+   in `packageManager`. A path under another Node means the block's `ln -sfn`
+   or `corepack enable` line did not run, or ran a `corepack` that came
+   earlier on `PATH`: run the block again with `/usr/local/sbin/corepack` in
+   place of the bare `corepack`. Inside `/srv/overflow` `pnpm --version` by
+   default reports the pin of the checked-out `package.json`, whichever
+   version was activated, which is why step 3 and this check run from `/tmp`.
 5. Deploy at once, with the script or the manual block.
 
 A step that fails leaves the host in one of these states:
@@ -1553,7 +1559,7 @@ A step that fails leaves the host in one of these states:
   can be run again from its first line.
 
 To go back, run the same lines with the previous versions: the two `ln -sfn`
-lines, `corepack enable`, `corepack prepare` and both version checks. Nothing
+lines, `corepack enable`, `corepack prepare` and step 4's checks. Nothing
 in this step removes the previous Node's directory under
 `/usr/local/lib/nodejs`, so those lines find it where it was. Section 9's
 release rollback does not go back for you: it switches the build and leaves
