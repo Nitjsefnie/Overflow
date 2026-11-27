@@ -4,8 +4,8 @@
   "hysteresis": 0.5,
   "coverage": {
     "javascript": {
-      "floor": 93.86,
-      "measured": 94.86
+      "floor": 94.37,
+      "measured": 95.37
     }
   }
 }

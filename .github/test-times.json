@@ -2100,7 +2100,8 @@
         1.67
       ],
       "tests/dashboard/queries.test.ts": [
-        9.59
+        9.59,
+        6.02
       ],
       "tests/dashboard/redirect-loop.test.ts": [
         0.18
@@ -2225,7 +2226,8 @@
         0.19
       ],
       "tests/db/fold-revision.test.ts": [
-        1.35
+        1.35,
+        2.36
       ],
       "tests/db/forge-identities.test.ts": [
         0.28
@@ -2401,7 +2403,8 @@
         1.39
       ],
       "tests/db/team-store.test.ts": [
-        0.51
+        0.51,
+        1.91
       ],
       "tests/db/types-fetch-failure.test.ts": [
         0.92
@@ -2458,7 +2461,8 @@
       ],
       "tests/deploy/container-image.test.ts": [
         131.39,
-        83.98
+        83.98,
+        259.87
       ],
       "tests/deploy/csp-dynamic-pages.test.ts": [
         0.0
@@ -2578,6 +2582,9 @@
       ],
       "tests/fold/catalog-change.test.ts": [
         0.25
+      ],
+      "tests/fold/deleted-issue-reconciliation.test.ts": [
+        0.82
       ],
       "tests/fold/diff-fingerprint.test.ts": [
         0.01
