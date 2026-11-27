@@ -262,20 +262,14 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
       OVERFLOW_MERGE_SHA: "${{ steps.pr-tree.outputs.merge_sha }}",
       OVERFLOW_BASE_SHA: "${{ steps.pr.outputs.base_sha }}",
     });
-    expect(step.if, "the step keeps its workflow_run guard and skips superseded cancellations").toBe(
-      "${{ steps.pr.outputs.superseded != 'true' && (github.event_name == 'workflow_run') }}",
-    );
+    expect(step.if, "the step keeps its workflow_run guard and skips superseded cancellations").toBe("${{ steps.pr.outputs.superseded != 'true' && (github.event_name == 'workflow_run') }}");
     expect(step["continue-on-error"], "the gate must not tolerate its own failure").toBeFalsy();
     const names = steps.map((entry) => entry.name);
-    expect(names.indexOf(STEP_NAME)).toBeGreaterThan(
-      names.indexOf("Materialise the pull request's merge tree as data"),
-    );
+    expect(names.indexOf(STEP_NAME)).toBeGreaterThan(names.indexOf("Materialise the pull request's merge tree as data"));
     expect(names.indexOf(STEP_NAME)).toBeLessThan(names.indexOf("Base freshness"));
     expect(step.run, "the read is from git objects").toContain("git ls-tree");
     expect(step.run).toContain("git cat-file blob");
-    expect(step.run, "no shell interpolation of event values — they arrive through env:").not.toContain(
-      "${{",
-    );
+    expect(step.run, "no shell interpolation of event values — they arrive through env:").not.toContain("${{");
     for (const forbidden of ["GH_TOKEN", "GITHUB_TOKEN", "OVERFLOW_PR_TREE"]) {
       expect(step.run, `the run block must not touch ${forbidden}`).not.toContain(forbidden);
     }
@@ -284,21 +278,11 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     // manifest's discipline (base-defined via git objects, --require-hashes,
     // a sanitized copy under RUNNER_TEMP). The exact install shape is pinned;
     // anything else pip-shaped must be added here deliberately.
-    expect(step.run, "the step installs PyYAML from a hash-pinned manifest").toContain(
-      "pip install --no-deps --require-hashes --disable-pip-version-check",
-    );
-    expect(step.run, "the install targets a fresh RUNNER_TEMP site").toContain(
-      '--target "${sanitized}/site" -r "${sanitized}/requirements.txt"',
-    );
-    expect(step.run, "the manifest is read from the base side").toContain(
-      'install_pyyaml "${OVERFLOW_BASE_SHA:?}"',
-    );
-    expect(step.run, "no pip download — the hash-gated install is the only channel").not.toContain(
-      "pip download",
-    );
-    expect(step.run, "the step must not run a package manager").not.toMatch(
-      /\b(pnpm|npm|npx|yarn|corepack)\s+(audit|install|ci|i|add|update|remove|run|exec|dlx|config)\b/,
-    );
+    expect(step.run, "the step installs PyYAML from a hash-pinned manifest").toContain("pip install --no-deps --require-hashes --disable-pip-version-check");
+    expect(step.run, "the install targets a fresh RUNNER_TEMP site").toContain('--target "${sanitized}/site" -r "${sanitized}/requirements.txt"');
+    expect(step.run, "the manifest is read from the base side").toContain('install_pyyaml "${OVERFLOW_BASE_SHA:?}"');
+    expect(step.run, "no pip download — the hash-gated install is the only channel").not.toContain("pip download");
+    expect(step.run, "the step must not run a package manager").not.toMatch(/\b(pnpm|npm|npx|yarn|corepack)\s+(audit|install|ci|i|add|update|remove|run|exec|dlx|config)\b/);
     // The workspace and .npmrc files are the two channels beyond package.json
     // proven to carry audit settings: pnpm 10.33.0 reads auditConfig, auditLevel
     // and the registries mapping from pnpm-workspace.yaml, and audit-level,
