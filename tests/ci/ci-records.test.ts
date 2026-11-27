@@ -1,9 +1,10 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { evaluateExpression, isSelected, type ActionsContext, type JobStatus } from "../support/github-expression";
 import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
 const records = ["size-baseline", "comment-share", "ci-thresholds", "test-times"].map(name => `.github/${name}.json`);
@@ -13,6 +14,14 @@ const script = resolve("scripts/ci_records.py");
 const repo = "fixture/Overflow";
 const actions = `repos/${repo}/actions/`;
 const runsAt = (sha: string) => actions + `workflows/ci.yml/runs?branch=main&event=push&head_sha=${sha}`;
+interface Step { id?: string; run?: string; env?: Record<string, string>; with?: Record<string, unknown> }
+interface Job { if?: string; needs?: string | string[]; steps: Step[]; outputs?: Record<string, string>; "timeout-minutes"?: number }
+function workflow(file: string): { on: { push: unknown }; jobs: Record<string, Job> } { return parse(readFileSync(`.github/workflows/${file}.yml`, "utf8")); }
+const [ci, scan] = [workflow("ci").jobs, workflow("code-scanning").jobs];
+const stepOf = (job: Job, id: string) => job.steps.find(step => step.id === id)!;
+// A step's `env:` as the runner renders it in a context: each value evaluated, null as the empty string.
+const envOf = (step: Step, context: ActionsContext) => Object.fromEntries(Object.entries(step.env ?? {}).map(([name, value]) => [name, String(evaluateExpression(value, context) ?? "")]));
+const [classify, scanClassify, findSource] = [stepOf(ci["postgres-image"]!, "changes"), stepOf(scan.changes!, "changes"), stepOf(ci["record-source"]!, "source")];
 
 describe("ratchet record pushes", () => {
   let root: string, code: string, runless: string, size: string, head: string;
@@ -22,9 +31,12 @@ describe("ratchet record pushes", () => {
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "same subject");
     return git("rev-parse", "HEAD");
   }
-  function run(command: string, before: string, env: Record<string, string> = {}) {
-    return spawnSync("python3", [script, command], { cwd: root, encoding: "utf8", timeout: 10_000, env: {
-      ...process.env, PATH: `${root}/bin:${process.env.PATH}`, GITHUB_REPOSITORY: repo, OVERFLOW_BEFORE_SHA: before, GITHUB_REF: "refs/heads/main", GITHUB_EVENT_NAME: "push", ...env } });
+  // Runs a workflow step's own `run:` under its evaluated `env:`, as the runner does; stdout is what it wrote to $GITHUB_OUTPUT.
+  function run(step: Step, before: string, env: Record<string, string> = {}) {
+    writeFileSync(join(root, "output"), "");
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", step.run!], { cwd: root, encoding: "utf8", timeout: 10_000, env: { ...process.env, PATH: `${root}/bin:${process.env.PATH}`,
+      GITHUB_REPOSITORY: repo, GITHUB_REF: "refs/heads/main", GITHUB_EVENT_NAME: "push", ...env, ...envOf(step, { github: { event: { before }, token: "fixture" } }), GITHUB_OUTPUT: join(root, "output") } });
+    return { ...result, stdout: readFileSync(join(root, "output"), "utf8") };
   }
   beforeAll(async () => {
     root = await temp.createAsync(prefix);
@@ -42,6 +54,8 @@ describe("ratchet record pushes", () => {
     for (const file of records.slice(1)) writeFileSync(join(root, file), "record");
     head = commit();
     mkdirSync(join(root, "bin"));
+    mkdirSync(join(root, "scripts"));
+    symlinkSync(script, join(root, "scripts/ci_records.py"));
     // time.sleep only records its argument; a list answer is consumed one element per call; {"fail": text} makes gh exit 1.
     writeFileSync(join(root, "bin/sitecustomize.py"), `import os, time
 def sleep(seconds, log=os.path.join(os.path.dirname(__file__), "sleeps")):
@@ -65,22 +79,22 @@ print(json.dumps(answer))
   });
   afterAll(async () => { await temp.disposeAsync(root); });
 
-  it("classifies all four exact paths over the whole push, independently of the commit subject", () => {
-    expect(run("classify", code).stdout.trim()).toBe("records-only=true");
-    expect(run("classify", size).stdout.trim()).toBe("records-only=true");
-    expect(run("classify", git("rev-parse", code + "^")).stdout.trim()).toBe("records-only=false");
+  it.each([["ci.yml", classify], ["code-scanning.yml", scanClassify]] as const)("classifies all four exact paths over the whole push in %s, independently of the commit subject", (_, step) => {
+    expect(run(step, code).stdout.trim()).toBe("records-only=true");
+    expect(run(step, size).stdout.trim()).toBe("records-only=true");
+    expect(run(step, git("rev-parse", code + "^")).stdout.trim()).toBe("records-only=false");
   });
 
   it("keeps dispatches, other refs, empty diffs and unknown bases on the full path", () => {
     for (const [before, env] of [
       [size, { GITHUB_EVENT_NAME: "workflow_dispatch" }], [size, { GITHUB_REF: "refs/heads/other" }], [head, {}], ["0".repeat(40), {}], ["", {}],
-    ] as const) expect(run("classify", before, env).stdout.trim()).toBe("records-only=false");
+    ] as const) expect(run(classify, before, env).stdout.trim()).toBe("records-only=false");
   });
 
   function source(responses: Record<string, unknown>, before = size) {
     writeFileSync(join(root, "bin/responses.json"), JSON.stringify(responses));
     writeFileSync(join(root, "bin/sleeps"), "");
-    const result = run("source", before, { PYTHONPATH: join(root, "bin") });
+    const result = run(findSource, before, { PYTHONPATH: join(root, "bin") });
     return { ...result, sleeps: readFileSync(join(root, "bin/sleeps"), "utf8").split("\n").filter(Boolean).map(Number) };
   }
   // A job that never ran, skipped or cancelled before it started, lists no steps (live API).
@@ -208,26 +222,33 @@ print(json.dumps(answer))
       mkdirSync(join(root, ".github"), { recursive: true });
       git("mv", "source\nfile.ts", records[3]!);
       git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "rename");
-      expect(run("classify", code).stdout.trim()).toBe("records-only=false");
+      expect(run(classify, code).stdout.trim()).toBe("records-only=false");
     } finally { git("checkout", "-q", "--detach", head); }
   });
 });
 
-interface Step { id?: string; run?: string; env?: Record<string, string>; with?: Record<string, unknown> }
-interface Job { if?: string; needs?: string | string[]; steps: Step[]; outputs?: Record<string, string>; "timeout-minutes"?: number }
-function workflow(file: string): { on: { push: unknown }; jobs: Record<string, Job> } { return parse(readFileSync(`.github/workflows/${file}.yml`, "utf8")); }
-
+// Job-level routing through the same evaluator, as the runner selects a job; status is the run's.
 describe("main push workflow routing", () => {
-  const ci = workflow("ci").jobs;
-  const scan = workflow("code-scanning").jobs;
+  const runs = (job: Job, context: ActionsContext, status: JobStatus = "success") => isSelected({ if: job.if }, context, status);
+  const needs = (records: string | null, source: string, runId?: string, image = "success") => ({ needs: {
+    "postgres-image": { result: image, outputs: records === null ? {} : { "records-only": records } },
+    "record-source": { result: source, outputs: runId === undefined ? {} : { "run-id": runId } } } });
   it("uses the same diff on main for the planner, test matrix, artifact lookup and CodeQL", () => {
-    for (const job of [ci["postgres-image"]!, scan.changes!]) {
-      expect(job.steps).toContainEqual(expect.objectContaining({ id: "changes", env: { OVERFLOW_BEFORE_SHA: "${{ github.event.before }}" }, run: 'python3 scripts/ci_records.py classify >> "$GITHUB_OUTPUT"' }));
-      expect(job.outputs?.["records-only"]).toBe("${{ steps.changes.outputs.records-only }}");
-    }
-    expect(ci["record-source"]!.if).toBe("needs.postgres-image.outputs.records-only == 'true'");
-    expect(ci["record-source"]!.steps.at(-1)?.run).toBe('python3 scripts/ci_records.py source >> "$GITHUB_OUTPUT"');
-    expect(scan.changes!.if).toBe("github.event_name == 'push'");
+    for (const job of [ci["postgres-image"]!, scan.changes!]) for (const value of ["true", "false"])
+      expect(evaluateExpression(job.outputs!["records-only"]!, { steps: { changes: { outputs: { "records-only": value } } } })).toBe(value);
+    for (const [context, status, held] of [[needs("true", "skipped"), "success", true], [needs("false", "skipped"), "success", false], [needs(null, "skipped", undefined, "failure"), "failure", false]] as const)
+      expect(runs(ci["record-source"]!, context, status), JSON.stringify([context, status])).toBe(held);
+    for (const event of ["push", "pull_request", "schedule", "workflow_dispatch"]) expect(runs(scan.changes!, { github: { event_name: event } }), event).toBe(event === "push");
+  });
+
+  it("runs the tip's own matrix on a code push, or on a records-only push whose record source found no usable run", () => {
+    expect(ci.plan!.needs).toEqual(["postgres-image", "record-source"]);
+    for (const [context, status, held] of [
+      [needs("false", "skipped"), "success", true], [needs("true", "success", "12"), "success", false], [needs("true", "success", ""), "success", true],
+      [needs("true", "failure"), "success", false], [needs(null, "skipped", undefined, "failure"), "success", false], [needs("false", "skipped"), "cancelled", false],
+    ] as const) expect(runs(ci.plan!, context, status), JSON.stringify([context, status])).toBe(held);
+    for (const [plan, status, held] of [["success", "success", true], ["skipped", "success", false], ["failure", "success", false], ["success", "cancelled", false]] as const)
+      expect(runs(ci.test!, { needs: { plan: { result: plan } } }, status), plan + status).toBe(held);
   });
 
   it("lets record-source outwait the longest needs chain of job timeouts in the code push it waits for", () => {
@@ -241,7 +262,8 @@ describe("main push workflow routing", () => {
 
   it("runs report after the record source has succeeded on a record-only push", () => {
     expect(ci.report!.needs).toEqual(["postgres-image", "test", "record-source"]);
-    expect(ci.report!.if).toBe("${{ !cancelled() && (needs.postgres-image.outputs.records-only != 'true' || needs.record-source.result == 'success') }}");
+    for (const [context, status, held] of [[needs("false", "skipped"), "success", true], [needs("true", "success"), "success", true], [needs("true", "failure"), "success", false],
+      [needs("true", "skipped"), "success", false], [needs("false", "skipped"), "cancelled", false]] as const) expect(runs(ci.report!, context, status), JSON.stringify([context, status])).toBe(held);
   });
 
   it("passes the record source's declared outputs from real steps to inputs of dependent jobs", () => {
@@ -266,18 +288,17 @@ describe("main push workflow routing", () => {
       const push = parse(readFileSync(file!, "utf8"));
       expect(push.on.push.branches).toContain("main");
       expect(Object.keys(push.on.push)).toEqual(["branches"]);
-      expect(push.jobs[context].if).toBe(context === "verify" ? "${{ always() }}" : undefined);
+      if (context !== "verify") expect(push.jobs[context].if).toBeUndefined();
+      else for (const status of ["success", "failure", "cancelled"] as const) expect(runs(push.jobs.verify, {}, status), status).toBe(true);
     }
     const step = ci.verify!.steps[0]!;
-    expect(step.env).toEqual({ OVERFLOW_RECORDS_ONLY: "${{ needs.postgres-image.outputs.records-only }}",
-      OVERFLOW_SOURCE_RESULT: "${{ needs.record-source.result }}", OVERFLOW_TEST_RESULT: "${{ needs.test.result }}", OVERFLOW_REPORT_RESULT: "${{ needs.report.result }}" });
     for (const [records, test, source, report, status] of [
       ["false", "success", "skipped", "success", 0], ["true", "skipped", "success", "success", 0], ["false", "skipped", "skipped", "success", 1], ["true", "skipped", "failure", "success", 1],
       ["true", "skipped", "success", "failure", 1], ["false", "failure", "skipped", "success", 1], ["true", "success", "success", "success", 0],
       ["true", "success", "failure", "success", 1], ["true", "failure", "success", "success", 1], ["false", "success", "success", "success", 1],
     ] as const) {
-      expect(spawnSync("bash", ["-ec", step.run!], { env: { NODE_ENV: "test", OVERFLOW_RECORDS_ONLY: records,
-        OVERFLOW_TEST_RESULT: test, OVERFLOW_SOURCE_RESULT: source, OVERFLOW_REPORT_RESULT: report } }).status).toBe(status);
+      const env = envOf(step, { needs: { "postgres-image": { outputs: { "records-only": records } }, test: { result: test }, "record-source": { result: source }, report: { result: report } } });
+      expect(spawnSync("bash", ["-ec", step.run!], { env: { NODE_ENV: "test", ...env } }).status, JSON.stringify(env)).toBe(status);
     }
   });
 });

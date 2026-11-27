@@ -4,6 +4,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { isSelected } from "../support/github-expression";
 
 // A dependabot schedule. `day`, `time` and `timezone` are the keys that move
 // the lane off the default Monday slot and pin its clock, so every consumer of
@@ -1373,10 +1374,14 @@ exit 1
     // The job logic and grants: the job-level permissions object is the least
     // privilege uploading SARIF needs, and any extra key — a tolerated
     // failure, a checkout without persist-credentials disabled — fails this
-    // equality.
-    expect(gateBehavior(analyze)).toEqual({
+    // equality. Its `if:` is evaluated: CodeQL runs on every event except a
+    // records-only push, a push whose classify failed and a cancelled run.
+    const { if: condition, ...rest } = analyze;
+    for (const [event, result, records, status, runs] of [["push", "success", "false", "success", true], ["push", "success", "true", "success", false], ["push", "failure", null, "success", false],
+      ["push", "success", "false", "cancelled", false], ...["pull_request", "schedule", "workflow_dispatch"].map(event => [event, "skipped", null, "success", true] as const)] as const)
+      expect(isSelected({ if: condition }, { github: { event_name: event }, needs: { changes: { result, outputs: records === null ? {} : { "records-only": records } } } }, status), [event, result, records, status].join()).toBe(runs);
+    expect(gateBehavior(rest)).toEqual({
       needs: "changes",
-      if: "${{ !cancelled() && (github.event_name != 'push' || (needs.changes.result == 'success' && needs.changes.outputs.records-only != 'true')) }}",
       permissions: { contents: "read", "security-events": "write" },
       strategy: {
         "fail-fast": false,
