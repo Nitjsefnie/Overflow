@@ -300,9 +300,9 @@ jobs:
       # The registry pin holds the advisory endpoint at npmjs even if a future
       # edit materializes a pull-request .npmrc alongside the manifests.
       pnpm_config_registry: "https://registry.npmjs.org/"
-      # Measured on pnpm 12.23.0 against a local TLS endpoint: `.npmrc`
-      # `strict-ssl=false` plus that endpoint's `cafile=` lets the audit POST
-      # arrive, and `pnpm_config_strict_ssl=true` fails the connection closed.
+      # Measured on pnpm 12.23.0 against a local TLS endpoint: this outranks
+      # `.npmrc` `strict-ssl=false` and fails the connection closed, but not a
+      # `.npmrc` `cafile=` of the endpoint's issuer, which lets the POST arrive.
       pnpm_config_strict_ssl: "true"
       # The severity bar, held at pnpm's lowest reportable rung. The
       # "info" hazard is recorded on dependency-audit.yml's copy: the ladder
