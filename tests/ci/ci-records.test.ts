@@ -86,10 +86,10 @@ print(json.dumps(answer))
     ] as const) expect(run("classify", before, env).stdout.trim()).toBe("records-only=false");
   });
 
-  function source(responses: Record<string, unknown>) {
+  function source(responses: Record<string, unknown>, before = size) {
     writeFileSync(join(root, "bin/responses.json"), JSON.stringify(responses));
     writeFileSync(join(root, "bin/sleeps"), "");
-    const result = run("source", size, { PYTHONPATH: join(root, "bin") });
+    const result = run("source", before, { PYTHONPATH: join(root, "bin") });
     return { ...result, sleeps: readFileSync(join(root, "bin/sleeps"), "utf8").split("\n").filter(Boolean).map(Number) };
   }
   function fixture(override: Record<string, unknown> = {}, measured = code) {
@@ -127,6 +127,13 @@ print(json.dumps(answer))
   it("waits for the preceding push to appear in the workflow runs listing", () => {
     const responses = fixture();
     expect(source({ ...responses, [runsAt(size)]: [{ workflow_runs: [] }, responses[runsAt(size)]] }).stdout.trim()).toBe("run-id=11");
+  });
+
+  it("walks past a preceding push that never got a run, and still fails when no earlier run tested the code", () => {
+    const found = source(fixture(), runless);
+    expect([found.stdout, found.sleeps]).toEqual(["run-id=11\n", [5, 10, 20]]);
+    const missing = source({ ...fixture(), [runsAt(code)]: { workflow_runs: [] }, [runsAt(git("rev-parse", code + "^"))]: { workflow_runs: [] } }, runless);
+    expect([missing.status, missing.stdout, missing.stderr.trim().split("\n").at(-1)]).toEqual([1, "", "ValueError: no tested main push found for the record-only tip"]);
   });
 
   it("retries a failed GitHub API call with growing sleeps, a bounded number of times", () => {
