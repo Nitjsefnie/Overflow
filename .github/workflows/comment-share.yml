@@ -24,6 +24,10 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      # Here because comment-share is already a required context.
+      - name: Gate-base freshness
+        if: github.event_name == 'pull_request' || github.ref_name == github.event.repository.default_branch
+        uses: Nitjsefnie-Actions/freshness@5edc2a45ff894cf49c5cc8d293bbae0af33507d4 # v1.0.0
       - if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch)
         uses: Nitjsefnie-Actions/comment-ratchet@d87b34562b46ce1962d621df8e794ca7e748514f # v3.0.3
         with:
