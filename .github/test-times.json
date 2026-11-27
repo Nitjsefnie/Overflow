@@ -1911,7 +1911,8 @@
         0.0
       ],
       "tests/ci/verify-suppression-step.test.ts": [
-        41.85
+        41.85,
+        30.58
       ],
       "tests/ci/verify-workflow.test.ts": [
         0.06
@@ -2257,7 +2258,8 @@
       ],
       "tests/db/migration-compatibility.test.ts": [
         6.24,
-        4.36
+        4.36,
+        2.16
       ],
       "tests/db/migration-immutability.test.ts": [
         0.15
@@ -2512,7 +2514,8 @@
       ],
       "tests/deploy/reconcile-cli.test.ts": [
         30.43,
-        19.73
+        19.73,
+        10.72
       ],
       "tests/deploy/register-path-aliases.test.ts": [
         0.52
@@ -3182,7 +3185,8 @@
       ],
       "tests/scripts/ratchets.test.ts": [
         6.49,
-        4.49
+        4.49,
+        10.74
       ],
       "tests/scripts/resolve-suite-pull-request.test.ts": [
         37.76
