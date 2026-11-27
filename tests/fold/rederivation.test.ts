@@ -66,7 +66,7 @@ describe("repository re-derivation", () => {
     expect(worker.reconcile).toHaveBeenCalledExactlyOnceWith("repo-1", { rederive: true, reason: "SWEEP" });
     expect(store.beginRun).not.toHaveBeenCalled();
     expect(store.hasDerivedRowsBelowFoldRevision).not.toHaveBeenCalled();
-    expect(store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", heldUntil);
+    expect(store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", heldUntil, 1);
     expect(store.completeReconciliationJob).not.toHaveBeenCalled();
     expect(store.retryReconciliationJob).not.toHaveBeenCalled();
     expect(store.failReconciliationJob).not.toHaveBeenCalled();

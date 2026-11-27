@@ -226,9 +226,9 @@ export class PostgresReconciliationJobStore {
     jobId: string,
     leaseToken: string,
     runAfter: Date,
+    attemptCount: number,
   ): Promise<boolean> {
-    // The reconciliation cooldown declined to fold, so the claim's increment is
-    // given back: nothing was attempted and nothing failed.
+    // Nothing failed, so a deferral refunds the claim's attempt; a lost lease's only at rest at its count.
     // This path and the two below clear `follow_up_requested`: each returns the
     // row to a state that will be worked again, so a mid-fold event is already
     // accounted for by that future run, and the flag keeps its single meaning —
@@ -248,7 +248,11 @@ export class PostgresReconciliationJobStore {
         and lease_token = ${leaseToken}
       returning id
     `;
-    return rows.length === 1;
+    if (rows.length === 1) return true;
+    // shortcut: also refunds a count reset and climbed back; key on a claim generation if it bites.
+    await this.sql`update repository_reconciliation_jobs set attempt_count = attempt_count - 1
+      where id = ${jobId} and state <> ${"RUNNING"} and attempt_count = ${attemptCount}`;
+    return false;
   }
 
   public async retryReconciliationJob(

@@ -142,7 +142,7 @@ describe("per-repository share of a sponsor's sweep request budget", () => {
     // The worker's loop: claim the oldest due job, spend until held, defer the job to the hold.
     for (let job, hold; (job = await jobs.claimNextReconciliationJob()) !== null;) {
       while ((hold = await rounds.spend(sponsorId, job.repositoryId, at, 100)) === null) admitted.set(job.repositoryId, (admitted.get(job.repositoryId) ?? 0) + 1);
-      await jobs.deferReconciliationJob(job.id, job.leaseToken, hold);
+      await jobs.deferReconciliationJob(job.id, job.leaseToken, hold, job.attemptCount);
     }
     // Only the last to cap, with every other due floor spent, borrows the idle 30.
     expect([...admitted.values()]).toEqual([10, 10, 10, 10, 10, 10, 40]);

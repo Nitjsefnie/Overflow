@@ -16,7 +16,7 @@ import {
   RECONCILIATION_EVIDENCE_FORMAT,
   type ReconciliationEvidence,
 } from "@/lib/fold/reconciliation-evidence";
-import { RECONCILIATION_LEASE_MAX_RENEWAL_MS, runNextReconciliationJob } from "@/lib/fold/reconciliation-worker";
+import { RECONCILIATION_LEASE_MAX_RENEWAL_MS, RECONCILIATION_RETRY_DELAYS_MS, runNextReconciliationJob } from "@/lib/fold/reconciliation-worker";
 import { startPostgresContainer } from "../support/postgres-container";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 
@@ -119,6 +119,26 @@ function productionEnqueue(record: string[]) {
     await new PostgresReconciliationJobStore(transaction as unknown as Sql)
       .enqueueReconciliationJob(repositoryId, "SWEEP");
   };
+}
+
+/**
+ * Starts a fold that outlives the lease renewal cap: the lease lapses (set in SQL
+ * rather than waited out) and the capped heartbeat no longer renews it, so the
+ * same store's next drain reclaims the job and defers it behind the running fold.
+ */
+async function foldPastLeaseCap(jobs: PostgresFoldStore, result?: { skipped: boolean; sweepHeldUntil: Date }) {
+  const clock = { value: new Date() };
+  let renew: (() => Promise<void>) | undefined;
+  let finishFold!: () => void;
+  const fold = new Promise<void>((resolve) => { finishFold = resolve; });
+  const folding = runNextReconciliationJob({ store: jobs, now: () => clock.value, reconcile: async () => { await fold; return result; },
+    scheduleLeaseRenewal: (callback) => { renew = callback; return () => {}; } });
+  await vi.waitFor(() => expect(renew).toBeDefined());
+  clock.value = new Date(clock.value.getTime() + RECONCILIATION_LEASE_MAX_RENEWAL_MS);
+  await sql`update repository_reconciliation_jobs set lease_expires_at = now() - interval '1 second'`;
+  await renew!();
+  expect(await runNextReconciliationJob({ store: jobs, reconcile: async () => { throw new Error("The reclaim folded."); } })).toBe("DEFERRED");
+  return { finishFold, folding };
 }
 
 describe("reconciliation sweep catch-ups", () => {
@@ -394,21 +414,7 @@ describe("reconciliation sweep catch-ups", () => {
     await sweepReconciliationCatchups(h.deps);
     await sql`update repository_reconciliation_jobs set sweep_generation = 7 where repository_id = ${first}`; // distinct from the row's rederivation generation
     const jobs = new PostgresFoldStore(sql);
-    const clock = { value: new Date() };
-    let renew: (() => Promise<void>) | undefined;
-    let finishFold!: () => void;
-    const fold = new Promise<void>((resolve) => { finishFold = resolve; });
-    const folding = runNextReconciliationJob({ store: jobs, now: () => clock.value, reconcile: () => fold,
-      scheduleLeaseRenewal: (callback) => { renew = callback; return () => {}; } });
-    await vi.waitFor(() => expect(renew).toBeDefined());
-
-    // The fold runs past the renewal cap: the lease lapses (set in SQL rather than
-    // waited out) and the capped heartbeat no longer renews it, so the same
-    // store's next drain reclaims the job and defers it behind the running fold.
-    clock.value = new Date(clock.value.getTime() + RECONCILIATION_LEASE_MAX_RENEWAL_MS);
-    await sql`update repository_reconciliation_jobs set lease_expires_at = now() - interval '1 second'`;
-    await renew!();
-    expect(await runNextReconciliationJob({ store: jobs, reconcile: async () => { throw new Error("The reclaim folded."); } })).toBe("DEFERRED");
+    const { finishFold, folding } = await foldPastLeaseCap(jobs);
     if (newerSweep) await jobs.enqueueReconciliationJob(first, "SWEEP");
     finishFold();
     expect(await folding).toBe("LEASE_LOST");
@@ -419,6 +425,41 @@ describe("reconciliation sweep catch-ups", () => {
     expect(await sql`select repository_id::text as repository_id, state from reconciliation_sweep_catchups order by state`).toEqual(newerSweep
       ? [{ repository_id: first, state: "in_flight" }, { repository_id: second, state: "pending" }]
       : [{ repository_id: first, state: "completed" }, { repository_id: second, state: "in_flight" }]);
+  });
+
+  it("gives back the attempt of a fold held after losing its lease, so a later thrown error is retried and the catch-up stays in flight", async () => {
+    const sponsorId = await insertSponsor();
+    const [first, second] = [await insertRepository(sponsorId), await insertRepository(sponsorId)];
+    await storeSize(first, 5); await storeSize(second, 6);
+    const h = harness();
+    h.deps.enqueue = productionEnqueue(h.offered);
+    await sweepReconciliationCatchups(h.deps);
+    const jobs = new PostgresFoldStore(sql);
+    const job = async () => (await sql<{ attempt_count: number; run_after: Date }[]>`
+      select attempt_count, run_after from repository_reconciliation_jobs where repository_id = ${first}`)[0];
+    const makeDue = () => sql`update repository_reconciliation_jobs set run_after = now() - interval '1 second' where repository_id = ${first}`;
+    const held = { skipped: true, sweepHeldUntil: new Date(Date.now() + 90 * 60_000) };
+
+    // Control: a hold that keeps its lease gives its attempt back.
+    expect(await runNextReconciliationJob({ store: jobs, scheduleLeaseRenewal: () => () => {}, reconcile: async () => held })).toBe("BUDGET_HELD");
+    expect((await job()).attempt_count).toBe(0);
+    // One held pass per retry delay: each fold is held by the sweep budget after
+    // a same-store reclaim deferred itself, and the hold is made due by hand.
+    for (const pass of RECONCILIATION_RETRY_DELAYS_MS.keys()) {
+      await makeDue();
+      const { finishFold, folding } = await foldPastLeaseCap(jobs, held);
+      finishFold();
+      expect(await folding).toBe("LEASE_LOST");
+      expect((await job()).attempt_count, `attempt_count at rest after held pass ${pass + 1}`).toBe(0);
+    }
+
+    await makeDue();
+    const failedAt = new Date();
+    expect(await runNextReconciliationJob({ store: jobs, now: () => failedAt, scheduleLeaseRenewal: () => () => {}, onFailure: () => {},
+      reconcile: async () => { throw new Error("upstream 502"); } })).toBe("RETRY_SCHEDULED");
+    expect(await job()).toEqual({ attempt_count: 1, run_after: new Date(failedAt.getTime() + RECONCILIATION_RETRY_DELAYS_MS[0]) });
+    await sweepReconciliationCatchups(h.deps);
+    expect(await catchupStates(first)).toEqual([{ state: "in_flight" }]);
   });
 
   it("serializes two concurrent advances per sponsor: the second blocks on the sponsor's own row", async () => {

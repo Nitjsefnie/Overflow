@@ -12,6 +12,7 @@ import {
   RECONCILIATION_WORKER_MAX_CONCURRENCY,
   runNextReconciliationJob,
   startReconciliationWorker,
+  type ReconciliationWorkerDependencies,
   type ReconciliationWorkerStore,
 } from "@/lib/fold/reconciliation-worker";
 import { captureUnhandledRejections } from "../support/unhandled-rejection-probe";
@@ -46,7 +47,7 @@ describe("running the next reconciliation job", () => {
     });
     expect(reason).toBe("WEBHOOK");
     expect(outcome).toBe("BUDGET_HELD");
-    expect(calls).toEqual([{ method: "claim", args: [] }, { method: "defer", args: ["job-1", "lease-1", resetAt] }]);
+    expect(calls).toEqual([{ method: "claim", args: [] }, { method: "defer", args: ["job-1", "lease-1", resetAt, 5] }]);
   });
 
   it.each(["cause", "rateLimited", "retryAfterSeconds", "deadline", "headers", "instanceof", "has"] as const)(
@@ -86,7 +87,7 @@ describe("running the next reconciliation job", () => {
     })).toBe("DEFERRED");
     expect(calls).toEqual([
       { method: "claim", args: [] },
-      { method: "defer", args: ["job-1", "lease-1", new Date("2030-01-02T03:06:05.678Z")] },
+      { method: "defer", args: ["job-1", "lease-1", new Date("2030-01-02T03:06:05.678Z"), 5] },
     ]);
   });
 
@@ -105,7 +106,7 @@ describe("running the next reconciliation job", () => {
     })).toBe("DEFERRED");
     expect(calls).toEqual([
       { method: "claim", args: [] },
-      { method: "defer", args: ["job-1", "lease-1", new Date("2030-01-02T03:09:05Z")] },
+      { method: "defer", args: ["job-1", "lease-1", new Date("2030-01-02T03:09:05Z"), 5] },
     ]);
   });
 
@@ -119,7 +120,7 @@ describe("running the next reconciliation job", () => {
     })).toBe("DEFERRED");
     expect(calls).toEqual([
       { method: "claim", args: [] },
-      { method: "defer", args: ["job-1", "lease-1", new Date("2030-01-02T03:06:05.678Z")] },
+      { method: "defer", args: ["job-1", "lease-1", new Date("2030-01-02T03:06:05.678Z"), 5] },
     ]);
   });
 
@@ -138,7 +139,7 @@ describe("running the next reconciliation job", () => {
     })).toBe("DEFERRED");
     expect(calls).toEqual([
       { method: "claim", args: [] },
-      { method: "defer", args: ["job-1", "lease-1", new Date(expected)] },
+      { method: "defer", args: ["job-1", "lease-1", new Date(expected), 1] },
     ]);
     expect(reported).toEqual([failure]);
   });
@@ -353,7 +354,7 @@ describe("running the next reconciliation job", () => {
       expect(folded).toEqual(["repo-a"]);
       expect(calls).toContainEqual({
         method: "defer",
-        args: ["job-1", "reclaimed", new Date("2030-01-02T03:04:10.000Z")],
+        args: ["job-1", "reclaimed", new Date("2030-01-02T03:04:10.000Z"), 1],
       });
       await expect(drainReconciliationJobs(dependencies, { maxJobs: 1 })).resolves.toEqual(["RECONCILED"]);
       expect(folded).toEqual(["repo-a", "repo-b"]);
@@ -456,7 +457,7 @@ describe("running the next reconciliation job", () => {
     expect(calls).toEqual([
       { method: "claim", args: [] },
       { method: "cooldown", args: ["repo-a"] },
-      { method: "defer", args: ["job-1", "lease-1", new Date("2030-01-02T03:30:00.000Z")] },
+      { method: "defer", args: ["job-1", "lease-1", new Date("2030-01-02T03:30:00.000Z"), 1] },
     ]);
   });
 
@@ -473,7 +474,7 @@ describe("running the next reconciliation job", () => {
 
     expect(calls.at(-1)).toEqual({
       method: "defer",
-      args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z")],
+      args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z"), 1],
     });
   });
 
@@ -493,7 +494,7 @@ describe("running the next reconciliation job", () => {
 
     expect(calls.at(-1)).toEqual({
       method: "defer",
-      args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z")],
+      args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z"), 1],
     });
   });
 
@@ -515,7 +516,7 @@ describe("running the next reconciliation job", () => {
 
     expect(calls.at(-1)).toEqual({
       method: "defer",
-      args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z")],
+      args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z"), 1],
     });
   });
 
@@ -871,6 +872,32 @@ describe("reconciliation lease heartbeat", () => {
     } finally {
       fold.resolve();
       await running;
+    }
+  });
+
+  // A lease-owned write matches no row once a reclaim replaced the token: the outcome it would record never happened.
+  it.each([
+    { path: "in-flight guard deferral", writer: "deferReconciliationJob", outcome: "DEFERRED", attempt: 1, reconcile: undefined },
+    { path: "rate-limit deferral", writer: "deferReconciliationJob", outcome: "DEFERRED", attempt: 1,
+      reconcile: async () => { throw new GitHubApiError(403, true, 120, "Secondary rate limit", { "retry-after": "120" }); } },
+    { path: "retry", writer: "retryReconciliationJob", outcome: "RETRY_SCHEDULED", attempt: 1, reconcile: async () => { throw new Error("upstream"); } },
+    { path: "failure", writer: "failReconciliationJob", outcome: "FAILED", attempt: 5, reconcile: async () => { throw new Error("upstream"); } },
+    { path: "skipped deferral", writer: "deferReconciliationJob", outcome: "DEFERRED", attempt: 1, reconcile: async () => ({ skipped: true }) },
+    { path: "budget hold", writer: "deferReconciliationJob", outcome: "BUDGET_HELD", attempt: 1,
+      reconcile: async () => ({ skipped: true, budgetHeldUntil: new Date("2030-01-02T12:00:00Z") }) },
+  ] as const)("reports the $path outcome only when its write matched the row", async ({ writer, outcome, attempt, reconcile }) => {
+    for (const matched of [true, false]) {
+      const { store } = createFakeStore({ jobs: [job({ attemptCount: attempt }), job({ leaseToken: "reclaimed" })] });
+      const write = vi.fn(async () => matched);
+      const entered = signal();
+      const fold = signal();
+      const run = (fold: ReconciliationWorkerDependencies["reconcile"]) => runNextReconciliationJob({ store, scheduleLeaseRenewal: () => () => {}, onFailure: () => {}, reconcile: fold });
+      const first = reconcile === undefined ? run(async () => { entered.resolve(); await fold.promise; }) : undefined;
+      if (first) await entered.promise;
+      store[writer] = write;
+      await expect(run(reconcile ?? (async () => {})), `${matched}`).resolves.toBe(matched ? outcome : "LEASE_LOST");
+      expect(write).toHaveBeenCalledOnce();
+      fold.resolve(); await first;
     }
   });
 
@@ -2301,7 +2328,7 @@ function createFakeStore(
     // this fake deliberately does not model lease ownership or row lifecycle.
     renewReconciliationJobLease: async (jobId, leaseToken) => { record("renew", [jobId, leaseToken]); return true; },
     completeReconciliationJob: async (jobId, leaseToken, rederivationGeneration, sweepGeneration) => { record("complete", [jobId, leaseToken, rederivationGeneration, sweepGeneration]); return true; },
-    deferReconciliationJob: async (jobId, leaseToken, runAfter) => { record("defer", [jobId, leaseToken, runAfter]); return true; },
+    deferReconciliationJob: async (jobId, leaseToken, runAfter, attemptCount) => { record("defer", [jobId, leaseToken, runAfter, attemptCount]); return true; },
     retryReconciliationJob: async (jobId, leaseToken, runAfter) => { record("retry", [jobId, leaseToken, runAfter]); return true; },
     failReconciliationJob: async (jobId, leaseToken) => { record("fail", [jobId, leaseToken]); return true; },
     getReconciliationCooldown: async (repositoryId) => { record("cooldown", [repositoryId]); return options.cooldown ?? null; },

@@ -319,7 +319,7 @@ describe("PostgreSQL reconciliation job queue", () => {
     const repositoryId = await insertRepository();
     await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
     const claimed = await claimOrFail();
-    await store.deferReconciliationJob(claimed.id, claimed.leaseToken, new Date(Date.now() + 3_600_000));
+    await store.deferReconciliationJob(claimed.id, claimed.leaseToken, new Date(Date.now() + 3_600_000), claimed.attemptCount);
 
     expect(await store.claimNextReconciliationJob()).toBeNull();
   });
@@ -467,7 +467,7 @@ describe("PostgreSQL reconciliation job queue", () => {
     if (state === "FAILED") {
       await store.failReconciliationJob(claimed.id, claimed.leaseToken);
     } else {
-      await store.deferReconciliationJob(claimed.id, claimed.leaseToken, new Date());
+      await store.deferReconciliationJob(claimed.id, claimed.leaseToken, new Date(), claimed.attemptCount);
     }
     const before = await jobById(claimed.id);
 
@@ -717,7 +717,7 @@ describe("PostgreSQL reconciliation job queue", () => {
     const claimed = await claimOrFail();
     const runAfter = new Date(Date.now() + 600_000);
 
-    expect(await store.deferReconciliationJob(claimed.id, claimed.leaseToken, runAfter)).toBe(true);
+    expect(await store.deferReconciliationJob(claimed.id, claimed.leaseToken, runAfter, claimed.attemptCount)).toBe(true);
 
     const job = await onlyJobFor(repositoryId);
     expect(job.state).toBe("PENDING");
@@ -729,6 +729,32 @@ describe("PostgreSQL reconciliation job queue", () => {
     expect(job.last_failure_at).toBeNull();
   });
 
+  // The stale claim's deferral matches no row after a reclaim; its refund applies only to the count that claim left.
+  it.each([
+    { later: "a reclaim deferred itself", start: 0, refunded: 0,
+      act: async (job: ClaimedReconciliationJob) => { await store.deferReconciliationJob(job.id, job.leaseToken, new Date(), job.attemptCount); } },
+    { later: "a reclaim kept its attempt in a retry", start: 0, refunded: 2,
+      act: async (job: ClaimedReconciliationJob) => { await store.retryReconciliationJob(job.id, job.leaseToken, new Date()); } },
+    { later: "a reclaim reset the count and a retry climbed it", start: 2, refunded: 1, act: async (job: ClaimedReconciliationJob) => {
+      await store.enqueueReconciliationJob(job.repositoryId, "WEBHOOK");
+      await store.completeReconciliationJob(job.id, job.leaseToken, job.rederivationGeneration, job.sweepGeneration);
+      const next = await claimOrFail(); await store.retryReconciliationJob(next.id, next.leaseToken, new Date()); } },
+    { later: "a reset count climbed back under a live lease", start: 0, refunded: 1, act: async (job: ClaimedReconciliationJob) => {
+      await store.enqueueReconciliationJob(job.repositoryId, "WEBHOOK");
+      await store.completeReconciliationJob(job.id, job.leaseToken, job.rederivationGeneration, job.sweepGeneration);
+      await claimOrFail(); } },
+  ])("refunds a lost lease's deferral only while its count is at rest: $later", async ({ start, refunded, act }) => {
+    const repositoryId = await insertRepository();
+    await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
+    await sql`update repository_reconciliation_jobs set attempt_count = ${start} where repository_id = ${repositoryId}`;
+    const stale = await claimOrFail();
+    await expireLease(stale.id);
+    await act(await claimOrFail());
+    const before = await jobById(stale.id);
+    expect(await store.deferReconciliationJob(stale.id, stale.leaseToken, new Date(Date.now() + 600_000), stale.attemptCount)).toBe(false);
+    expect(await jobById(stale.id)).toEqual({ ...before, attempt_count: refunded });
+  });
+
   it("preserves a fairness deadline and rederivation through webhook coalescing", async () => {
     const repositoryId = await insertRepository();
     await store.enqueueReconciliationJob(repositoryId, "SWEEP");
@@ -738,7 +764,7 @@ describe("PostgreSQL reconciliation job queue", () => {
     expect(claimed.rederivationRequestedAt).toEqual(requestedAt);
     expect(claimed.rederivationGeneration).toBe(1);
     const held = new Date(Date.now() + 30_000);
-    expect(await store.deferReconciliationJob(claimed.id, claimed.leaseToken, held)).toBe(true);
+    expect(await store.deferReconciliationJob(claimed.id, claimed.leaseToken, held, claimed.attemptCount)).toBe(true);
     await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
     expect(await onlyJobFor(repositoryId)).toMatchObject({
       state: "PENDING", attempt_count: 0, run_after: held,
@@ -747,7 +773,7 @@ describe("PostgreSQL reconciliation job queue", () => {
     });
     const before = await jobById(claimed.id);
     const fullRow = await sql`select * from repository_reconciliation_jobs where id = ${claimed.id}`;
-    expect(await store.deferReconciliationJob(claimed.id, randomUUID(), new Date(held.getTime() + 30_000))).toBe(false);
+    expect(await store.deferReconciliationJob(claimed.id, randomUUID(), new Date(held.getTime() + 30_000), claimed.attemptCount)).toBe(false);
     expect(await jobById(claimed.id)).toEqual(before);
     expect(await sql`select * from repository_reconciliation_jobs where id = ${claimed.id}`).toEqual(fullRow);
   });
@@ -845,7 +871,7 @@ describe("PostgreSQL reconciliation job queue", () => {
       {
         name: "defer",
         release: (job: ClaimedReconciliationJob) =>
-          store.deferReconciliationJob(job.id, job.leaseToken, runAfter),
+          store.deferReconciliationJob(job.id, job.leaseToken, runAfter, job.attemptCount),
       },
       {
         name: "retry",
@@ -880,7 +906,7 @@ describe("PostgreSQL reconciliation job queue", () => {
     const runAfter = new Date(Date.now() + 600_000);
 
     expect(await store.completeReconciliationJob(claimed.id, staleToken, claimed.rederivationGeneration, claimed.sweepGeneration)).toBe(false);
-    expect(await store.deferReconciliationJob(claimed.id, staleToken, runAfter)).toBe(false);
+    expect(await store.deferReconciliationJob(claimed.id, staleToken, runAfter, claimed.attemptCount)).toBe(false);
     expect(await store.retryReconciliationJob(claimed.id, staleToken, runAfter)).toBe(false);
     expect(await store.failReconciliationJob(claimed.id, staleToken)).toBe(false);
 

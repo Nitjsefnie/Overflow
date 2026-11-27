@@ -236,7 +236,7 @@ describe("sponsor quota admission through transport, fold and worker", () => {
     await expect(runNextReconciliationJob(dependencies)).resolves.toBe(outcome);
     expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(1);
     if (outcome === "BUDGET_HELD") {
-      expect(store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", new Date("2026-09-07T11:00:00Z"));
+      expect(store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", new Date("2026-09-07T11:00:00Z"), 1);
       expect(harness.gatewaysBuilt).toEqual([]);
       expect(harness.calls).not.toContain("beginRun");
       expect(store.completeReconciliationJob).not.toHaveBeenCalled();
@@ -309,7 +309,7 @@ describe("sponsor quota admission through transport, fold and worker", () => {
       return reconcileRepositoryAsSponsor(harness.store, id, harness.createGateway, options);
     } };
     await expect(drainReconciliationJobs(worker, { maxJobs: 2 })).resolves.toEqual(["BUDGET_HELD", "RECONCILED"]);
-    expect(store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
+    expect(store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt, 1);
     expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", 0, null);
     expect(a.gatewaysBuilt).toEqual([]);
     expect(b.gatewaysBuilt).toEqual(["b-token"]);
