@@ -247,7 +247,8 @@ export async function runNextReconciliationJob(
   }
   if (inFlightRepositories.has(job.repositoryId)) {
     // The reclaim already consumed an attempt and superseded the old token;
-    // refunding that attempt depends on this deferral write succeeding.
+    // this deferral refunds that attempt unless the write throws or a later
+    // claim moved the count.
     const now = dependencies.now ?? (() => new Date());
     const runAfter = new Date(now().getTime() + RECONCILIATION_WORKER_POLL_INTERVAL_MS);
     return await store.deferReconciliationJob(job.id, job.leaseToken, runAfter, job.attemptCount) ? "DEFERRED" : "LEASE_LOST";

@@ -228,7 +228,7 @@ export class PostgresReconciliationJobStore {
     runAfter: Date,
     attemptCount: number,
   ): Promise<boolean> {
-    // Nothing failed, so a deferral refunds the claim's attempt; a lost lease's only at rest at its count.
+    // Nothing failed, so a deferral refunds its attempt; after a lost lease, only if released at its count.
     // This path and the two below clear `follow_up_requested`: each returns the
     // row to a state that will be worked again, so a mid-fold event is already
     // accounted for by that future run, and the flag keeps its single meaning —
