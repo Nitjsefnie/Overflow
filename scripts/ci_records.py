@@ -61,23 +61,25 @@ def measured_run(run):
     """None for an intervening record-only push, "" for an unusable run, else a proven producer."""
     run_id = run["id"]
     while True:
-        # A failed-jobs-only rerun can reuse earlier shards: keep each job's newest attempt.
+        # Keep each job's newest attempt: a failed-jobs rerun reuses earlier ones.
         jobs = {}
         for job in items(f"runs/{run_id}/jobs?filter=all", "jobs"):
             name = job["name"]
             if name not in jobs or job["run_attempt"] > jobs[name]["run_attempt"]:
                 jobs[name] = job
-        # Only a records-only push runs record-source; one cancelled before it started lists
-        # no steps, so that run reads as a code run.
+        # Only records-only pushes run record-source; one cancelled unstarted lists no steps
+        # and reads as a code run.
         source = jobs.get("record-source", {"status": "completed", "steps": []})
         if source["status"] == "in_progress" or source.get("steps"):
             return None
-        # The tip's own report and verify re-gate a borrowed matrix, so this run's are not awaited.
+        # The tip's report and verify re-gate a borrowed matrix; this run's are not awaited.
         plan, shards = jobs.get("plan", {}), [job for name, job in jobs.items() if name.startswith("test (")]
-        if any(job.get("status") == "completed" and job["conclusion"] != "success" for job in [plan, *shards]):
+        # A rerun lists an older attempt's failure until replaced.
+        if any(job.get("status") == "completed" and job["conclusion"] != "success"
+               and (run["status"] == "completed" or job["run_attempt"] == run["run_attempt"]) for job in [plan, *shards]):
             return unusable(f"ci run {run_id} did not successfully test the code")
-        if shards and all(job.get("status") == "completed" for job in [plan, *shards]):
-            # A partial or expired artifact set is no matrix.
+        if shards and all(job.get("conclusion") == "success" for job in [plan, *shards]):
+            # A partial or expired set is no matrix.
             artifacts = {a["name"] for a in items(f"runs/{run_id}/artifacts", "artifacts")
                          if not a["expired"] and a["name"].startswith("test-ratchet-")}
             if len(artifacts) == len(shards):

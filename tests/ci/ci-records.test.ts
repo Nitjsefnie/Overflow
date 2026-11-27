@@ -110,22 +110,34 @@ print(json.dumps(answer))
   // while report and verify are still to run; the run itself completes only after verify.
   it("borrows on the first poll after the source's shards and artifacts succeed, before its report and verify", () => {
     const poll = (...rest: ReturnType<typeof job>[]) => ({ jobs: [job("plan", "success"), job("record-source", "skipped"), ...rest] });
-    const [running, passed, inProgress] = [job("test (1/1)", null, "in_progress"), job("test (1/1)", "success"), { status: "in_progress" }];
-    const result = source({ ...fixture({ status: "in_progress", conclusion: null }), [actions + "runs/11"]: [inProgress, inProgress, inProgress, { status: "completed", conclusion: "success" }],
+    const [running, passed, inProgress] = [job("test (1/1)", null, "in_progress"), job("test (1/1)", "success"), { status: "in_progress", run_attempt: 1 }];
+    const result = source({ ...fixture({ status: "in_progress", conclusion: null }), [actions + "runs/11"]: [inProgress, inProgress, inProgress, { status: "completed", conclusion: "success", run_attempt: 1 }],
       [jobsOf(11)]: [poll(running), poll(running), poll(passed, job("report", null, "queued")), poll(passed, job("report", "success"), job("verify", null, "in_progress"))] });
     expect([result.stdout, result.sleeps]).toEqual(["run-id=11\n", [20, 20]]);
     expect(source(fixture({ conclusion: "failure" })).stdout, "the source's own verify failed").toBe("run-id=11\n");
     const failed = source({ ...fixture({ status: "in_progress", conclusion: null }), [jobsOf(11)]: { jobs: [job("plan", "success"), job("test (1/1)", "failure"), job("report", null, "queued")] },
-      [actions + "runs/11"]: { status: "completed", conclusion: "failure" } });
+      [actions + "runs/11"]: { status: "completed", conclusion: "failure", run_attempt: 1 } });
     expect([failed.stdout, failed.sleeps]).toEqual(["run-id=\n", []]);
   });
+
+  // Rerun all jobs lists attempt 1's jobs until attempt 2 creates its own; a failed-jobs rerun relists attempt 1's
+  // successes as attempt 2 beside the failed job's attempt 1 (runs 38989734393 and 43498119958).
+  // Rerun all jobs lists attempt 1's jobs until attempt 2 creates its own; a failed-jobs rerun relists attempt 1's
+  // successes as attempt 2 beside the failed job's attempt 1 (runs 38989734393 and 43498119958).
+  const [a1, a2] = [(name: string, conclusion: string) => job(name, conclusion), (name: string, conclusion: string) => ({ ...job(name, conclusion), run_attempt: 2 })];
+  it.each([["full rerun", () => [a1("plan", "success"), a1("test (1/1)", "failure")]], ["failed-jobs rerun", () => [a2("plan", "success"), a1("test (1/1)", "failure")]]] as const)(
+    "waits through a %s whose new attempt has not yet replaced an older attempt's failed shard", (_, first) => {
+      const result = source({ ...fixture({ status: "in_progress", conclusion: null, run_attempt: 2 }), [actions + "runs/11"]: { status: "in_progress", run_attempt: 2 },
+        [jobsOf(11)]: [{ jobs: first() }, { jobs: [a2("plan", "success"), a1("test (1/1)", "failure"), a2("test (1/1)", "success")] }] });
+      expect([result.stdout, result.sleeps]).toEqual(["run-id=11\n", [20]]);
+    });
 
   it("keeps waiting while the shard or its artifact is not listed yet, and falls back once the run ends without them", () => {
     const [running, artifacts] = [fixture({ status: "in_progress", conclusion: null }), actions + "runs/11/artifacts?per_page=100&page=1"];
     const lagging = source({ ...running, [jobsOf(11)]: [{ jobs: [job("plan", "success")] }, running[jobsOf(11)], running[jobsOf(11)]],
-      [artifacts]: [{ artifacts: [] }, running[artifacts]], [actions + "runs/11"]: { status: "in_progress" } });
+      [artifacts]: [{ artifacts: [] }, running[artifacts]], [actions + "runs/11"]: { status: "in_progress", run_attempt: 1 } });
     expect([lagging.stdout, lagging.sleeps]).toEqual(["run-id=11\n", [20, 20]]);
-    const ended = source({ ...running, [artifacts]: { artifacts: [] }, [actions + "runs/11"]: { status: "completed", conclusion: "success" } });
+    const ended = source({ ...running, [artifacts]: { artifacts: [] }, [actions + "runs/11"]: { status: "completed", conclusion: "success", run_attempt: 1 } });
     expect([ended.stdout, ended.sleeps]).toEqual(["run-id=\n", [20]]);
   });
 
@@ -153,7 +165,7 @@ print(json.dumps(answer))
     const borrowable = { [runsAt(size)]: fixture({ id: 22, head_sha: size })[runsAt(code)], [actions + "runs/22/artifacts?per_page=100&page=1"]: fixture()[actions + "runs/11/artifacts?per_page=100&page=1"] };
     for (const conclusion of ["success", "failure", "cancelled"])
       expect(source({ ...fixture(), ...borrowable, [jobsOf(22)]: { jobs: [job("plan", "success"), job("test (1/1)", "success"), job("record-source", conclusion)] } }).stdout, conclusion).toBe("run-id=11\n");
-    const queued = source({ ...fixture(), [actions + "runs/22"]: { status: "in_progress" }, [jobsOf(22)]: [{ jobs: [job("record-source", null, "queued")] }, fixture()[jobsOf(22)]] });
+    const queued = source({ ...fixture(), [actions + "runs/22"]: { status: "in_progress", run_attempt: 1 }, [jobsOf(22)]: [{ jobs: [job("record-source", null, "queued")] }, fixture()[jobsOf(22)]] });
     expect([queued.stdout, queued.sleeps]).toEqual(["run-id=11\n", [20]]);
   });
 
