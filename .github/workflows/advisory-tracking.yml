@@ -139,7 +139,7 @@ jobs:
             ...advisories.map((advisory) => "- " + span(advisory.github_advisory_id) + ": " + span(advisory.module_name) + " " + span(advisory.vulnerable_versions)
               + ", " + span(advisory.severity) + ": " + span(advisory.title) + " (patched " + span(advisory.patched_versions) + ")"),
             "",
-            "Each needs a disposition: an upgrade, an override, a removal, or a \x60pnpm.auditConfig.ignoreGhsas\x60 entry"
+            "Each needs a disposition: an upgrade, an override, a removal, or an \x60auditConfig.ignoreGhsas\x60 entry in pnpm-workspace.yaml"
               + " whose reason tests/ci/audit-acceptance.test.ts records.",
           ])].join("\n"));
           ' > "${RUNNER_TEMP}/advisory-tracking.md"

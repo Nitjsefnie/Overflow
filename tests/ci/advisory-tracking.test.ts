@@ -91,7 +91,7 @@ describe.skipIf(process.platform !== "linux")("the audit job's listing and the c
     expect([outcome.status, outcome.calls, outcome.posts.length, outcome.posts[0]!.split("\n")[0]]).toEqual([0, [AUDIT, READ, POST], 1, "<!-- overflow:advisory-tracking -->"]);
     expect(outcome.posts[0]!.split("\n").filter((line) => line.startsWith("- "))).toEqual([G1, G2].map((id) =>
       `- \` ${id} \`: \` lodash \` \` <4.17.21 \`, \` high \`: \`\`\` Fixture @advisory ${id} in #1 with \`\`code\`\` \`\`\` (patched \` >=4.17.21 \`)`));
-    for (const disposition of ["upgrade", "override", "removal", "pnpm.auditConfig.ignoreGhsas"]) expect(outcome.posts[0]).toContain(disposition);
+    for (const disposition of ["upgrade", "override", "removal", "auditConfig.ignoreGhsas", "pnpm-workspace.yaml"]) expect(outcome.posts[0]).toContain(disposition);
   });
 
   // [name, audit answers, comment pages before the run, the one body posted (trailing newline dropped), or none]
