@@ -1884,6 +1884,9 @@
       "tests/ci/ledger-relay-workflow.test.ts": [
         0.01
       ],
+      "tests/ci/pnpm-install-retry.test.ts": [
+        0.86
+      ],
       "tests/ci/pr-data-triggers.test.ts": [
         0.02
       ],
@@ -1904,7 +1907,8 @@
       ],
       "tests/ci/verify-pr-tree.test.ts": [
         8.77,
-        4.73
+        4.73,
+        2.94
       ],
       "tests/ci/verify-step-reachability.test.ts": [
         0.03
@@ -3039,7 +3043,8 @@
       "tests/moderation/credit-adjustment-store.test.ts": [
         3.01,
         4.03,
-        6.4
+        6.4,
+        1.59
       ],
       "tests/moderation/current-role.test.ts": [
         0.06
