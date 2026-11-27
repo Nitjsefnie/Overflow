@@ -182,11 +182,7 @@ export function tryGit(repo: string, ...args: string[]): { status: number; stdou
 }
 
 /** Writes `files` (repo-relative path to content), commits them all, and returns the new HEAD SHA. */
-export async function commitFiles(
-  repo: string,
-  files: Record<string, string>,
-  message: string,
-): Promise<string> {
+export async function commitFiles(repo: string, files: Record<string, string>, message: string): Promise<string> {
   for (const [path, content] of Object.entries(files)) {
     await mkdir(dirname(join(repo, path)), { recursive: true });
     await writeFile(join(repo, path), content);

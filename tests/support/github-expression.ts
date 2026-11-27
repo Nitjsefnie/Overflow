@@ -13,18 +13,11 @@ export type JobStatus = "success" | "failure" | "cancelled";
 const CONTEXT_ROOTS = ["env", "github", "inputs", "job", "jobs", "matrix", "needs", "runner", "secrets", "steps", "strategy", "vars"];
 
 const STATUS_FUNCTIONS: Record<string, (status: JobStatus) => boolean> = {
-  success: (status) => status === "success",
-  always: () => true,
-  failure: (status) => status === "failure",
-  cancelled: (status) => status === "cancelled",
+  success: (status) => status === "success", always: () => true, failure: (status) => status === "failure", cancelled: (status) => status === "cancelled",
 };
 
 type Token =
-  | { kind: "punct"; text: string }
-  | { kind: "string"; text: string; value: string }
-  | { kind: "number"; text: string; value: number }
-  | { kind: "word"; text: string }
-  | { kind: "end"; text: "" };
+  | { kind: "punct"; text: string } | { kind: "string"; text: string; value: string } | { kind: "number"; text: string; value: number } | { kind: "word"; text: string } | { kind: "end"; text: "" };
 
 // `-` is part of a name, as in `steps.detect-docs`: a property name, not a subtraction.
 const WORD = /^[A-Za-z_][A-Za-z0-9_-]*/;
@@ -98,13 +91,8 @@ function tokenize(source: string): Token[] {
 }
 
 type Node =
-  | { kind: "literal"; value: ExpressionValue }
-  | { kind: "status"; name: string }
-  | { kind: "path"; segments: string[] }
-  | { kind: "not"; operand: Node }
-  | { kind: "and"; left: Node; right: Node }
-  | { kind: "or"; left: Node; right: Node }
-  | { kind: "compare"; operator: "==" | "!="; left: Node; right: Node };
+  | { kind: "literal"; value: ExpressionValue } | { kind: "status"; name: string } | { kind: "path"; segments: string[] } | { kind: "not"; operand: Node }
+  | { kind: "and"; left: Node; right: Node } | { kind: "or"; left: Node; right: Node } | { kind: "compare"; operator: "==" | "!="; left: Node; right: Node };
 
 function parseExpression(source: string): Node {
   const tokens = tokenize(source);
@@ -236,9 +224,7 @@ const keyed = (holder: object, name: string, exact = false): unknown =>
 function resolvePath(segments: string[], context: ActionsContext): ExpressionValue {
   const [root, ...rest] = segments;
   if (!CONTEXT_ROOTS.includes(root.toLowerCase())) {
-    throw new Error(
-      `${root} is not a context this evaluator resolves; a path rooted outside a GitHub context is a typo, and reading it as null would disable every step that uses it`,
-    );
+    throw new Error(`${root} is not a context this evaluator resolves; a path rooted outside a GitHub context is a typo, and reading it as null would disable every step that uses it`);
   }
   let current: unknown = keyed(context, root);
   for (const [depth, segment] of rest.entries()) {
@@ -285,20 +271,14 @@ function evaluate(node: Node, context: ActionsContext, status: JobStatus): Expre
 // Strips a `${{ … }}` wrapper; a bare expression, as a non-wrapped `if:` writes it, stands as it is.
 function unwrap(expression: string): string {
   const trimmed = expression.trim();
-  return trimmed.startsWith("${{") && trimmed.endsWith("}}")
-    ? trimmed.slice(3, -2).trim()
-    : trimmed;
+  return trimmed.startsWith("${{") && trimmed.endsWith("}}") ? trimmed.slice(3, -2).trim() : trimmed;
 }
 
 export function evaluateExpression(expression: string, context: ActionsContext = {}, status: JobStatus = "success"): ExpressionValue {
   try {
     return evaluate(parseExpression(unwrap(expression)), context, status);
   } catch (error) {
-    throw new Error(
-      `cannot evaluate the GitHub Actions expression ${JSON.stringify(String(expression))}: ` +
-        `${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
+    throw new Error(`cannot evaluate the GitHub Actions expression ${JSON.stringify(String(expression))}: ` + `${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
 }
 
@@ -309,8 +289,7 @@ export const renderExpressions = (value: string, context: ActionsContext = {}): 
 // Whether an `if:` calls a status function, which stops GitHub adding its implicit `success() &&`;
 // read from the parse tree, so `'always()'` as a string literal is not a call.
 function callsStatusFunction(expression: string): boolean {
-  const walk = (node: Node): boolean =>
-    node.kind === "status" || (node.kind === "not" && walk(node.operand)) ||
+  const walk = (node: Node): boolean => node.kind === "status" || (node.kind === "not" && walk(node.operand)) ||
     ((node.kind === "and" || node.kind === "or" || node.kind === "compare") && (walk(node.left) || walk(node.right)));
   return walk(parseExpression(unwrap(expression)));
 }
@@ -318,10 +297,7 @@ function callsStatusFunction(expression: string): boolean {
 export function isSelected(step: WorkflowStep, context: ActionsContext, status: JobStatus): boolean {
   if (step.if === undefined || typeof step.if === "boolean") return step.if !== false && status === "success";
   if (typeof step.if !== "string") {
-    throw new Error(
-      `the \`if:\` of step ${JSON.stringify(step.name ?? step.uses ?? step.id ?? "unnamed")} must be a ` +
-        `string expression or a boolean, not ${JSON.stringify(step.if)}`,
-    );
+    throw new Error(`the \`if:\` of step ${JSON.stringify(step.name ?? step.uses ?? step.id ?? "unnamed")} must be a ` + `string expression or a boolean, not ${JSON.stringify(step.if)}`);
   }
   return toBoolean(evaluateExpression(step.if, context, status)) && (status === "success" || callsStatusFunction(step.if));
 }
