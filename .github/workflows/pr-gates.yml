@@ -630,22 +630,45 @@ jobs:
             console.log("::error::" + message);
             process.exit(1);
           };
-          // pnpm why places paths from the root project alone. The audit report
-          // names every path of every importer, each starting with its importer,
-          // so a finding that starts anywhere else cannot be placed here.
+          // pnpm why places paths from the root project alone, and a report path does
+          // not say where its importer id ends, so the lockfile has to name the root
+          // importer and no other. No YAML parser is installed here: only the layout
+          // pnpm writes is read, and every other spelling is refused.
+          const ENTRY = /^ {4,}(?:\x27[^\x27]*\x27|[A-Za-z0-9._~\/-]+):(?: (?:\{\}|\x27[^\x27]*\x27|[^ \x27"{}\[\]&*|>!#%@\x60][^"{}\[\]#]*))?$/;
+          const rootAlone = (dir) => {
+            const text = fs.readFileSync(dir + "/pnpm-lock.yaml", "utf8");
+            let opening = true;
+            let importers = false;
+            let root = false;
+            let read = !/[\u0085\u2028\u2029]/.test(text);
+            for (const line of text.split(/\r\n|\r|\n/)) {
+              if (/^ *(#.*)?$/.test(line)) continue;
+              if (line.startsWith(" ")) {
+                if (opening) return false;
+                if (!importers) continue;
+                if (/^  \.:( \{\})?$/.test(line)) root = true;
+                else read &&= root && ENTRY.test(line);
+              } else {
+                read &&= /^(---|(?!importers:.)[A-Za-z]+:( .*)?)$/.test(line);
+                importers = line === "importers:";
+              }
+              opening = line === "---";
+            }
+            return read && root;
+          };
           const triples = async (dir) => {
             const findings = [];
             for (const advisory of Object.values(JSON.parse(fs.readFileSync(dir + "/audit.json", "utf8")).advisories)) {
               if (advisory.findings.length === 0) throw new Error("an advisory without findings");
               for (const finding of advisory.findings) {
                 if (finding.paths.length === 0) throw new Error("a finding without paths");
-                if (finding.paths.some((path) => path.split(">")[0] !== ".")) refuse("the lockfile in " + label + " names an importer other than the root project, whose paths this step cannot place; refusing");
                 const pkg = advisory.module_name + "@" + finding.version;
                 if (!SAFE.test(pkg)) refuse("a package name or version in " + label + " is outside the npm alphabet; refusing to print or key it");
                 if (!GHSA.test(advisory.github_advisory_id)) refuse("a finding on " + pkg + " in " + label + " carries no github_advisory_id; refusing to key it");
                 findings.push([advisory.github_advisory_id, pkg]);
               }
             }
+            if (findings.length > 0 && !rootAlone(dir)) refuse("the lockfile in " + label + " names an importer other than the root project, whose paths this step cannot place; refusing");
             const selectors = [...new Set(findings.map(([, pkg]) => pkg))];
             const paths = new Map(selectors.map((pkg) => [pkg, new Set()]));
             let out = "[]";
