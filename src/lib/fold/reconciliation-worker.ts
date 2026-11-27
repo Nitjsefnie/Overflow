@@ -215,8 +215,9 @@ export type ReconciliationJobOutcome =
  * setup or cancellation retains it too.
  *
  * A duplicate claim consumes an attempt; its extra deferral UPDATE refunds
- * that attempt only when the write succeeds. Repeatedly failing deferral
- * writes burn attempts toward FAILED even though no duplicate fold starts.
+ * that attempt unless the write throws or a later claim moved the count.
+ * Repeatedly failing deferral writes burn attempts toward FAILED even though
+ * no duplicate fold starts.
  * Ordinary work costs a set lookup, add and delete, with no extra database call.
  */
 const inFlightRepositoriesByStore = new WeakMap<ReconciliationWorkerStore, Set<string>>();
