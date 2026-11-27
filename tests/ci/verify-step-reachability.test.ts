@@ -425,7 +425,7 @@ describe("the expression evaluator", () => {
     expect(evaluateExpression("Steps.PR.Outputs.Base_Ref", pullRequest)).toBe("main");
     expect(["ENV.Home", "env.HOME"].map((path) => evaluateExpression(path, { env: { Home: "set" } }))).toEqual(["set", null]);
     // The runner's keywords keep their case: `True` is a name there, and no context has it.
-    expect(captureError(() => evaluateExpression("True"))).toContain("True");
+    expect(captureError(() => evaluateExpression("True"))).toContain("True is not a context this evaluator resolves");
   });
 
   it("casts a missing value to zero when the comparison crosses types", () => {
