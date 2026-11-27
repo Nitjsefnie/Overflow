@@ -179,7 +179,18 @@ jobs:
       - name: Enable the pinned package manager
         run: |
           corepack enable
-          corepack install --global pnpm@12.23.0
+          attempts=3
+          for attempt in $(seq 1 "$attempts"); do
+            if corepack install --global pnpm@12.23.0; then
+              break
+            fi
+            if [ "$attempt" -eq "$attempts" ]; then
+              echo "::error::Installing pnpm (corepack install of the pinned package manager) failed on all ${attempts} attempts, so the job stopped before any step that uses pnpm."
+              exit 1
+            fi
+            echo "corepack install attempt ${attempt} of ${attempts} failed; retrying."
+            sleep 10
+          done
           pnpm --version
 
       - name: Install dependencies
@@ -356,7 +367,18 @@ jobs:
       - name: Enable the pinned package manager
         run: |
           corepack enable
-          corepack install --global pnpm@12.23.0
+          attempts=3
+          for attempt in $(seq 1 "$attempts"); do
+            if corepack install --global pnpm@12.23.0; then
+              break
+            fi
+            if [ "$attempt" -eq "$attempts" ]; then
+              echo "::error::Installing pnpm (corepack install of the pinned package manager) failed on all ${attempts} attempts, so the job stopped before any step that uses pnpm."
+              exit 1
+            fi
+            echo "corepack install attempt ${attempt} of ${attempts} failed; retrying."
+            sleep 10
+          done
           pnpm --version
 
       - name: Install dependencies
