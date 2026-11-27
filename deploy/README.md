@@ -733,6 +733,11 @@ considered explicitly.
 
 ## 10. Deploying a new revision
 
+Before a deploy, check that the host runs the Node and pnpm versions that the
+`package.json` of the commit being deployed names in `engines.node` and
+`packageManager`. When either differs, move the host first:
+[Moving an existing host to a revision's Node and pnpm](#moving-an-existing-host-to-a-revisions-node-and-pnpm).
+
 The procedure runs as one committed script. As root, from the tree root, run
 `bash scripts/deploy-revision.sh`; it applies the source-tree guards described
 below, plus its automated pending-migration and workflow-pinned CI gates: the
@@ -1485,6 +1490,74 @@ If the revision includes a change to `overflow.service`, repeat section 6 as wel
 `git pull` updates the copy in the tree, not the one systemd reads. Nothing
 here refreshes `/root/overflow.service.pre-hardening` or the checkout it starts
 from, which is what the last paragraph of section 9 is about.
+
+### Moving an existing host to a revision's Node and pnpm
+
+`package.json` pins the runtime: `engines.node` names the Node version and
+`packageManager` the pnpm version. A revision can change either.
+
+Node does not follow on its own. The unit starts whatever `/usr/local/bin/node`
+points at, and `scripts/deploy-revision.sh` does not compare the host's Node
+with `engines.node`. On an older Node its install prints an
+`Unsupported engine` warning and exits 0, so nothing stops the deploy from
+building and restarting on the Node the host already has.
+
+pnpm follows only inside the tree. There corepack by default runs the pnpm
+that the tree's `package.json` names, downloading a version it has not fetched
+before. Without this step the deploy's install therefore fetches the new pnpm
+in the middle of the deploy, through the corepack of the Node whose
+`corepack enable` wrote the shims in `/usr/local/sbin`, and the default pnpm
+outside the tree stays the previous one.
+
+Before deploying a revision that changes either value, move the host as root.
+Section 3's two command blocks are the procedure; only the versions in them
+differ.
+
+1. Read both values from `package.json` at the commit being deployed, main's
+   tip: after a `git fetch origin main` in the tree,
+   `git show FETCH_HEAD:package.json` prints it. The file in `/srv/overflow`
+   is the previous revision's until the deploy fast-forwards the tree.
+2. If `engines.node` changed, run section 3's first command block with that
+   version in place of every Node version the block spells. Its checksum line
+   must print the tarball's name followed by `OK`; on anything else, stop
+   before the extract. If `/usr/local/lib/nodejs/node-v<version>` already
+   exists, from an earlier attempt or because the host ran that version before,
+   run only the block's `ln -sfn` line and its version check: the `mv` would
+   move a newly extracted tree inside the existing directory instead of
+   replacing it.
+3. Run section 3's second command block with `engines.node` in its `ln -sfn`
+   line and the version after `pnpm@` in `packageManager` in its
+   `corepack prepare` line. A revision that changes only `packageManager`
+   needs only this block.
+4. Check from `/tmp`, where section 3's blocks run:
+   `/usr/local/bin/node --version` must print `v` followed by `engines.node`,
+   and `pnpm --version` must print the version after `pnpm@` in
+   `packageManager`. Inside `/srv/overflow` the same command reports the pin of
+   the checked-out `package.json`, whichever version was activated.
+5. Deploy at once, with the script or the manual block.
+
+A step that fails leaves the host in one of these states:
+
+- Until the first block's `ln -sfn` line runs, nothing the service or a deploy
+  uses has changed: `/usr/local/bin/node` still resolves to the previous Node.
+  While `/usr/local/lib/nodejs/node-v<version>` does not exist yet, the block
+  can be run again from its first line.
+- Once `/usr/local/bin/node` is relinked, the running service keeps the Node it
+  started with, and every later start of the unit runs the new one. That start
+  is the deploy's restart, or an earlier one if the service restarts first for
+  another reason (the unit sets `Restart=on-failure`); the serving release then
+  runs on the new Node before the revision that names it is deployed. This is
+  why the deploy follows at once.
+- Until the second block's `corepack prepare` completes, the previous pnpm
+  stays the default, which `pnpm --version` from `/tmp` shows. The second block
+  can be run again from its first line.
+
+To go back, run the same lines with the previous versions: the two `ln -sfn`
+lines, `corepack enable`, `corepack prepare` and both version checks. Nothing
+in this step removes the previous Node's directory under
+`/usr/local/lib/nodejs`, so those lines find it where it was. Section 9's
+release rollback does not go back for you: it switches the build and leaves
+both links where this step put them.
 
 ## 11. Rotating the credential encryption key
 
