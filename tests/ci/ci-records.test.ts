@@ -105,7 +105,7 @@ print(json.dumps(answer))
   }
   // A job that never ran, skipped or cancelled before it started, lists no steps (live API).
   const job = (name: string, conclusion: string | null, status = "completed", steps = conclusion && conclusion !== "skipped" ? [{ name: "Set up job" }] : []) => ({ name, status, conclusion, steps, run_attempt: 1 });
-  const jobsOf = (id: number) => actions + `runs/${id}/jobs?filter=all&per_page=100&page=1`;
+  const jobsOf = (id: number, page = 1) => actions + `runs/${id}/jobs?filter=all&per_page=100&page=${page}`;
   function fixture(override: Record<string, unknown> = {}, measured = code) {
     const main = { path: ".github/workflows/ci.yml", event: "push", head_branch: "main", head_repository: { full_name: repo }, run_attempt: 1 };
     const jobs = (plan: string | null, source: ReturnType<typeof job>) => ({ jobs: [job("postgres-image", "success"), job("plan", plan), job("test (1/1)", plan), source] });
@@ -188,9 +188,10 @@ print(json.dumps(answer))
     expect([queued.stdout, queued.sleeps]).toEqual(["run-id=11\n", [20]]);
   });
 
-  it("uses the successful rerun of a shard that failed on the first attempt", () => {
-    const jobs = [job("plan", "success"), job("test (1/1)", "failure"), { ...job("test (1/1)", "success"), run_attempt: 2 }];
-    expect(source({ ...fixture({ run_attempt: 2 }), [actions + "runs/11/jobs?filter=all&per_page=100&page=1"]: { jobs } }).stdout.trim()).toBe("run-id=11");
+  it("uses the successful rerun of a shard that failed on the first attempt, listed on the second page of the run's jobs", () => {
+    const shards = Array.from({ length: 99 }, (_, shard) => job(`test (${shard + 1}/99)`, shard ? "success" : "failure"));
+    expect(source({ ...fixture({ run_attempt: 2 }), [jobsOf(11)]: { jobs: [job("plan", "success"), ...shards] }, [jobsOf(11, 2)]: { jobs: [{ ...job("test (1/99)", "success"), run_attempt: 2 }] },
+      [actions + "runs/11/artifacts?per_page=100&page=1"]: { artifacts: shards.map((_, shard) => ({ name: `test-ratchet-cell-${shard + 1}_99`, expired: false })) } }).stdout.trim()).toBe("run-id=11");
   });
 
   it("refuses a successful run from before a runless code change", () => {
