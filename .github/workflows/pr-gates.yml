@@ -222,66 +222,26 @@ jobs:
           OVERFLOW_PR_NUMBER: ${{ github.event.pull_request.number }}
         run: git fetch --no-tags origin "+refs/pull/${OVERFLOW_PR_NUMBER}/head:refs/remotes/pr/head"
 
-      # The gitleaks ACTION is deliberately not used: it decides the scanner's
-      # version, so a bump inside it would move the rule set under a committed
-      # baseline with nothing in this repository to change. The release
-      # tarball is downloaded, checksum-verified and extracted here instead, so
-      # the version this job scans with is the version the file records.
-      # Values reach the shell through env:, never through ${{ }} in run:.
-      #
-      # `echo "$install_dir" >> "$GITHUB_PATH"` is load-bearing and not
-      # decoration. Every `run:` block is a fresh shell whose PATH is the
-      # runner's, NOT this step's working directory, so a binary extracted
-      # anywhere in this step is invisible to the next one — and the next step
-      # resolves `gitleaks` by bare name, through
-      # scripts/secret-scan.sh's `command -v`. Appending the install directory
-      # to GITHUB_PATH is what lets that later shell resolve the scanner.
-      # Extracting into $RUNNER_TEMP
-      # rather than the workspace is a second, smaller choice with the same
-      # reason behind it: the checkout above just fetched a full history with
-      # fetch-depth: 0, and a downloaded executable does not belong in that
-      # tree. tests/ci/secret-scan-workflow.test.ts executes both steps against
-      # a simulated runner, so the line cannot be dropped again silently.
-      - name: Install gitleaks
-        env:
-          OVERFLOW_GITLEAKS_VERSION: 8.30.1
-          # sha256 of gitleaks_8.30.1_linux_x64.tar.gz from the release's own
-          # gitleaks_8.30.1_checksums.txt. Bump the version and checksum
-          # together, and with PINNED_GITLEAKS_VERSION in
-          # scripts/secret-scan.sh.
-          OVERFLOW_GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-        # The github-env ignore covers the constant value written:
-        # "${RUNNER_TEMP}/gitleaks-bin"; no untrusted value reaches GITHUB_PATH
-        # under any event, and bare-name resolution (command -v gitleaks in
-        # scripts/secret-scan.sh) depends on this line. (issue 984)
-        run: | # zizmor: ignore[github-env]
-          tarball="gitleaks_${OVERFLOW_GITLEAKS_VERSION}_linux_x64.tar.gz"
-          curl -fsSL --retry 3 -o "$tarball" \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${OVERFLOW_GITLEAKS_VERSION}/${tarball}"
-          # sha256sum is the LAST stage of this pipeline, which is what makes it
-          # safe under a runner's `bash -e`: with no pipefail a pipeline's
-          # status is the last stage's, so the step inherits THIS check's
-          # status. That is a property of the order, not of the flags — an
-          # earlier stage failing while a later one succeeded would be
-          # invisible, and the downloader's own flags (`-f -sS -L
-          # --retry 3`) are what cover the download. Do not reorder these two
-          # commands, and do not append a stage after sha256sum.
-          echo "${OVERFLOW_GITLEAKS_SHA256}  ${tarball}" | sha256sum -c -
-          install_dir="${RUNNER_TEMP}/gitleaks-bin"
-          mkdir -p "$install_dir"
-          tar -xzf "$tarball" -C "$install_dir" gitleaks
-          echo "$install_dir" >> "$GITHUB_PATH"
-          "$install_dir/gitleaks" version
-
-      # The exit code of this step IS the signal. No continue-on-error, no
-      # `if: always()` — anything that lets the run proceed past a nonzero exit
-      # turns a detection signal into decoration. The script checks the
-      # gitleaks version before scanning, so a drifted scanner fails here with a
-      # message rather than producing findings the baseline cannot explain.
+      # The action's exit status is the gate: it fails on any finding the
+      # .gitleaksignore of the commit the change is judged against does not
+      # list. No continue-on-error and no
+      # `if: always()` here, or a findings run finishes green.
       - name: Scan the full history
-        env:
-          OVERFLOW_GITLEAKS_REPORT_PATH: gitleaks-report.json
-        run: bash scripts/secret-scan.sh
+        uses: Nitjsefnie-Actions/secret-scan@74f89d79a41106c9a65c23f20895b23240665f26 # v1.0.0
+
+      # The action writes no report file. This step reruns its scan with a JSON
+      # report so a red run leaves the findings behind as an artifact.
+      # shortcut: it uses the binary and trusted config that the pinned
+      # action.yml leaves under $RUNNER_TEMP, so re-check it on every re-pin,
+      # until the action writes one (Nitjsefnie-Actions/secret-scan#10).
+      - name: Write the findings report
+        if: ${{ always() }}
+        run: |
+          "$RUNNER_TEMP/gitleaks" detect --redact --ignore-gitleaks-allow --exit-code 0 \
+            --config "$RUNNER_TEMP/gitleaks-trusted/.gitleaks.toml" \
+            --gitleaks-ignore-path "$RUNNER_TEMP/gitleaks-trusted" \
+            --log-opts='--full-history --all --diff-filter=uxdb --diff-merges=first-parent' \
+            --report-format json --report-path gitleaks-report.json
 
       # Upload once more on failure: the action rethrows a network error
       # (ETIMEDOUT, ECONNRESET) without retrying, so each first attempt is
@@ -310,16 +270,16 @@ jobs:
           if-no-files-found: error
           overwrite: true
 
-      # Baseline commits must be reachable from HEAD or from the fetched PR
-      # head. This runs after the upload so an unreachable entry does not
-      # discard the scan's report. Full depth lets ancestry distinguish an
+      # The commits .gitleaksignore names must be reachable from HEAD or from
+      # the fetched PR head. This runs after the upload so an unreachable entry
+      # does not discard the scan's report. Full depth lets ancestry distinguish an
       # orphaned entry from a commit a shallow checkout simply never fetched.
       #
       # tests/ci/secret-scan-workflow.test.ts EXECUTES this step's `run:` block
       # verbatim against repositories it builds, with and without an entry that is
       # not an ancestor of HEAD, so the check is shown to reject rather than only
       # to be shaped like a check.
-      - name: Check the baseline's commits are reachable from main or the PR
+      - name: Check the ignore list's commits are reachable from main or the PR
         run: bash scripts/secret-scan-baseline.sh refs/remotes/pr/head
 
   dependency-audit:

@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { readFileSync, writeFileSync } from "node:fs";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
@@ -10,12 +9,6 @@ import { commitFiles, git, scratchGitEnv, tryGit } from "../support/scratch-git"
 import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
 const tempDirectories = createOwnedTempDirectoryRegistry([join(tmpdir(), "secret-scan-reachability-")]);
-
-const workflowVersion = String(parse(
-  readFileSync(resolve(".github/workflows/secret-scan.yml"), "utf8"),
-).jobs["secret-scan"].steps.find((step: { name?: string }) => step.name === "Install gitleaks").env.OVERFLOW_GITLEAKS_VERSION);
-
-const FAKE_GITLEAKS_VERSION = workflowVersion;
 
 type Workflow = {
   name?: string;
@@ -40,6 +33,8 @@ type Workflow = {
     }
   >;
 };
+
+const isScan = (step: { uses?: string }) => step.uses?.startsWith("Nitjsefnie-Actions/secret-scan@") ?? false;
 
 const LEGS = [{ file: ".github/workflows/secret-scan.yml", pr: false }, { file: ".github/workflows/pr-gates.yml", pr: true }] as const;
 
@@ -107,9 +102,8 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       expect(fetch?.if).toBeUndefined();
       expect(fetch?.env).toEqual({ OVERFLOW_PR_NUMBER: "${{ github.event.pull_request.number }}" });
       expect(fetch?.run).toBe('git fetch --no-tags origin "+refs/pull/${OVERFLOW_PR_NUMBER}/head:refs/remotes/pr/head"');
-      const installIndex = scan.steps.findIndex((step) => step.name === "Install gitleaks");
       expect(scan.steps.indexOf(fetch!)).toBeGreaterThan(scan.steps.indexOf(checkouts[0]));
-      expect(scan.steps.indexOf(fetch!)).toBeLessThan(installIndex);
+      expect(scan.steps.indexOf(fetch!)).toBeLessThan(scan.steps.findIndex(isScan));
     } else {
       // The load-bearing half of the split, asserted on the FILE that has to
       // be free of it: no pull-request fetch survives on the push leg, which is
@@ -127,13 +121,12 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
   });
 
   it("scans and uploads, with the reachability root its leg needs", () => {
-    const scanStep = scan.steps.find((step) => step.name === "Scan the full history");
+    const scanStep = scan.steps.find(isScan);
     const upload = scan.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
-    expect(scanStep?.run).toBe("bash scripts/secret-scan.sh");
+    expect(scanStep, "no step runs Nitjsefnie-Actions/secret-scan").toBeDefined();
     expect(scanStep?.if).toBeUndefined();
-    expect(scanStep?.env).toEqual({ OVERFLOW_GITLEAKS_REPORT_PATH: "gitleaks-report.json" });
     expect(upload?.if).toBe("${{ always() }}");
-    expect(upload?.with?.path).toBe(scanStep?.env?.OVERFLOW_GITLEAKS_REPORT_PATH);
+    expect(scan.steps.indexOf(upload!)).toBeGreaterThan(scan.steps.indexOf(scanStep!));
     const checks = scan.steps.filter((step) => /scripts\/secret-scan-baseline\.sh/.test(step.run ?? ""));
     expect(checks.map((step) => [step.if, step.run])).toEqual([
       [undefined, pr ? "bash scripts/secret-scan-baseline.sh refs/remotes/pr/head" : "bash scripts/secret-scan-baseline.sh"],
@@ -170,28 +163,9 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     expect(checkout, "the workflow must check the repository out").toBeDefined();
   });
 
-  it("verifies and extracts the scanner tarball without a package-manager install", () => {
-
-    for (const step of scan.steps) {
-      const run = step.run ?? "";
-      expect(run, "gitleaks must not be installed from a package manager").not.toMatch(
-        /(pip|npm|pnpm|yarn|go|apt-get|brew)\s+(install|get)\s+[^\n]*gitleaks/i,
-      );
-    }
-
-    const install = scan.steps.find((step) => /sha256sum -c/.test(step.run ?? ""));
-    expect(install, "no step verifies a downloaded gitleaks tarball with sha256sum -c").toBeDefined();
-    const run = install!.run ?? "";
-    expect(run, "the install step must extract the binary").toMatch(/tar\s+-xzf/);
-    // Tolerates whatever path prefix the extraction is addressed by, because
-    // that prefix is exactly what the step-boundary test below exercises and
-    // this one only needs to know the step verifies what it just unpacked.
-    expect(run, "the install step must print the version it installed").toMatch(/gitleaks"?\s+version\b/);
-  });
-
-  it("runs the scan script, and the script's exit code is the gate", async () => {
-    const scanStep = scan.steps.find((step) => /bash scripts\/secret-scan\.sh/.test(step.run ?? ""));
-    expect(scanStep, "no step runs scripts/secret-scan.sh").toBeDefined();
+  it("runs the secret-scan action, and its exit code is the gate", () => {
+    const scanStep = scan.steps.find(isScan);
+    expect(scanStep, "no step runs Nitjsefnie-Actions/secret-scan").toBeDefined();
     // The whole workflow's signal is this step's exit code. Anything that lets
     // it continue past a nonzero exit turns a detection signal into decoration.
     for (const step of scan.steps) {
@@ -241,170 +215,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     expect(scan.name ?? "", "a job name carrying an expression is a required-checks failure").not.toContain("${{");
   });
 
-  it("installs a gitleaks that the scan step's OWN shell can resolve by bare name", async () => {
-
-    const install = scan.steps.find((step) => /sha256sum -c/.test(step.run ?? ""));
-    const consumer = scan.steps.find((step) => /scripts\/secret-scan\.sh/.test(step.run ?? ""));
-    expect(install?.run, "no install step to execute").toBeDefined();
-    expect(consumer?.run, "no scan step to execute").toBeDefined();
-
-    const root = join(tmpdir(), `secret-scan-runner-${process.pid}-${Date.now()}`);
-    // The runner's own PATH. Deliberately excludes the workspace and every
-    // directory the install step might use, because on a real runner neither is
-    // on it — that exclusion is the entire subject of the test.
-    const RUNNER_PATH = ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"].join(":");
-    try {
-      const workspace = join(root, "workspace");
-      const runnerTemp = join(root, "runner-temp");
-      const stubBin = join(root, "stub-bin");
-      const dist = join(root, "dist");
-      const githubPathFile = join(root, "github-path");
-      for (const directory of [workspace, runnerTemp, stubBin, dist]) await mkdir(directory, { recursive: true });
-      await writeFile(githubPathFile, "", "utf8");
-
-      // Stage the repository the way the checkout step leaves it: the script the
-      // scan step runs, and the baseline the script insists exists. No .git —
-      // the scanner below is a fixture, not gitleaks.
-      await mkdir(join(workspace, "scripts"), { recursive: true });
-      await mkdir(join(workspace, ".github"), { recursive: true });
-      await copyFile(resolve("scripts/secret-scan.sh"), join(workspace, "scripts/secret-scan.sh"));
-      await copyFile(resolve(".github/gitleaks-baseline.json"), join(workspace, ".github/gitleaks-baseline.json"));
-      await chmod(join(workspace, "scripts/secret-scan.sh"), 0o755);
-
-      const fakeBinary = join(dist, "gitleaks");
-      await writeFile(
-        fakeBinary,
-        [
-          "#!/usr/bin/env bash",
-          "set -uo pipefail",
-          'if [ "${1:-}" = version ]; then printf \'%s\\n\' "${FAKE_GITLEAKS_VERSION}"; exit 0; fi',
-          'if [ "${1:-}" != git ]; then echo "stub gitleaks: unrecognised subcommand ${1:-}" >&2; exit 3; fi',
-          "shift",
-          "report_path=''; report_format=''; baseline=''; target=''; redacted=0; no_banner=0",
-          'while [ "$#" -gt 0 ]; do',
-          '  case "$1" in',
-          "    --redact) redacted=1 ;;",
-          "    --no-banner) no_banner=1 ;;",
-          "    --ignore-gitleaks-allow) ;;",
-          '    --report-path) report_path="$2"; shift ;;',
-          '    --report-format) report_format="$2"; shift ;;',
-          '    --baseline-path) baseline="$2"; shift ;;',
-          '    -*) echo "stub gitleaks: unrecognised flag $1" >&2; exit 3 ;;',
-          '    *) target="$1" ;;',
-          "  esac",
-          "  shift",
-          "done",
-          '[ "$redacted" = 1 ] || { echo "stub gitleaks: no --redact" >&2; exit 3; }',
-          '[ "$no_banner" = 1 ] || { echo "stub gitleaks: no --no-banner" >&2; exit 3; }',
-          '[ "$report_format" = json ] || { echo "stub gitleaks: report format is \'$report_format\'" >&2; exit 3; }',
-          '[ -f "$baseline" ] || { echo "stub gitleaks: baseline is not a file: $baseline" >&2; exit 3; }',
-          '[ -n "$target" ] || { echo "stub gitleaks: no scan target" >&2; exit 3; }',
-          "printf '[]\\n' > \"$report_path\"",
-          "exit 0",
-        ].join("\n") + "\n",
-        "utf8",
-      );
-      await chmod(fakeBinary, 0o755);
-      const tarball = join(root, `${FAKE_GITLEAKS_VERSION}_linux_x64.tar.gz`);
-      const packed = spawnSync("tar", ["-czf", tarball, "-C", dist, "gitleaks"], { encoding: "utf8" });
-      expect(packed.status, `the fixture tarball must build: ${packed.stderr}`).toBe(0);
-      const digest = createHash("sha256").update(readFileSync(tarball)).digest("hex");
-
-      // A curl that hands over the fixture instead of reaching the network. The
-      // stub fails loudly if the install step stops using -o, so this cannot
-      // quietly become a no-op that "passes" an install that downloaded nothing.
-      await writeFile(
-        join(stubBin, "curl"),
-        [
-          "#!/usr/bin/env bash",
-          "set -uo pipefail",
-          'out=""',
-          'prev=""',
-          'for a in "$@"; do',
-          '  if [ "$prev" = "-o" ]; then out="$a"; fi',
-          '  prev="$a"',
-          "done",
-          '[ -n "$out" ] || { echo "stub curl: no -o target" >&2; exit 3; }',
-          '[ -f "$STUB_TARBALL" ] || { echo "stub curl: no fixture tarball at $STUB_TARBALL" >&2; exit 3; }',
-          'cp "$STUB_TARBALL" "$out"',
-        ].join("\n") + "\n",
-        "utf8",
-      );
-      await chmod(join(stubBin, "curl"), 0o755);
-
-      // (3) The install step, verbatim, with the runner's environment.
-      const installEnv: NodeJS.ProcessEnv = {
-        // Neither step reads NODE_ENV; it is present because this repository's
-        // NodeJS.ProcessEnv requires it, and the convention across its tests.
-        NODE_ENV: "test",
-        PATH: `${stubBin}:${RUNNER_PATH}`,
-        HOME: root,
-        GITHUB_WORKSPACE: workspace,
-        GITHUB_PATH: githubPathFile,
-        RUNNER_TEMP: runnerTemp,
-        RUNNER_OS: "Linux",
-        STUB_TARBALL: tarball,
-        FAKE_GITLEAKS_VERSION: FAKE_GITLEAKS_VERSION,
-        ...install!.env,
-        // This fixture's real digest, so `sha256sum -c` is a real check. The
-        // fixture digest makes checksum validation execute on real bytes.
-        OVERFLOW_GITLEAKS_SHA256: digest,
-      };
-
-      const installed = spawnSync("bash", ["-e", "-c", install!.run!], {
-        cwd: workspace,
-        encoding: "utf8",
-        env: installEnv,
-      });
-      expect(
-        installed.status,
-        `the install step must succeed in the simulated runner:\n${installed.stdout}\n${installed.stderr}`,
-      ).toBe(0);
-
-      // (4) The scan step, verbatim, in a FRESH shell whose PATH is the
-      // runner's own PATH plus the entries the install step appended — which is
-      // precisely how a GitHub runner composes a later step's PATH.
-      const appended = readFileSync(githubPathFile, "utf8").split("\n").filter((line) => line.trim() !== "");
-      const consumerEnv: NodeJS.ProcessEnv = {
-        NODE_ENV: "test",
-        PATH: [RUNNER_PATH, ...appended].join(":"),
-        HOME: root,
-        GITHUB_WORKSPACE: workspace,
-        GITHUB_PATH: githubPathFile,
-        RUNNER_TEMP: runnerTemp,
-        RUNNER_OS: "Linux",
-        FAKE_GITLEAKS_VERSION: FAKE_GITLEAKS_VERSION,
-        ...consumer!.env,
-      };
-
-      const consumerResult = spawnSync("bash", ["-e", "-c", consumer!.run!], {
-        cwd: workspace,
-        encoding: "utf8",
-        env: consumerEnv,
-      });
-      expect(
-        consumerResult.status,
-        `the scan step must succeed in a shell that only has the runner's PATH plus whatever the ` +
-          `install step appended to $GITHUB_PATH. It exited ${consumerResult.status} with:\n` +
-          `${consumerResult.stdout}\n${consumerResult.stderr}\n` +
-          "A gitleaks extracted by one step is NOT on the next step's PATH. The install step has to " +
-          "append the directory it extracted into to $GITHUB_PATH, or the scan step runs against a " +
-          "runner that has never heard of gitleaks and fails as if the history were dirty.",
-      ).toBe(0);
-      expect(
-        consumerResult.stderr,
-        "the scan step must not report a missing or unpinned gitleaks once the install step has run",
-      ).not.toMatch(/no gitleaks on PATH|is on PATH, but this/);
-      expect(
-        existsSync(join(workspace, "gitleaks-report.json")),
-        "the scan step must actually produce the report the upload step then reads",
-      ).toBe(true);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("checks the baseline's commits for reachability, as a step that can end the run", () => {
+  it("checks the ignore list's commits for reachability, as a step that can end the run", () => {
     const step = scan.steps.find((candidate) => /scripts\/secret-scan-baseline\.sh/.test(candidate.run ?? ""));
     expect(step, "no step runs the baseline-reachability check").toBeDefined();
     expect(step!.name, "a step that can fail the run must be named, or its red is anonymous in the log").toBeTruthy();
@@ -416,7 +227,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       "the reachability step must not be gated — it is the step whose nonzero exit ends the run",
     ).not.toMatch(/always\(\)|failure\(\)|!cancelled|cancelled\(\)/);
 
-    const scanStep = scan.steps.findIndex((candidate) => /bash scripts\/secret-scan\.sh/.test(candidate.run ?? ""));
+    const scanStep = scan.steps.findIndex(isScan);
     const uploadStep = scan.steps.findIndex((candidate) => candidate.uses?.startsWith("actions/upload-artifact@"));
     const reachabilityStep = scan.steps.indexOf(step!);
     expect(scanStep, "no scan step to order against").toBeGreaterThan(-1);
@@ -442,21 +253,12 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
 
     let orphaned = "";
 
-    const finding = (commit: string, file: string) => ({
-      RuleID: "generic-api-key",
-      Description: "fixture",
-      StartLine: 116,
-      EndLine: 116,
-      Match: 'OVERFLOW_TOKEN_ENCRYPTION_KEY", "REDACTED"',
-      Secret: "REDACTED",
-      File: file,
-      Commit: commit,
-      Fingerprint: `${commit}:${file}:generic-api-key:116`,
-    });
+    const finding = (commit: string, file: string) => ({ Fingerprint: `${commit}:${file}:generic-api-key:116` });
 
-    /** Run the step's `run:` block verbatim in `repoPath`, with `baseline` as its committed file. */
-    const runStep = (repoPath: string, baseline: unknown) => {
-      writeFileSync(join(repoPath, ".github", "gitleaks-baseline.json"), `${JSON.stringify(baseline, null, 1)}\n`, "utf8");
+    /** Run the step's `run:` block verbatim in `repoPath`, with `entries` as its committed .gitleaksignore. */
+    const runStep = (repoPath: string, entries: { Fingerprint: string }[], preamble = "# fixture findings\n") => {
+      const lines = entries.map((entry) => `${entry.Fingerprint}\n`).join("");
+      writeFileSync(join(repoPath, ".gitleaksignore"), `${preamble}${lines}`, "utf8");
       return spawnSync("bash", ["-e", "-c", step().run!], {
         cwd: repoPath,
         encoding: "utf8",
@@ -492,7 +294,6 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       // script resolves its repository from its OWN location, which is what makes
       // a staged copy the checkout as far as the step is concerned.
       await mkdir(join(repoPath, "scripts"), { recursive: true });
-      await mkdir(join(repoPath, ".github"), { recursive: true });
       await copyFile(resolve(SCRIPT), join(repoPath, SCRIPT));
     });
 
@@ -500,15 +301,15 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       if (root) await tempDirectories.disposeAsync(root);
     });
 
-    it("passes when every commit the baseline names is an ancestor of HEAD", () => {
+    it("passes when every commit the ignore list names is an ancestor of HEAD", () => {
       const result = runStep(join(root, "checkout"), [
         finding(reachable, "tests/security/token-cipher.test.ts"),
       ]);
       expect(
         result.status,
-        `the step must pass on a baseline naming only reachable commits:\n${result.stdout}\n${result.stderr}`,
+        `the step must pass on an ignore list naming only reachable commits:\n${result.stdout}\n${result.stderr}`,
       ).toBe(0);
-      // Not a bare exit code: a step that exited 0 without reading the baseline
+      // Not a bare exit code: a step that exited 0 without reading the ignore list
       // would satisfy that too, so it has to say what it checked.
       expect(result.stdout, "the step must report how many entries it checked").toMatch(/1\b/);
     });
@@ -522,7 +323,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       ]);
       expect(
         result.status,
-        "a baseline naming a commit on neither HEAD nor the pull request is a defect in a tracked " +
+        "an ignore list naming a commit on neither HEAD nor the pull request is a defect in a tracked " +
           "artefact, and this step is the only thing that ever notices it",
       ).not.toBe(0);
 
@@ -534,8 +335,8 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
     });
 
     it(pr
-      ? "accepts a baseline entry reachable only from the PR root"
-      : "rejects a baseline entry reachable only from a pull-request ref, because this leg has no PR root", () => {
+      ? "accepts an ignore-list entry reachable only from the PR root"
+      : "rejects an ignore-list entry reachable only from a pull-request ref, because this leg has no PR root", () => {
       const repo = join(root, "checkout");
       expect(tryGit(repo, "merge-base", "--is-ancestor", unmerged, "HEAD").status).toBe(1);
       const result = runStep(repo, [finding(reachable, "tests/main.ts"), finding(unmerged, "tests/pr.ts")]);
@@ -544,7 +345,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
         expect(result.stdout).toContain("all 2 entries");
       } else {
-        expect(result.status, "the push leg must not resolve a baseline entry against a pull-request ref").not.toBe(0);
+        expect(result.status, "the push leg must not resolve an ignore-list entry against a pull-request ref").not.toBe(0);
         expect(result.stderr).toContain(`${finding(unmerged, "tests/pr.ts").Fingerprint} names commit ${unmerged}`);
       }
     });
@@ -580,7 +381,6 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       git(shallowPath, "init", "--quiet", "--initial-branch=main");
       const head = await commitFiles(shallowPath, { "README.md": "# shallow\n" }, "root");
       await mkdir(join(shallowPath, "scripts"), { recursive: true });
-      await mkdir(join(shallowPath, ".github"), { recursive: true });
       await copyFile(resolve(SCRIPT), join(shallowPath, SCRIPT));
 
       await writeFile(join(shallowPath, ".git", "shallow"), `${head}\n`, "utf8");
@@ -590,16 +390,24 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       expect(`${result.stdout}\n${result.stderr}`, "and it must say why, naming the depth it needs").toMatch(/shallow/i);
     });
 
-    it("cannot pass on a baseline it did not read", () => {
+    it("cannot pass on an ignore list it did not read", () => {
 
       const empty = runStep(join(root, "checkout"), []);
-      expect(empty.status, "the step must not report success on a baseline it read nothing from").not.toBe(0);
+      expect(empty.status, "the step must not report success on an ignore list it read nothing from").not.toBe(0);
       expect(`${empty.stdout}\n${empty.stderr}`, "and it must say it checked nothing").toMatch(
         /checked nothing|no entries|nothing to check/i,
       );
 
-      const reshaped = runStep(join(root, "checkout"), { findings: [] });
-      expect(reshaped.status, "the step must not report success on a baseline that is not the array gitleaks emits").not.toBe(0);
+      const global = runStep(join(root, "checkout"), [{ Fingerprint: "tests/a.ts:generic-api-key:1" }]);
+      expect(global.status, "an entry naming no commit gives the step nothing to check").not.toBe(0);
+    });
+
+    it("reads comments, blank lines and a missing final newline the way gitleaks does", () => {
+      const repo = join(root, "checkout");
+      writeFileSync(join(repo, ".gitleaksignore"), `# a comment\n\n  ${finding(reachable, "tests/a.ts").Fingerprint}  \n${finding(reachable, "tests/b.ts").Fingerprint}`, "utf8");
+      const result = spawnSync("bash", ["-e", "-c", step().run!], { cwd: repo, encoding: "utf8", env: scratchGitEnv });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("all 2 entries");
     });
   });
 
@@ -609,8 +417,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
       // invisible to git ships nothing, and this workflow's whole job is to
       // scan what actually landed.
       file,
-      ".github/gitleaks-baseline.json",
-      "scripts/secret-scan.sh",
+      ".gitleaksignore",
       "scripts/secret-scan-baseline.sh",
     ]) {
       expect(
