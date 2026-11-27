@@ -1375,11 +1375,17 @@ exit 1
     // privilege uploading SARIF needs, and any extra key — a tolerated
     // failure, a checkout without persist-credentials disabled — fails this
     // equality. Its `if:` is evaluated: CodeQL runs on every event except a
-    // records-only push, a push whose classify failed and a cancelled run.
+    // records-only push, a push whose classify failed and a cancelled run. The
+    // job's status follows its one need, `changes`, which skips off a push.
     const { if: condition, ...rest } = analyze;
-    for (const [event, result, records, status, runs] of [["push", "success", "false", "success", true], ["push", "success", "true", "success", false], ["push", "failure", null, "success", false],
-      ["push", "success", "false", "cancelled", false], ...["pull_request", "schedule", "workflow_dispatch"].map(event => [event, "skipped", null, "success", true] as const)] as const)
-      expect(isSelected({ if: condition }, { github: { event_name: event }, needs: { changes: { result, outputs: records === null ? {} : { "records-only": records } } } }, status), [event, result, records, status].join()).toBe(runs);
+    for (const [event, result, records, cancelled, runs] of [
+      ["push", "success", "false", false, true], ["push", "success", "true", false, false], ["push", "failure", null, false, false],
+      ["push", "success", "false", true, false], ...["pull_request", "schedule", "workflow_dispatch"].map(event => [event, "skipped", null, false, true] as const),
+    ] as const) {
+      const context = { github: { event_name: event }, needs: { changes: { result, outputs: records === null ? {} : { "records-only": records } } } };
+      const status = cancelled ? "cancelled" : result === "success" ? "success" : "failure";
+      expect(isSelected({ if: condition }, context, status), [event, result, records, cancelled].join()).toBe(runs);
+    }
     expect(gateBehavior(rest)).toEqual({
       needs: "changes",
       permissions: { contents: "read", "security-events": "write" },
