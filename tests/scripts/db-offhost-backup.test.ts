@@ -183,7 +183,7 @@ function runBackup(
     conversationJson?: string;
     /**
      * A CREDENTIALS_DIRECTORY the run sees, as the systemd unit hands one to
-     * the script; the bridge under test reads the osc token from there.
+     * the script; the bridge under test reads the overflow token from there.
      */
     credentialsDirectory?: string;
     /**
@@ -596,7 +596,7 @@ describe("db-offhost-backup.sh scratch naming", () => {
 });
 
 describe("db-offhost-backup.sh discord posting", () => {
-  it("posts exactly once, as osc, to the channel, with the file attached and --wait", () => {
+  it("posts exactly once, as overflow, to the channel, with the file attached and --wait", () => {
     const run = runBackup();
     const calls = sendCalls(run);
 
@@ -604,7 +604,7 @@ describe("db-offhost-backup.sh discord posting", () => {
     expect(calls, "exactly one send").toHaveLength(1);
     const [subject, body, attachFlag, attachedPath, channelFlag, channelValue, waitFlag] =
       calls[0]!.slice(3);
-    expect(calls[0]!.slice(0, 3)).toEqual(["send", "osc", "nobody"]);
+    expect(calls[0]!.slice(0, 3)).toEqual(["send", "overflow", "nobody"]);
     expect(subject).toBe(basename(run.backupPath));
     expect(attachFlag).toBe("--attach");
     expect(attachedPath).toBe(run.backupPath);
@@ -624,13 +624,13 @@ describe("db-offhost-backup.sh discord posting", () => {
     expect(run.stdout.trimEnd().endsWith(run.backupPath)).toBe(true);
   });
 
-  it("brings up its own osc connector when none is running, and stops it afterwards", () => {
+  it("brings up its own overflow connector when none is running, and stops it afterwards", () => {
     const run = runBackup({ listRc: 1 });
     const connectorCalls = run.mbCalls.filter((argv) => argv[0] === "connector");
 
     expect(run.status).toBe(0);
     expect(connectorCalls, "one connector for the job").toHaveLength(1);
-    expect(connectorCalls[0]!.slice(0, 2)).toEqual(["connector", "osc"]);
+    expect(connectorCalls[0]!.slice(0, 2)).toEqual(["connector", "overflow"]);
     expect(connectorCalls[0]![2]).toBe("--claude-pid");
     expect(connectorCalls[0]![3], "the pid is the job's own, as a number").toMatch(/^\d+$/);
     expect(sendCalls(run)).toHaveLength(1);
@@ -664,22 +664,22 @@ describe("db-offhost-backup.sh discord posting", () => {
     );
   });
 
-  it("bridges the unit's osc credential to DISCORD_TOKEN before any mailbox call", () => {
+  it("bridges the unit's overflow credential to DISCORD_TOKEN before any mailbox call", () => {
 
     const directory = tempDirectories.create(join(tmpdir(), "overflow-offhost-cred-"));
     runDirectories.push(directory);
     const credentialsDirectory = join(directory, "credentials");
     mkdirSync(credentialsDirectory);
-    writeFileSync(join(credentialsDirectory, "osc_token"), "canary-osc-token\n");
+    writeFileSync(join(credentialsDirectory, "overflow_token"), "canary-overflow-token\n");
 
     const run = runBackup({ credentialsDirectory });
 
     expect(run.status).toBe(0);
     expect(run.tokenSeen, "the CLI observed the credential's value in DISCORD_TOKEN").toBe(
-      "canary-osc-token",
+      "canary-overflow-token",
     );
     expect(JSON.stringify(run.mbCalls), "the token never rides argv").not.toContain(
-      "canary-osc-token",
+      "canary-overflow-token",
     );
   });
 
@@ -690,16 +690,16 @@ describe("db-offhost-backup.sh discord posting", () => {
     expect(sendCalls(run)).toHaveLength(1);
   });
 
-  it("deletes only its own osc-authored messages older than 14 days", () => {
+  it("deletes only its own overflow-authored messages older than 14 days", () => {
     const stale = "1111111111111111111";
     const thirteenDays = "2222222222222222222";
     const otherAuthor = "3333333333333333333";
     const fresh = "4444444444444444444";
     const conversationJson = JSON.stringify([
-      { msg_id: stale, from: "osc", created: createdDaysAgo(20) },
-      { msg_id: thirteenDays, from: "osc", created: createdDaysAgo(13) },
+      { msg_id: stale, from: "overflow", created: createdDaysAgo(20) },
+      { msg_id: thirteenDays, from: "overflow", created: createdDaysAgo(13) },
       { msg_id: otherAuthor, from: "backup-bot", created: createdDaysAgo(30) },
-      { msg_id: fresh, from: "osc", created: createdDaysAgo(0) },
+      { msg_id: fresh, from: "overflow", created: createdDaysAgo(0) },
     ]);
 
     const run = runBackup({ conversationJson });
@@ -707,17 +707,17 @@ describe("db-offhost-backup.sh discord posting", () => {
     expect(run.status).toBe(0);
     const sweep = run.mbCalls.filter((argv) => argv[0] === "conversation");
     expect(sweep, "one page, generously sized, json, in the backups channel").toEqual([
-      ["conversation", "osc", "100", "--channel", channel, "--json"],
+      ["conversation", "overflow", "100", "--channel", channel, "--json"],
     ]);
     expect(deleteCalls(run)).toEqual([
-      ["message", "osc", "delete", stale, "--channel", channel],
+      ["message", "overflow", "delete", stale, "--channel", channel],
     ]);
   });
 
   it("propagates a failed sweep deletion as a nonzero exit", () => {
     const run = runBackup({
       conversationJson: JSON.stringify([
-        { msg_id: "1111111111111111111", from: "osc", created: createdDaysAgo(20) },
+        { msg_id: "1111111111111111111", from: "overflow", created: createdDaysAgo(20) },
       ]),
       deleteRc: 1,
     });
@@ -733,7 +733,7 @@ describe("db-offhost-backup.sh discord posting", () => {
     expect(
       single.mbCalls.filter((argv) => argv[0] === "list-agents"),
       "a running connector costs exactly one 10-second probe",
-    ).toEqual([["list-agents", "osc", "--timeout", "10"]]);
+    ).toEqual([["list-agents", "overflow", "--timeout", "10"]]);
 
     const brought = runBackup({ listRc: 1 });
 
@@ -741,14 +741,14 @@ describe("db-offhost-backup.sh discord posting", () => {
     const probes = brought.mbCalls.filter((argv) => argv[0] === "list-agents");
     expect(probes[0], "the liveness probe is the 10-second one").toEqual([
       "list-agents",
-      "osc",
+      "overflow",
       "--timeout",
       "10",
     ]);
     for (const probe of probes.slice(1)) {
       expect(probe, "every bring-up probe is the short one").toEqual([
         "list-agents",
-        "osc",
+        "overflow",
         "--timeout",
         "2",
       ]);
@@ -761,9 +761,9 @@ describe("db-offhost-backup.sh discord posting", () => {
 
     expect(exhausted.status).not.toBe(0);
     const exhaustProbes = exhausted.mbCalls.filter((argv) => argv[0] === "list-agents");
-    expect(exhaustProbes[0]).toEqual(["list-agents", "osc", "--timeout", "10"]);
+    expect(exhaustProbes[0]).toEqual(["list-agents", "overflow", "--timeout", "10"]);
     expect(exhaustProbes.slice(1)).toEqual(
-      exhaustProbes.slice(1).map(() => ["list-agents", "osc", "--timeout", "2"]),
+      exhaustProbes.slice(1).map(() => ["list-agents", "overflow", "--timeout", "2"]),
     );
     expect(exhaustProbes).toHaveLength(3);
   });
@@ -771,15 +771,15 @@ describe("db-offhost-backup.sh discord posting", () => {
   it("keeps a message whose stamp will not parse, rather than deleting on a guess", () => {
     const run = runBackup({
       conversationJson: JSON.stringify([
-        { msg_id: "1111111111111111111", from: "osc", created: "not-a-timestamp" },
-        { msg_id: "2222222222222222222", from: "osc" },
-        { msg_id: "3333333333333333333", from: "osc", created: createdDaysAgo(30) },
+        { msg_id: "1111111111111111111", from: "overflow", created: "not-a-timestamp" },
+        { msg_id: "2222222222222222222", from: "overflow" },
+        { msg_id: "3333333333333333333", from: "overflow", created: createdDaysAgo(30) },
       ]),
     });
 
     expect(run.status).toBe(0);
     expect(deleteCalls(run)).toEqual([
-      ["message", "osc", "delete", "3333333333333333333", "--channel", channel],
+      ["message", "overflow", "delete", "3333333333333333333", "--channel", channel],
     ]);
   });
 });

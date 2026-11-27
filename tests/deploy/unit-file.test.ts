@@ -547,7 +547,7 @@ describe("Overflow off-host backup units", () => {
     expect(binds[0]!.value).toBe("/root/.agent-bundle/scripts/discord_mb.py");
   });
 
-  it("loads the osc token from its canonical file as a credential", () => {
+  it("loads the overflow token from its canonical file as a credential", () => {
     // The unit reads the token from the canonical file at every start, so a
     // rotation needs no Overflow-side edit; a copy kept in
     // /etc/overflow/backup.env would go stale on rotation. PID 1 opens the file before the
@@ -557,7 +557,7 @@ describe("Overflow off-host backup units", () => {
 
     expect(credentials, "exactly one credential is loaded").toHaveLength(1);
     expect(credentials[0]!.section).toBe("Service");
-    expect(credentials[0]!.value).toBe("osc_token:/root/.agent-bundle/discord/osc.token");
+    expect(credentials[0]!.value).toBe("overflow_token:/root/.agent-bundle/discord/overflow.token");
   });
 
   it("keeps the rest of the full-backup sandbox, with /root touched only by the bind and the credential", () => {
@@ -596,7 +596,7 @@ describe("Overflow off-host backup units", () => {
     // empty READ-ONLY tmpfs, so the stock HOME=/root is where connectors go
     // to die ([Errno 30] Read-only file system, measured on the first manual
     // run). HOME=/tmp moves the lock root into the private /tmp the sandbox
-    // already provides; nothing under /root becomes writable, and the osc
+    // already provides; nothing under /root becomes writable, and the overflow
     // token is not home-based, so no secret follows the move.
     const homes = entries()
       .filter((entry) => entry.section === "Service" && entry.key === "Environment")

@@ -752,7 +752,7 @@ The dump is compressed with `xz -9e`, encrypted with `age -r` to the
 operator's age public key — the only key material on the host — and
 installed in `/var/backups/overflow` as `overflow-reduced-<UTC
 timestamp>.sql.xz.age`, mode `0600` in the root-only `0700` directory like
-(d)'s dumps. The job then posts the file as the `osc` identity to the
+(d)'s dumps. The job then posts the file as the `overflow` identity to the
 dedicated private Discord channel through the mailbox CLI, bringing a
 connector up for itself and stopping it afterwards when none was running.
 Retention is 14 days on both copies: the job deletes its own posted messages
@@ -783,8 +783,8 @@ a single `BindReadOnlyPaths` entry with `ProtectHome` spelled `tmpfs` rather
 than `yes` — the pairing systemd.exec(5) sanctions for a bind destination
 under a protected directory, probed on this host's systemd (the unit file's
 comments carry the record). Nothing else under `/root` is reachable. The
-`osc` token reaches the CLI as a systemd credential: the unit loads
-`~/.agent-bundle/discord/osc.token` at every start and the job's script
+`overflow` token reaches the CLI as a systemd credential: the unit loads
+`~/.agent-bundle/discord/overflow.token` at every start and the job's script
 bridges it to `DISCORD_TOKEN` in the process environment, so the environment
 file carries no token and a rotation needs no Overflow-side edit.
 
@@ -804,7 +804,7 @@ Store the private key once in #credentials, through the mailbox CLI's `creds`
 subcommand — never in the backups channel:
 
 ```bash
-~/.agent-bundle/scripts/discord_mb.py creds osc add overflow-backup age \
+~/.agent-bundle/scripts/discord_mb.py creds overflow add overflow-backup age \
   "$(grep -v '^#' overflow-offhost-age.txt)"
 ```
 
@@ -820,15 +820,15 @@ rm overflow-offhost-age.txt
 
 Still in Discord: create the dedicated backups channel and make it private.
 The CLI creates the channel but cannot set permission overwrites, so
-restricting who may view it — only the `osc` identity's account and the
+restricting who may view it — only the `overflow` identity's account and the
 maintainer's own — is the operator's Discord-side step, in the channel's
 settings. The job posts ciphertext and file names there and nothing else,
 ever: never point `OVERFLOW_BACKUP_DISCORD_CHANNEL` at a chat channel.
 
 ```bash
-~/.agent-bundle/scripts/discord_mb.py channels osc create overflow-backups \
+~/.agent-bundle/scripts/discord_mb.py channels overflow create overflow-backups \
   --topic "Overflow encrypted off-host database backups"
-~/.agent-bundle/scripts/discord_mb.py channels osc list
+~/.agent-bundle/scripts/discord_mb.py channels overflow list
 ```
 
 Copy the numeric channel id from the list output.
@@ -844,9 +844,9 @@ OVERFLOW_BACKUP_DISCORD_CHANNEL="<numeric channel id>"
 ```
 
 No `DISCORD_TOKEN` line: the token is not configured in the file at all. The
-unit loads `~/.agent-bundle/discord/osc.token` as a systemd credential at
+unit loads `~/.agent-bundle/discord/overflow.token` as a systemd credential at
 every start and the job bridges it to `DISCORD_TOKEN` in the process
-environment, so rotating the `osc` token edits only that canonical file and
+environment, so rotating the `overflow` token edits only that canonical file and
 needs no Overflow-side edit — the next unit start picks the new value up.
 
 The optional `OVERFLOW_BACKUP_MAX_BYTES` overrides the 9.5 MiB posting
