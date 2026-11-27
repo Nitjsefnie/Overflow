@@ -1,10 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { globSync } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { readdir, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { isSelected, jobStatus } from "../support/github-expression";
+import { evaluateExpression, isSelected, jobStatus, renderExpressions } from "../support/github-expression";
+import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
+import { commitFiles, git, scratchGitEnv } from "../support/scratch-git";
 
 // A dependabot schedule. `day`, `time` and `timezone` are the keys that move
 // the lane off the default Monday slot and pin its clock, so every consumer of
@@ -618,41 +621,55 @@ cp .github/workflows/*.yml .github/workflows-pr/
     }
   });
 
+  it("runs the pr suite plan's Node version step on a merge commit: base and head runtimes once each, refusing a non-N.N.N one", async () => {
+    for (const [base, head, versions] of [["24.17.0", "24.22.3", ["24.17.0", "24.22.3"]], ["24.22.3", "24.22.3", ["24.22.3"]], ["^24", "24.22.3", undefined]] as const) {
+      const { status, values } = await prSuiteRuntimes(base, head);
+      expect({ ran: status === 0, values }, `base ${base}, head ${head}`).toEqual({ ran: versions !== undefined, values: versions });
+    }
+  });
+
   it("uses the package Node version for setup and coverage, and labels each PR matrix leg with its runtime", async () => {
-    const { engines }: { engines: { node: string } } = JSON.parse(await readFile(resolve("package.json"), "utf8"));
+    const manifest = JSON.parse(await readFile(resolve("package.json"), "utf8"));
+    const engines: { node: string } = manifest.engines;
     expect(engines.node).toMatch(/^\d+\.\d+\.\d+$/);
+    // What setup-node's `node-version-file: package.json` installs: volta.node, else devEngines.runtime's node entry, else engines.node.
+    const fromPackage = manifest.volta?.node || [manifest.devEngines?.runtime ?? []].flat()
+      .find((entry: { name?: string; version?: string }) => entry.name?.toLowerCase() === "node" && entry.version)?.version || engines.node;
+    // On an upgrade the pr suite's test job also measures the base runtime for the relay on main: a leg per version plan reads.
+    const runtime = await prSuiteRuntimes("20.0.0", engines.node);
+    expect(runtime.values).toEqual(["20.0.0", engines.node]);
     for (const file of await workflowFiles()) {
       for (const [jobName, job] of Object.entries((await readWorkflow(file)).jobs)) {
         const location = `${file} jobs.${jobName}`;
-        let version = engines.node;
-        // On an upgrade this job also measures the base runtime for the relay on main.
-        if (file === "pr-suite.yml" && jobName === "test") {
-          const runtimeAxes = Object.entries(job.strategy!.matrix).filter(([, source]) =>
-            source === "${{ fromJSON(needs.plan.outputs.nodes) }}");
-          expect(runtimeAxes, location).toHaveLength(1);
-          version = "${{ matrix." + runtimeAxes[0]![0] + " }}";
+        const legs = file === "pr-suite.yml" && jobName === "test";
+        if (legs) {
           expect(job.steps.filter((s) => s.uses?.startsWith("actions/setup-node@")), location).toHaveLength(1);
           expect(job.steps.filter((s) => s.uses?.startsWith("Nitjsefnie-Actions/test-ratchet/run@")), location).toHaveLength(1);
         }
-        for (const step of job.steps) {
-          if (step.uses?.startsWith("actions/setup-node@")) {
-            expect(step.with?.["node-version"], location).toBe(version);
-          }
-          const cell = `ubuntu-latest-node${version}`;
-          if (step.uses?.startsWith("Nitjsefnie-Actions/test-ratchet/plan@")) {
-            // plan reads `cell` as newline-separated names and plans one shard when no named cell
-            // records a file its `tests:` globs match (split.has_records), so a cell rename keeps
-            // a recorded cell named beside the new one or seeds the new cell's records.
-            const lines = (text: unknown) => String(text).split("\n").map((line) => line.trim()).filter(Boolean);
-            const names = lines(step.with?.cell);
-            expect(names, `${location} ${step.uses}`).toContain(cell);
-            const { cells } = JSON.parse(await readFile(resolve(String(step.with?.times)), "utf8")) as { cells: Record<string, object> };
-            const files = globSync(lines(step.with?.tests));
-            expect(names.some((name) => files.some((file) => Object.hasOwn(cells[name] ?? {}, file))),
-              `${location}: no cell named in plan's cell: records a file its tests: globs match, so the plan collapses to one`
-              + ` shard; name a recorded cell beside ${cell} in cell:, or seed ${cell}'s records in ${String(step.with?.times)}`).toBe(true);
-          } else if (step.uses?.startsWith("Nitjsefnie-Actions/test-ratchet/")) {
-            expect(step.with?.cell, `${location} ${step.uses}`).toBe(cell);
+        for (const version of legs ? runtime.values! : [engines.node]) {
+          const value = (input: unknown) => renderExpressions(String(input), legs ? { matrix: { [runtime.axis!]: version } } : {});
+          for (const step of job.steps) {
+            if (step.uses?.startsWith("actions/setup-node@")) {
+              // setup-node takes node-version over node-version-file; package.json is the one file read here.
+              const { "node-version": pinned, "node-version-file": versionFile } = step.with ?? {};
+              expect(pinned === undefined ? (versionFile === "package.json" ? fromPackage : versionFile) : value(pinned), location).toBe(version);
+            }
+            const cell = `ubuntu-latest-node${version}`;
+            if (step.uses?.startsWith("Nitjsefnie-Actions/test-ratchet/plan@")) {
+              // plan reads `cell` as newline-separated names and plans one shard when no named cell
+              // records a file its `tests:` globs match (split.has_records), so a cell rename keeps
+              // a recorded cell named beside the new one or seeds the new cell's records.
+              const lines = (text: unknown) => String(text).split("\n").map((line) => line.trim()).filter(Boolean);
+              const names = lines(value(step.with?.cell));
+              expect(names, `${location} ${step.uses}`).toContain(cell);
+              const { cells } = JSON.parse(await readFile(resolve(String(step.with?.times)), "utf8")) as { cells: Record<string, object> };
+              const files = globSync(lines(step.with?.tests));
+              expect(names.some((name) => files.some((file) => Object.hasOwn(cells[name] ?? {}, file))),
+                `${location}: no cell named in plan's cell: records a file its tests: globs match, so the plan collapses to one`
+                + ` shard; name a recorded cell beside ${cell} in cell:, or seed ${cell}'s records in ${String(step.with?.times)}`).toBe(true);
+            } else if (step.uses?.startsWith("Nitjsefnie-Actions/test-ratchet/")) {
+              expect(value(step.with?.cell), `${location} ${step.uses}`).toBe(cell);
+            }
           }
         }
       }
@@ -1619,6 +1636,43 @@ async function workflowFiles() {
 }
 
 async function readWorkflow(name: string): Promise<Workflow> { return parse(await readFile(resolve(".github/workflows", name), "utf8")) as Workflow; }
+
+const scratch = createOwnedTempDirectoryRegistry(join(tmpdir(), "overflow-pr-suite-nodes-"));
+
+// The pr suite test job's runtime axis on a pull_request merge commit (HEAD^1 the base, HEAD^2 the head) whose package.json names
+// `base` and `head` as engines.node: plan's `run:` steps run there as the runner runs a step with no `shell:` (`bash -e`, with
+// RUNNER_TEMP and GITHUB_OUTPUT), and what they wrote rendered through plan's declared outputs into the axis's fromJSON.
+async function prSuiteRuntimes(base: string, head: string): Promise<{ status: number | null; axis?: string; values?: string[] }> {
+  const { jobs } = await readWorkflow("pr-suite.yml");
+  const root = await scratch.createAsync();
+  try {
+    const manifest = (node: string) => ({ "package.json": JSON.stringify({ engines: { node } }) });
+    git(root, "init", "-qb", "main");
+    await commitFiles(root, manifest(base), "base");
+    git(root, "checkout", "-qb", "head");
+    await commitFiles(root, { ...manifest(head), head: "" }, "head");
+    git(root, "checkout", "-q", "main");
+    git(root, "merge", "-q", "--no-ff", "head", "-m", "merge");
+    const steps: Record<string, { outputs: Record<string, string> }> = {};
+    for (const step of jobs.plan!.steps.filter((planStep) => planStep.run)) {
+      const output = join(root, "output");
+      await writeFile(output, "");
+      const { status } = spawnSync("bash", ["-e", "-c", step.run!], { cwd: root, timeout: 10_000, env: { ...scratchGitEnv, RUNNER_TEMP: root, GITHUB_OUTPUT: output } });
+      if (status !== 0) return { status };
+      const lines = (await readFile(output, "utf8")).split("\n").filter(Boolean);
+      steps[String(step.id)] = { outputs: Object.fromEntries(lines.map((line) => line.split(/=(.*)/s).slice(0, 2))) };
+    }
+    const outputs = Object.fromEntries(Object.entries(jobs.plan!.outputs ?? {}).map(([name, value]) => [name, renderExpressions(value, { steps })]));
+    const axes = Object.entries(jobs.test!.strategy!.matrix).flatMap(([axis, source]) => {
+      const inner = /^\$\{\{\s*fromJSON\((.*)\)\s*\}\}$/.exec(String(source))?.[1];
+      return inner === undefined ? [] : [{ axis, values: JSON.parse(String(evaluateExpression(inner, { needs: { plan: { outputs } } })) || "null") as string[] }];
+    });
+    expect(axes, "pr-suite.yml jobs.test: one matrix axis is a whole fromJSON(needs.plan.outputs.<name>)").toHaveLength(1);
+    return { status: 0, ...axes[0]! };
+  } finally {
+    await scratch.disposeAsync(root);
+  }
+}
 
 function checkIgnore(pathname: string): number | null {
   return spawnSync("git", ["check-ignore", "--no-index", "--quiet", pathname], {

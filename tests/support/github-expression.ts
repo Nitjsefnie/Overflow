@@ -298,6 +298,10 @@ export function evaluateExpression(expression: string, context: ActionsContext =
   }
 }
 
+// A value as the runner renders it in a context: each `${{ }}` part evaluated, null as the empty string.
+export const renderExpressions = (value: string, context: ActionsContext = {}): string =>
+  value.replace(/\$\{\{(.*?)\}\}/g, (_, expression: string) => String(evaluateExpression(expression, context) ?? ""));
+
 // Whether an `if:` calls a status function, which stops GitHub adding its implicit `success() &&`;
 // read from the parse tree, so `'always()'` as a string literal is not a call.
 function callsStatusFunction(expression: string): boolean {
