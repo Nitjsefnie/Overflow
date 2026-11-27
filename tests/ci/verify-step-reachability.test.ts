@@ -222,9 +222,7 @@ function parseExpression(source: string): Node {
     if (token.kind === "punct" && token.text === "(") {
       take();
       const inner = disjunction();
-      if (!(peek().kind === "punct" && peek().text === ")")) {
-        throw new Error(`expected ) to close the parenthesised expression`);
-      }
+      if (!(peek().kind === "punct" && peek().text === ")")) throw new Error(`expected ) to close the parenthesised expression`);
       take();
       return inner;
     }
@@ -256,9 +254,7 @@ function parseExpression(source: string): Node {
       while (peek().kind === "punct" && peek().text === ".") {
         take();
         const segment = peek();
-        if (segment.kind !== "word") {
-          throw new Error(`expected a property name after '.'`);
-        }
+        if (segment.kind !== "word") throw new Error(`expected a property name after '.'`);
         take();
         segments.push(segment.text);
       }
@@ -303,9 +299,7 @@ function parseExpression(source: string): Node {
   }
 
   const node = disjunction();
-  if (peek().kind !== "end") {
-    throw new Error(`unexpected trailing input ${JSON.stringify(peek().text)}`);
-  }
+  if (peek().kind !== "end") throw new Error(`unexpected trailing input ${JSON.stringify(peek().text)}`);
   return node;
 }
 
@@ -353,9 +347,7 @@ function castToNumber(value: ExpressionValue): number {
 }
 
 function looseEquals(left: ExpressionValue, right: ExpressionValue): boolean {
-  if (typeof left === "string" && typeof right === "string") {
-    return left.toLowerCase() === right.toLowerCase();
-  }
+  if (typeof left === "string" && typeof right === "string") return left.toLowerCase() === right.toLowerCase();
   if (left === null && right === null) return true;
   if (typeof left === "number" && typeof right === "number") return left === right;
   if (typeof left === "boolean" && typeof right === "boolean") return left === right;
@@ -368,9 +360,7 @@ function looseEquals(left: ExpressionValue, right: ExpressionValue): boolean {
  *  includes an absent key, resolved by the caller to null. */
 function asScalar(value: unknown): ExpressionValue | undefined {
   if (value === null) return null;
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return value;
-  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
   return undefined;
 }
 
@@ -384,9 +374,7 @@ function resolvePath(segments: string[], context: ActionsContext): ExpressionVal
   let current: unknown = context[root];
   for (const segment of rest) {
     if (current === null || current === undefined) return null;
-    if (typeof current !== "object") {
-      throw new Error(`cannot read ${segment} from a non-object value reached by ${segments.join(".")}`);
-    }
+    if (typeof current !== "object") throw new Error(`cannot read ${segment} from a non-object value reached by ${segments.join(".")}`);
     current = (current as Record<string, unknown>)[segment];
   }
   if (current === undefined) return null;
@@ -634,9 +622,7 @@ describe("the workflow files this suite simulates", () => {
     // rename, or a broken read would leave an empty step list and every
     // selection assertion would pass by finding nothing to run.
     expect([...legs.keys()].sort()).toEqual([...LEGS].sort());
-    for (const leg of LEGS) {
-      expect(legs.get(leg)!.steps.length, `${leg}'s verify job must not be empty`).toBeGreaterThan(0);
-    }
+    for (const leg of LEGS) expect(legs.get(leg)!.steps.length, `${leg}'s verify job must not be empty`).toBeGreaterThan(0);
   });
 
   it("gate nothing at the JOB level, so every step below is reached by step selection", () => {
@@ -1467,9 +1453,7 @@ export function untrustedWrites(run: string): string[] {
   const unquotedRun = run.replace(/'[^']*'/g, "''");
   for (const redirect of unquotedRun.matchAll(/(?<![<>&\d])>>?\s*([^\s;|&]+)/g)) {
     const target = redirect[1] ?? "";
-    if (target !== '"$GITHUB_OUTPUT"' && target !== "&2") {
-      reasons.push(`redirects output into ${target}`);
-    }
+    if (target !== '"$GITHUB_OUTPUT"' && target !== "&2") reasons.push(`redirects output into ${target}`);
   }
   for (const command of run.matchAll(/(?<![\w./-])(cp|mv|tee|touch|ln|install|rm|rsync|tar|unzip)(?![\w.-])/g)) {
     reasons.push(`runs \`${command[1]}\``);
@@ -1477,9 +1461,7 @@ export function untrustedWrites(run: string): string[] {
   for (const made of run.matchAll(/(?<![\w./-])mkdir\s+(?:-\S+\s+)*"?\$\{?(\w+)\}?"?/g)) {
     if (!tempVariables.has(made[1]!)) reasons.push(`creates a directory from ${made[1]}`);
   }
-  for (const made of run.matchAll(/(?<![\w./-])mkdir\s+(?:-\S*\s+)*(?!-|"?\$)(\S+)/g)) {
-    reasons.push(`creates the directory ${made[1]}`);
-  }
+  for (const made of run.matchAll(/(?<![\w./-])mkdir\s+(?:-\S*\s+)*(?!-|"?\$)(\S+)/g)) reasons.push(`creates the directory ${made[1]}`);
   return reasons;
 }
 
@@ -1821,8 +1803,7 @@ describe("ci.yml's matrix routing on a main push", () => {
       [needs("false", "skipped"), "success", true], [needs("true", "success", "12"), "success", false], [needs("true", "success", ""), "success", true],
       [needs("true", "failure"), "success", false], [needs(null, "skipped", undefined, "failure"), "success", false], [needs("false", "skipped"), "cancelled", false],
     ] as const) expect(evaluateExpression(jobs.plan!.if, context, status), JSON.stringify([context, status])).toBe(runs);
-    for (const [plan, status, runs] of [["success", "success", true], ["skipped", "success", false], ["failure", "success", false], ["success", "cancelled", false]] as const) {
+    for (const [plan, status, runs] of [["success", "success", true], ["skipped", "success", false], ["failure", "success", false], ["success", "cancelled", false]] as const)
       expect(evaluateExpression(jobs.test!.if, { needs: { plan: { result: plan } } }, status), plan + status).toBe(runs);
-    }
   });
 });
