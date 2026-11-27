@@ -135,7 +135,7 @@ async function foldPastLeaseCap(jobs: PostgresFoldStore, result?: { skipped: boo
     scheduleLeaseRenewal: (callback) => { renew = callback; return () => {}; } });
   await vi.waitFor(() => expect(renew).toBeDefined());
   clock.value = new Date(clock.value.getTime() + RECONCILIATION_LEASE_MAX_RENEWAL_MS);
-  await sql`update repository_reconciliation_jobs set lease_expires_at = now() - interval '1 second'`;
+  await sql`update repository_reconciliation_jobs set lease_expires_at = now() - interval '1 second' where state = 'RUNNING'`;
   await renew!();
   expect(await runNextReconciliationJob({ store: jobs, reconcile: async () => { throw new Error("The reclaim folded."); } })).toBe("DEFERRED");
   return { finishFold, folding };
@@ -441,6 +441,8 @@ describe("reconciliation sweep catch-ups", () => {
     const job = async () => (await sql<{ attempt_count: number; run_after: Date }[]>`
       select attempt_count, run_after from repository_reconciliation_jobs where repository_id = ${first}`)[0];
     const makeDue = () => sql`update repository_reconciliation_jobs set run_after = now() - interval '1 second' where repository_id = ${first}`;
+    // A released job of the second repository at the count each stale claim leaves: no refund may reach it.
+    await sql`insert into repository_reconciliation_jobs (repository_id, reason, attempt_count, run_after) values (${second}, 'WEBHOOK', 1, now() + interval '1 hour')`;
 
     // Control: a hold that keeps its lease gives its attempt back.
     expect(await runNextReconciliationJob({ store: jobs, scheduleLeaseRenewal: () => () => {}, reconcile: async () => held })).toBe("BUDGET_HELD");
@@ -460,6 +462,7 @@ describe("reconciliation sweep catch-ups", () => {
     expect(await runNextReconciliationJob({ store: jobs, now: () => failedAt, scheduleLeaseRenewal: () => () => {}, onFailure: () => {},
       reconcile: async () => { throw new Error("upstream 502"); } })).toBe("RETRY_SCHEDULED");
     expect(await job()).toEqual({ attempt_count: 1, run_after: new Date(failedAt.getTime() + RECONCILIATION_RETRY_DELAYS_MS[0]) });
+    expect((await sql`select attempt_count from repository_reconciliation_jobs where repository_id = ${second}`)[0].attempt_count, "bystander").toBe(1);
     await sweepReconciliationCatchups(h.deps);
     expect(await catchupStates(first)).toEqual([{ state: catchup }]);
   });
