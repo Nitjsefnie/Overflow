@@ -380,9 +380,7 @@ function resolvePath(segments: string[], context: ActionsContext): ExpressionVal
   if (current === undefined) return null;
   const scalar = asScalar(current);
   if (scalar === undefined) {
-    throw new Error(
-      `${segments.join(".")} resolved to a ${Array.isArray(current) ? "list" : "mapping"}, which has no scalar meaning in an expression`,
-    );
+    throw new Error(`${segments.join(".")} resolved to a ${Array.isArray(current) ? "list" : "mapping"}, which has no scalar meaning in an expression`);
   }
   return scalar;
 }
@@ -546,9 +544,7 @@ function contextFor(scenario: Scenario): ActionsContext {
     },
     inputs: {},
     steps: {
-      ...(scenario.event === "workflow_run" ? { pr: { outputs: {
-        pr_number: 849, base_sha: BASE_SHA, base_ref: "main", head_sha: MERGE_SHA,
-      } } } : {}),
+      ...(scenario.event === "workflow_run" ? { pr: { outputs: { pr_number: 849, base_sha: BASE_SHA, base_ref: "main", head_sha: MERGE_SHA } } } : {}),
     },
     needs: {},
     env: {},
@@ -559,9 +555,7 @@ function contextFor(scenario: Scenario): ActionsContext {
 
 function label(step: WorkflowStep): string { return step.name ?? step.uses ?? step.id ?? "(unnamed step)"; }
 
-function runsContaining(steps: readonly WorkflowStep[], needle: string): WorkflowStep[] {
-  return steps.filter((step) => (step.run ?? "").includes(needle));
-}
+function runsContaining(steps: readonly WorkflowStep[], needle: string): WorkflowStep[] { return steps.filter((step) => (step.run ?? "").includes(needle)); }
 
 /** The message a run failed with, or "" if it did not throw. */
 function captureError(run: () => unknown): string {
