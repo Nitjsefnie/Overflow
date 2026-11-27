@@ -92,20 +92,20 @@ print(json.dumps(answer))
     const result = run("source", before, { PYTHONPATH: join(root, "bin") });
     return { ...result, sleeps: readFileSync(join(root, "bin/sleeps"), "utf8").split("\n").filter(Boolean).map(Number) };
   }
+  const job = (name: string, conclusion: string | null, status = "completed") => ({ name, status, conclusion, run_attempt: 1 });
+  const jobsOf = (id: number) => actions + `runs/${id}/jobs?filter=all&per_page=100&page=1`;
   function fixture(override: Record<string, unknown> = {}, measured = code) {
     const main = { path: ".github/workflows/ci.yml", event: "push", head_branch: "main",
       head_repository: { full_name: repo }, run_attempt: 1 };
-    const jobs = (plan: string) => ({ jobs: [
-      { name: "postgres-image", conclusion: "success", run_attempt: 1 }, { name: "plan", conclusion: plan, run_attempt: 1 },
-      { name: "test (1/1)", conclusion: plan, run_attempt: 1 },
-    ] });
+    const jobs = (plan: string | null, source: ReturnType<typeof job>) => ({ jobs: [
+      job("postgres-image", "success"), job("plan", plan), job("test (1/1)", plan), source] });
     return {
       [runsAt(size)]: { workflow_runs: [{ ...main, id: 22, head_sha: size, status: "in_progress" }] },
       [runsAt(runless)]: { workflow_runs: [] },
       [runsAt(code)]: { workflow_runs: [] },
       [runsAt(measured)]: { workflow_runs: [{ ...main, id: 11, head_sha: measured, status: "completed", conclusion: "success", ...override }] },
-      [actions + "runs/22/jobs?filter=all&per_page=100&page=1"]: jobs("skipped"),
-      [actions + "runs/11/jobs?filter=all&per_page=100&page=1"]: jobs("success"),
+      [jobsOf(22)]: jobs(null, job("record-source", null, "in_progress")),
+      [jobsOf(11)]: jobs("success", job("record-source", "skipped")),
       [actions + "runs/11/artifacts?per_page=100&page=1"]: { artifacts: [{ name: "test-ratchet-cell-1_1", expired: false }] },
     };
   }
@@ -144,6 +144,14 @@ print(json.dumps(answer))
     expect([always.status, always.stdout, always.sleeps]).toEqual([1, "", [5, 10, 20, 40]]);
   });
 
+  it("walks past records-only runs once their record-source has started, and waits while it is queued", () => {
+    const borrowable = { [runsAt(size)]: fixture({ id: 22, head_sha: size })[runsAt(code)], [actions + "runs/22/artifacts?per_page=100&page=1"]: fixture()[actions + "runs/11/artifacts?per_page=100&page=1"] };
+    const finished = source({ ...fixture(), ...borrowable, [jobsOf(22)]: { jobs: [job("plan", "success"), job("test (1/1)", "success"), job("record-source", "success")] } });
+    expect(finished.stdout).toBe("run-id=11\n");
+    const queued = source({ ...fixture(), [actions + "runs/22"]: { status: "in_progress" }, [jobsOf(22)]: [{ jobs: [job("record-source", null, "queued")] }, fixture()[jobsOf(22)]] });
+    expect([queued.stdout, queued.sleeps]).toEqual(["run-id=11\n", [20]]);
+  });
+
   it("uses the successful rerun of a shard that failed on the first attempt", () => {
     const jobs = [{ name: "plan", conclusion: "success", run_attempt: 1 },
       { name: "test (1/1)", conclusion: "failure", run_attempt: 1 }, { name: "test (1/1)", conclusion: "success", run_attempt: 2 }];
@@ -156,19 +164,22 @@ print(json.dumps(answer))
     expect(result.stderr).toContain("run 11 is not a main push over the same code");
   });
 
-  it("refuses incomplete artifacts, including a shard that expired since the original CI run", () => {
-    const responses = fixture();
-    const key = `repos/${repo}/actions/runs/11/artifacts?per_page=100&page=1`;
-    for (const artifacts of [[], [{ name: "test-ratchet-cell-1_1", expired: true }]]) {
-      const result = source({ ...responses, [key]: { artifacts } });
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("0 artifacts for 1 shards");
-    }
+  it.each([
+    ["a failed run", () => fixture({ conclusion: "failure" }), "did not successfully test"], ["a cancelled run", () => fixture({ conclusion: "cancelled" }), "did not successfully test"],
+    ["a failed plan", () => ({ ...fixture(), [jobsOf(11)]: { jobs: [job("plan", "failure"), job("test (1/1)", "success")] } }), "did not successfully test"],
+    ["no shard", () => ({ ...fixture(), [jobsOf(11)]: { jobs: [job("plan", "success")] } }), "did not successfully test"],
+    ["a failed shard", () => ({ ...fixture(), [jobsOf(11)]: { jobs: [job("plan", "success"), job("test (1/1)", "failure")] } }), "did not successfully test"],
+    ["no artifact", () => ({ ...fixture(), [actions + "runs/11/artifacts?per_page=100&page=1"]: { artifacts: [] } }), "has 0 artifacts for 1 shards"],
+    ["an expired artifact", () => ({ ...fixture(), [actions + "runs/11/artifacts?per_page=100&page=1"]: { artifacts: [{ name: "test-ratchet-cell-1_1", expired: true }] } }), "has 0 artifacts for 1 shards"],
+  ])("hands the tip its own matrix with an empty run id when the same-code run has %s", (_, responses, reason) => {
+    const result = source(responses());
+    expect([result.status, result.stdout]).toEqual([0, "run-id=\n"]);
+    expect(result.stderr).toContain(`ci run 11 ${reason}`);
   });
 
-  it.each([{ conclusion: "failure" }, { event: "pull_request" }, { head_branch: "other" },
+  it.each([{ event: "pull_request" }, { head_branch: "other" },
     { path: ".github/workflows/pr-suite.yml" }, { head_sha: "0".repeat(40) }, { head_repository: { full_name: "other/fork" } }])(
-    "refuses artifacts with mismatched provenance or an unsuccessful run %o", override => {
+    "refuses artifacts with mismatched provenance %o", override => {
       const result = source(fixture(override));
       expect(result.status).not.toBe(0);
       expect(result.stdout).not.toContain("run-id=");
@@ -202,7 +213,6 @@ describe("main push workflow routing", () => {
         env: { OVERFLOW_BEFORE_SHA: "${{ github.event.before }}" }, run: 'python3 scripts/ci_records.py classify >> "$GITHUB_OUTPUT"' }));
       expect(job.outputs?.["records-only"]).toBe("${{ steps.changes.outputs.records-only }}");
     }
-    for (const job of [ci.plan!, ci.test!]) expect(job.if).toBe("needs.postgres-image.outputs.records-only != 'true'");
     expect(ci["record-source"]!.if).toBe("needs.postgres-image.outputs.records-only == 'true'");
     expect(ci["record-source"]!.steps.at(-1)?.run).toBe('python3 scripts/ci_records.py source >> "$GITHUB_OUTPUT"');
     expect(scan.changes!.if).toBe("github.event_name == 'push'");
@@ -254,7 +264,8 @@ describe("main push workflow routing", () => {
     for (const [records, test, source, report, status] of [
       ["false", "success", "skipped", "success", 0], ["true", "skipped", "success", "success", 0],
       ["false", "skipped", "skipped", "success", 1], ["true", "skipped", "failure", "success", 1],
-      ["true", "skipped", "success", "failure", 1], ["false", "failure", "skipped", "success", 1],
+      ["true", "skipped", "success", "failure", 1], ["false", "failure", "skipped", "success", 1], ["true", "success", "success", "success", 0],
+      ["true", "success", "failure", "success", 1], ["true", "failure", "success", "success", 1], ["false", "success", "success", "success", 1],
     ] as const) {
       expect(spawnSync("bash", ["-ec", step.run!], { env: { NODE_ENV: "test", OVERFLOW_RECORDS_ONLY: records,
         OVERFLOW_TEST_RESULT: test, OVERFLOW_SOURCE_RESULT: source, OVERFLOW_REPORT_RESULT: report } }).status).toBe(status);

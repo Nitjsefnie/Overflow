@@ -95,9 +95,12 @@ jobs:
 
   # Splits the test files into shards balanced by the run times recorded in
   # .github/test-times.json. It reads only the repository and the times file.
+  # A records-only push runs it only when record-source found no usable run (an
+  # empty run id); a status function keeps record-source's skip on a code push
+  # from skipping it.
   plan:
-    needs: postgres-image
-    if: needs.postgres-image.outputs.records-only != 'true'
+    needs: [postgres-image, record-source]
+    if: ${{ !cancelled() && needs.postgres-image.result == 'success' && (needs.postgres-image.outputs.records-only != 'true' || (needs.record-source.result == 'success' && needs.record-source.outputs.run-id == '')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -123,7 +126,7 @@ jobs:
   # the depth carries no pull-request data into a privileged job.
   test:
     needs: [postgres-image, plan]
-    if: needs.postgres-image.outputs.records-only != 'true'
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -305,7 +308,7 @@ jobs:
           OVERFLOW_REPORT_RESULT: ${{ needs.report.result }}
         run: |
           case "$OVERFLOW_RECORDS_ONLY/$OVERFLOW_TEST_RESULT/$OVERFLOW_SOURCE_RESULT/$OVERFLOW_REPORT_RESULT" in
-            false/success/skipped/success | true/skipped/success/success) exit 0 ;;
+            false/success/skipped/success | true/skipped/success/success | true/success/success/success) exit 0 ;;
           esac
           echo "::error::records-only=$OVERFLOW_RECORDS_ONLY test=$OVERFLOW_TEST_RESULT source=$OVERFLOW_SOURCE_RESULT report=$OVERFLOW_REPORT_RESULT"
           exit 1

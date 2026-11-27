@@ -1836,3 +1836,21 @@ describe("every artifact upload on a required path", () => {
     });
   }
 });
+
+// Job-level routing of ci.yml's matrix on a main push, through the same evaluator; status is the run's.
+describe("ci.yml's matrix routing on a main push", () => {
+  it("runs the tip's own matrix on a code push, or on a records-only push whose record source found no usable run", async () => {
+    const jobs = (parse(await readFile(resolve(".github/workflows/ci.yml"), "utf8")) as { jobs: Record<string, { if: string; needs: string[] }> }).jobs;
+    const needs = (records: string | null, source: string, runId?: string, image = "success") => ({ needs: {
+      "postgres-image": { result: image, outputs: records === null ? {} : { "records-only": records } },
+      "record-source": { result: source, outputs: runId === undefined ? {} : { "run-id": runId } } } });
+    expect(jobs.plan!.needs).toEqual(["postgres-image", "record-source"]);
+    for (const [context, status, runs] of [
+      [needs("false", "skipped"), "success", true], [needs("true", "success", "12"), "success", false], [needs("true", "success", ""), "success", true],
+      [needs("true", "failure"), "success", false], [needs(null, "skipped", undefined, "failure"), "success", false], [needs("false", "skipped"), "cancelled", false],
+    ] as const) expect(evaluateExpression(jobs.plan!.if, context, status), JSON.stringify([context, status])).toBe(runs);
+    for (const [plan, status, runs] of [["success", "success", true], ["skipped", "success", false], ["failure", "success", false], ["success", "cancelled", false]] as const) {
+      expect(evaluateExpression(jobs.test!.if, { needs: { plan: { result: plan } } }, status), plan + status).toBe(runs);
+    }
+  });
+});

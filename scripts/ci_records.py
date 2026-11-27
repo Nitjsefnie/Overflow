@@ -52,8 +52,13 @@ def items(endpoint, key):
         page += 1
 
 
+def unusable(message):
+    print(f"{message}; the tip runs its own test matrix", file=sys.stderr, flush=True)
+    return ""
+
+
 def measured_run(run):
-    """None for an intervening record-only push, otherwise a proven producer."""
+    """None for an intervening record-only push, "" for a code run it cannot borrow, else a proven producer."""
     run_id = run["id"]
     while True:
         # A failed-jobs-only rerun can reuse successful shards from an earlier
@@ -64,19 +69,21 @@ def measured_run(run):
             if name not in jobs or job["run_attempt"] > jobs[name]["run_attempt"]:
                 jobs[name] = job
         results = {name: job["conclusion"] for name, job in jobs.items()}
-        if results.get("plan") == "skipped" and results.get("postgres-image") == "success":
+        # Only a records-only push starts record-source; a queued one has not decided yet.
+        source = jobs.get("record-source", {"status": "completed", "conclusion": "skipped"})
+        if source["status"] == "in_progress" or source["status"] == "completed" and source["conclusion"] != "skipped":
             return None
         if run["status"] == "completed":
             shards = [result for name, result in results.items() if name.startswith("test (")]
             if (run["conclusion"] != "success" or results.get("plan") != "success"
                     or not shards or any(result != "success" for result in shards)):
-                raise ValueError(f"ci run {run_id} did not successfully test the code")
+                return unusable(f"ci run {run_id} did not successfully test the code")
             # report can warn about a missing shard and leave its times unwritten.
             # Refuse a partial or expired set before treating it as the matrix.
             artifacts = {a["name"] for a in items(f"runs/{run_id}/artifacts", "artifacts")
                          if not a["expired"] and a["name"].startswith("test-ratchet-")}
             if len(artifacts) != len(shards):
-                raise ValueError(f"ci run {run_id} has {len(artifacts)} artifacts for {len(shards)} shards")
+                return unusable(f"ci run {run_id} has {len(artifacts)} artifacts for {len(shards)} shards")
             return run_id
         print(f"Waiting for ci run {run_id}", file=sys.stderr, flush=True)
         time.sleep(20)
