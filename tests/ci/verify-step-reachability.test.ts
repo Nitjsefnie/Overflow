@@ -2,6 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { evaluateExpression, isSelected, selectSteps, type ActionsContext, type JobStatus, type WorkflowStep } from "../support/github-expression";
 
 /**
  * ci.yml contract suites assert that verify's test steps exist. They do not
@@ -26,254 +27,42 @@ import { parse } from "yaml";
 /* Half 1 — the expression evaluator and the step selector                      */
 /* -------------------------------------------------------------------------- */
 
-/** A verify-job step as this suite reads it. `if` and `continue-on-error` are
- *  typed as `unknown` because they are precisely the two fields a mutation
- *  rewrites into a shape this suite must fail on rather than read past. */
-type WorkflowStep = { name?: string; id?: string; run?: string; uses?: string; with?: Record<string, unknown>; if?: unknown; "continue-on-error"?: unknown; };
-
-/**
- * Everything a GitHub expression operand can hold once evaluated. Objects and
- * arrays are deliberately absent: an object in operand position has no
- * meaning, and inventing one (coercing to `"[object Object]"`, comparing by
- * identity) would let an expression compare two different objects and learn
- * nothing. Resolution throws instead.
- */
-export type ExpressionValue = string | number | boolean | null;
-
-/** A context object that property paths resolve against. */
-export type ActionsContext = Record<string, unknown>;
-
-/** The job status the status functions report. A step's own `if:` defaults to
- *  `success()`, so `success` is the only status the scenario selector uses. */
-export type JobStatus = "success" | "failure" | "cancelled";
-
-/**
- * The contexts GitHub exposes. A path rooted outside this list is a typo or an
- * unimplemented context and throws; a path rooted inside it and naming a key
- * that is absent resolves to null, which is the case
+/*
+ * Both live in tests/support/github-expression.ts, shared with the other
+ * workflow suites; their tests stay here, and so do the reasons for their rules.
+ *
+ * `WorkflowStep` types `if` and `continue-on-error` as `unknown` because they
+ * are precisely the two fields a mutation rewrites into a shape this suite
+ * must fail on rather than read past.
+ *
+ * `ExpressionValue` is everything a GitHub expression operand can hold once
+ * evaluated. Objects and arrays are deliberately absent: an object in operand
+ * position has no meaning, and inventing one (coercing to `"[object Object]"`,
+ * comparing by identity) would let an expression compare two different objects
+ * and learn nothing. Resolution throws instead.
+ *
+ * `JobStatus` is what the status functions report. A step's own `if:` defaults
+ * to `success()`, so `success` is the only status the scenario selector uses.
+ *
+ * `CONTEXT_ROOTS` are the contexts GitHub exposes. A path rooted outside this
+ * list is a typo or an unimplemented context and throws; a path rooted inside
+ * it and naming a key that is absent resolves to null, which is the case
  * `steps.detect-docs.outputs.docs_only != 'true'` depends on before
  * detect-docs has run.
- */
-const CONTEXT_ROOTS = ["env", "github", "inputs", "job", "jobs", "matrix", "needs", "runner", "secrets", "steps", "strategy", "vars"];
-
-/** The status functions, and what each reports for a job status. `always()` is
- *  the only one that is not a comparison. */
-const STATUS_FUNCTIONS: Record<string, (status: JobStatus) => boolean> = {
-  success: (status) => status === "success",
-  always: () => true,
-  failure: (status) => status === "failure",
-  cancelled: (status) => status === "cancelled",
-};
-
-type Token =
-  | { kind: "punct"; text: string }
-  | { kind: "string"; text: string; value: string }
-  | { kind: "number"; text: string; value: number }
-  | { kind: "word"; text: string }
-  | { kind: "end"; text: "" };
-
-/**
- * Identifiers may contain `-`, because GitHub's contexts do: `steps.detect-docs`
- * and `inputs.simulate-refused-raise` are the two this repository ships, and
- * both are property names rather than subtractions.
- */
-const WORD = /^[A-Za-z_][A-Za-z0-9_-]*/;
-const NUMBER = /^-?[0-9]+(?:\.[0-9]+)?/;
-const PUNCTUATION = ["(", ")", "!", "."];
-const BINARY_PUNCTUATION = ["==", "!=", "&&", "||"];
-
-function tokenize(source: string): Token[] {
-  const tokens: Token[] = [];
-  let index = 0;
-  while (index < source.length) {
-    const character = source[index];
-    if (/\s/.test(character)) {
-      index += 1;
-      continue;
-    }
-    if (character === "'") {
-      const start = index;
-      index += 1;
-      let value = "";
-      let terminated = false;
-      while (index < source.length) {
-        const inner = source[index];
-        if (inner === "'") {
-          // GitHub escapes a quote inside a string literal by doubling it.
-          if (source[index + 1] === "'") {
-            value += "'";
-            index += 2;
-            continue;
-          }
-          index += 1;
-          terminated = true;
-          break;
-        }
-        value += inner;
-        index += 1;
-      }
-      if (!terminated) throw new Error(`unterminated string literal starting at offset ${start}`);
-      tokens.push({ kind: "string", text: source.slice(start, index), value });
-      continue;
-    }
-    if (/[0-9]/.test(character) || (character === "-" && /[0-9]/.test(source[index + 1] ?? ""))) {
-      const matched = NUMBER.exec(source.slice(index))?.[0];
-      if (!matched) throw new Error(`malformed number at offset ${index}`);
-      index += matched.length;
-      tokens.push({ kind: "number", text: matched, value: Number(matched) });
-      continue;
-    }
-    if (/[A-Za-z_]/.test(character)) {
-      const matched = WORD.exec(source.slice(index))?.[0];
-      if (!matched) throw new Error(`malformed name at offset ${index}`);
-      index += matched.length;
-      tokens.push({ kind: "word", text: matched });
-      continue;
-    }
-    const pair = source.slice(index, index + 2);
-    if (BINARY_PUNCTUATION.includes(pair)) {
-      tokens.push({ kind: "punct", text: pair });
-      index += 2;
-      continue;
-    }
-    if (PUNCTUATION.includes(character)) {
-      tokens.push({ kind: "punct", text: character });
-      index += 1;
-      continue;
-    }
-    throw new Error(`unexpected character ${JSON.stringify(character)} at offset ${index}`);
-  }
-  tokens.push({ kind: "end", text: "" });
-  return tokens;
-}
-
-type Node =
-  | { kind: "literal"; value: ExpressionValue }
-  | { kind: "status"; name: string }
-  | { kind: "path"; segments: string[] }
-  | { kind: "not"; operand: Node }
-  | { kind: "and"; left: Node; right: Node }
-  | { kind: "or"; left: Node; right: Node }
-  | { kind: "compare"; operator: "==" | "!="; left: Node; right: Node };
-
-/**
- * Recursive descent over the subset ci.yml uses, lowest precedence first:
- * `||`, then `&&`, then `==`/`!=`, then unary `!`, then a primary.
  *
- * The precedence split between `||` and `&&` is the one that matters here and
- * is the trap the ci.yml concurrency comment already names: `a || b && c`
- * parses as `a || (b && c)`, so the parenthesised form the workflow ships is
- * the only thing keeping the pull-request arm of that group from falling
- * through. A parser that got this backwards would silently misread the shape
- * it is supposed to model, which is why `&&` binding tighter is asserted
+ * `parseExpression` is a recursive descent over the subset ci.yml uses, lowest
+ * precedence first: `||`, then `&&`, then `==`/`!=`, then unary `!`, then a
+ * primary. The precedence split between `||` and `&&` is the one that matters
+ * here and is the trap the ci.yml concurrency comment already names: `a || b
+ * && c` parses as `a || (b && c)`, so the parenthesised form the workflow
+ * ships is the only thing keeping the pull-request arm of that group from
+ * falling through. A parser that got this backwards would silently misread the
+ * shape it is supposed to model, which is why `&&` binding tighter is asserted
  * directly below.
- */
-function parseExpression(source: string): Node {
-  const tokens = tokenize(source);
-  let cursor = 0;
-  const peek = () => tokens[cursor];
-  const take = () => tokens[cursor++];
-
-  function primary(): Node {
-    const token = peek();
-    if (token.kind === "punct" && token.text === "(") {
-      take();
-      const inner = disjunction();
-      if (!(peek().kind === "punct" && peek().text === ")")) throw new Error(`expected ) to close the parenthesised expression`);
-      take();
-      return inner;
-    }
-    if (token.kind === "string") {
-      take();
-      return { kind: "literal", value: token.value };
-    }
-    if (token.kind === "number") {
-      take();
-      return { kind: "literal", value: token.value };
-    }
-    if (token.kind === "word") {
-      take();
-      if (token.text === "true") return { kind: "literal", value: true };
-      if (token.text === "false") return { kind: "literal", value: false };
-      if (token.text === "null") return { kind: "literal", value: null };
-      if (peek().kind === "punct" && peek().text === "(") {
-        take();
-        if (!(peek().kind === "punct" && peek().text === ")")) {
-          throw new Error(`function ${token.text}() is called with arguments; this evaluator implements only the argument-less status functions`);
-        }
-        take();
-        if (!Object.hasOwn(STATUS_FUNCTIONS, token.text)) {
-          throw new Error(`${token.text}() is not implemented here — the subset is success(), always(), failure() and cancelled()`);
-        }
-        return { kind: "status", name: token.text };
-      }
-      const segments = [token.text];
-      while (peek().kind === "punct" && peek().text === ".") {
-        take();
-        const segment = peek();
-        if (segment.kind !== "word") throw new Error(`expected a property name after '.'`);
-        take();
-        segments.push(segment.text);
-      }
-      return { kind: "path", segments };
-    }
-    throw new Error(`expected a value, found ${JSON.stringify(token.text || "the end of the expression")}`);
-  }
-
-  function negation(): Node {
-    if (peek().kind === "punct" && peek().text === "!") {
-      take();
-      return { kind: "not", operand: negation() };
-    }
-    return primary();
-  }
-
-  function equality(): Node {
-    let left = negation();
-    while (peek().kind === "punct" && (peek().text === "==" || peek().text === "!=")) {
-      const operator = take().text === "==" ? "==" : "!=";
-      left = { kind: "compare", operator, left, right: negation() };
-    }
-    return left;
-  }
-
-  function conjunction(): Node {
-    let left = equality();
-    while (peek().kind === "punct" && peek().text === "&&") {
-      take();
-      left = { kind: "and", left, right: equality() };
-    }
-    return left;
-  }
-
-  function disjunction(): Node {
-    let left = conjunction();
-    while (peek().kind === "punct" && peek().text === "||") {
-      take();
-      left = { kind: "or", left, right: conjunction() };
-    }
-    return left;
-  }
-
-  const node = disjunction();
-  if (peek().kind !== "end") throw new Error(`unexpected trailing input ${JSON.stringify(peek().text)}`);
-  return node;
-}
-
-/** GitHub's truthiness: an empty string, `0`, `null` and the literal string
- *  `'false'` are falsy; every other value is truthy. `!` and the short-circuit
- *  operators all coerce through here. */
-function toBoolean(value: ExpressionValue): boolean {
-  if (value === null) return false;
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value !== 0;
-  return value !== "" && value !== "false";
-}
-
-/**
- * GitHub's DOCUMENTED loose equality, which is what this implements: values of
- * the same type compare by value, with strings compared case-insensitively, and
- * values of DIFFERENT types are cast to numbers and compared as numbers.
+ *
+ * `looseEquals` is GitHub's DOCUMENTED loose equality: values of the same type
+ * compare by value, with strings compared case-insensitively, and values of
+ * DIFFERENT types are cast to numbers and compared as numbers.
  *
  * What it does NOT claim is that this is the whole of the runner's behaviour.
  * The documentation does not enumerate every case the implementation carries —
@@ -295,126 +84,15 @@ function toBoolean(value: ExpressionValue): boolean {
  * equals nothing, so `!=` still holds. A strict equality, or a null that
  * compared equal to any string, would break the first selected step of the
  * job instead of the mutation this suite exists to catch.
- */
-function castToNumber(value: ExpressionValue): number {
-  if (value === null) return 0;
-  if (typeof value === "boolean") return value ? 1 : 0;
-  if (typeof value === "number") return value;
-  return value.trim() === "" ? 0 : Number(value);
-}
-
-function looseEquals(left: ExpressionValue, right: ExpressionValue): boolean {
-  if (typeof left === "string" && typeof right === "string") return left.toLowerCase() === right.toLowerCase();
-  if (left === null && right === null) return true;
-  if (typeof left === "number" && typeof right === "number") return left === right;
-  if (typeof left === "boolean" && typeof right === "boolean") return left === right;
-  const leftNumber = castToNumber(left);
-  const rightNumber = castToNumber(right);
-  return Number.isFinite(leftNumber) && Number.isFinite(rightNumber) && leftNumber === rightNumber;
-}
-
-/** A context value as an operand, or undefined when it is not a scalar — which
- *  includes an absent key, resolved by the caller to null. */
-function asScalar(value: unknown): ExpressionValue | undefined {
-  if (value === null) return null;
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
-  return undefined;
-}
-
-function resolvePath(segments: string[], context: ActionsContext): ExpressionValue {
-  const [root, ...rest] = segments;
-  if (!CONTEXT_ROOTS.includes(root)) {
-    throw new Error(
-      `${root} is not a context this evaluator resolves; a path rooted outside a GitHub context is a typo, and reading it as null would disable every step that uses it`,
-    );
-  }
-  let current: unknown = context[root];
-  for (const segment of rest) {
-    if (current === null || current === undefined) return null;
-    if (typeof current !== "object") throw new Error(`cannot read ${segment} from a non-object value reached by ${segments.join(".")}`);
-    current = (current as Record<string, unknown>)[segment];
-  }
-  if (current === undefined) return null;
-  const scalar = asScalar(current);
-  if (scalar === undefined) {
-    throw new Error(`${segments.join(".")} resolved to a ${Array.isArray(current) ? "list" : "mapping"}, which has no scalar meaning in an expression`);
-  }
-  return scalar;
-}
-
-function evaluate(node: Node, context: ActionsContext, status: JobStatus): ExpressionValue {
-  switch (node.kind) {
-    case "literal":
-      return node.value;
-    case "status":
-      return STATUS_FUNCTIONS[node.name]!(status);
-    case "path":
-      return resolvePath(node.segments, context);
-    case "not":
-      return !toBoolean(evaluate(node.operand, context, status));
-    // `&&` and `||` RETURN AN OPERAND in GitHub's language, they do not coerce
-    // to boolean. `a && b` is `b` when `a` is truthy and `a` otherwise; `a ||
-    // b` is `a` when truthy and `b` otherwise. ci.yml depends on that shape in
-    // its concurrency group, where `&& 'repo-wide' || github.sha` selects the
-    // literal string 'repo-wide' rather than the boolean true.
-    case "and": {
-      const left = evaluate(node.left, context, status);
-      return toBoolean(left) ? evaluate(node.right, context, status) : left;
-    }
-    case "or": {
-      const left = evaluate(node.left, context, status);
-      return toBoolean(left) ? left : evaluate(node.right, context, status);
-    }
-    case "compare": {
-      const equal = looseEquals(evaluate(node.left, context, status), evaluate(node.right, context, status));
-      return node.operator === "==" ? equal : !equal;
-    }
-    default:
-      throw new Error("unreachable node");
-  }
-}
-
-/** Strips a `${{ … }}` wrapper. A bare expression is used as it stands, which
- *  is the form a workflow_dispatch input default or a non-wrapped `if:` uses. */
-function unwrap(expression: string): string {
-  const trimmed = expression.trim();
-  return trimmed.startsWith("${{") && trimmed.endsWith("}}")
-    ? trimmed.slice(3, -2).trim()
-    : trimmed;
-}
-
-/**
- * Evaluates one GitHub Actions expression against a context and returns the
- * OPERAND it yields, not a boolean — the caller coerces with GitHub's rules.
  *
- * Throws, always naming the expression, on anything it cannot parse, on a
- * function or context it does not implement, and on a value it cannot coerce.
- * It never returns `false` to mean "I did not understand this": see the header
- * for why that would be the defect this suite exists to close.
- */
-export function evaluateExpression(expression: string, context: ActionsContext = {}, status: JobStatus = "success"): ExpressionValue {
-  try {
-    return evaluate(parseExpression(unwrap(expression)), context, status);
-  } catch (error) {
-    throw new Error(
-      `cannot evaluate the GitHub Actions expression ${JSON.stringify(String(expression))}: ` +
-        `${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
-  }
-}
-
-/** Whether an `if:` calls a status function, which is what stops GitHub adding
- *  its implicit `success() &&`. Read from the parse tree, so `'always()'` as a
- *  string literal is not a call. */
-function callsStatusFunction(expression: string): boolean {
-  const walk = (node: Node): boolean =>
-    node.kind === "status" || (node.kind === "not" && walk(node.operand)) ||
-    ((node.kind === "and" || node.kind === "or" || node.kind === "compare") && (walk(node.left) || walk(node.right)));
-  return walk(parseExpression(unwrap(expression)));
-}
-
-/** Whether GitHub would select this step in this context.
+ * `evaluateExpression` returns the OPERAND an expression yields, not a
+ * boolean — the caller coerces with GitHub's rules. It throws, always naming
+ * the expression, on anything it cannot parse, on a function or context it
+ * does not implement, and on a value it cannot coerce. It never returns
+ * `false` to mean "I did not understand this": see the header for why that
+ * would be the defect this suite exists to close.
+ *
+ * `isSelected` says whether GitHub would select a step in a context:
  *
  *  - A step with no `if:`, or one calling no status function, also needs a
  *    green job: GitHub adds `success() &&` to it (the scenarios stay green).
@@ -422,30 +100,14 @@ function callsStatusFunction(expression: string): boolean {
  *    runner executes the step at all; whether its failure gates anything is a
  *    separate question, and the assertions below ask it separately. Folding
  *    the second question into this one would make the suite unable to say that
- *    a tolerated step does not gate. */
-function isSelected(step: WorkflowStep, context: ActionsContext, status: JobStatus): boolean {
-  if (step.if === undefined || typeof step.if === "boolean") return step.if !== false && status === "success";
-  if (typeof step.if !== "string") {
-    throw new Error(
-      `the \`if:\` of step ${JSON.stringify(step.name ?? step.uses ?? step.id ?? "unnamed")} must be a ` +
-        `string expression or a boolean, not ${JSON.stringify(step.if)}`,
-    );
-  }
-  return toBoolean(evaluateExpression(step.if, context, status)) && (status === "success" || callsStatusFunction(step.if));
-}
-
-/**
- * The steps GitHub would execute, in file order, for a given context.
+ *    a tolerated step does not gate.
  *
- * It says nothing about WHICH steps matter: it returns what is selected, and
- * the assertions below decide what must be among them. A selector that knew
- * which steps were the test steps would re-introduce the coupling this suite
- * exists to remove — the assertions would be reading a list built to satisfy
- * them.
+ * `selectSteps` returns the steps GitHub would execute, in file order. It says
+ * nothing about WHICH steps matter: it returns what is selected, and the
+ * assertions below decide what must be among them. A selector that knew which
+ * steps were the test steps would re-introduce the coupling this suite exists
+ * to remove — the assertions would be reading a list built to satisfy them.
  */
-export function selectSteps(steps: readonly WorkflowStep[], context: ActionsContext, status: JobStatus = "success"): WorkflowStep[] {
-  return steps.filter((step) => isSelected(step, context, status));
-}
 
 /* -------------------------------------------------------------------------- */
 /* Half 2 — the assertions, over the executed command sequence                   */
