@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  # queue: max keeps a peer PR's pending run; the default slot cancels it.
+  # queue: max keeps a peer PR run the default slot would cancel.
   group: size-baseline-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
   cancel-in-progress: false
   queue: max
@@ -27,15 +27,14 @@ jobs:
         uses: Nitjsefnie-Actions/size-ratchet@84009b67a653bd057115a0318b61da7b937d810a # v4.0.3
         with:
           ceilings: ''
-          # src/ to 800: fold, moderation, dashboard, account, repository and
-          # GitLab code. scripts/ to 800: operations and CI support. Test
-          # fixtures need more; migrations stay small.
+          # src/ 800: fold, moderation, dashboard, account, repo, GitLab.
+          # scripts/ 800: ops and CI. Tests need more; migrations less.
           overrides: |
             src/: 800
             tests/: 2500
             scripts/: 800
             db/migrations/: 400
-          # Orchestration and the pnpm graph files are not source.
+          # Orchestration and pnpm graph files are not source.
           exclude: |
             .github/
             docker-compose.yml
