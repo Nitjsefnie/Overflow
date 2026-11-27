@@ -427,7 +427,10 @@ describe("reconciliation sweep catch-ups", () => {
       : [{ repository_id: first, state: "completed" }, { repository_id: second, state: "in_flight" }]);
   });
 
-  it("gives back the attempt of a fold held after losing its lease, so a later thrown error is retried and the catch-up stays in flight", async () => {
+  const held = { skipped: true, sweepHeldUntil: new Date(Date.now() + 90 * 60_000) };
+  // A held fold leaves the catch-up in flight; a completed one consumes its captured sweep, so the catch-up ends.
+  it.each([{ fold: "held", result: held, catchup: "in_flight" }, { fold: "completed", result: undefined, catchup: "completed" }])(
+    "gives back the attempt of a fold $fold after losing its lease, so a later thrown error is retried", async ({ result, catchup }) => {
     const sponsorId = await insertSponsor();
     const [first, second] = [await insertRepository(sponsorId), await insertRepository(sponsorId)];
     await storeSize(first, 5); await storeSize(second, 6);
@@ -438,19 +441,18 @@ describe("reconciliation sweep catch-ups", () => {
     const job = async () => (await sql<{ attempt_count: number; run_after: Date }[]>`
       select attempt_count, run_after from repository_reconciliation_jobs where repository_id = ${first}`)[0];
     const makeDue = () => sql`update repository_reconciliation_jobs set run_after = now() - interval '1 second' where repository_id = ${first}`;
-    const held = { skipped: true, sweepHeldUntil: new Date(Date.now() + 90 * 60_000) };
 
     // Control: a hold that keeps its lease gives its attempt back.
     expect(await runNextReconciliationJob({ store: jobs, scheduleLeaseRenewal: () => () => {}, reconcile: async () => held })).toBe("BUDGET_HELD");
     expect((await job()).attempt_count).toBe(0);
-    // One held pass per retry delay: each fold is held by the sweep budget after
-    // a same-store reclaim deferred itself, and the hold is made due by hand.
+    // One pass per retry delay: each fold ends after a same-store reclaim
+    // deferred itself, and the deferral is made due by hand.
     for (const pass of RECONCILIATION_RETRY_DELAYS_MS.keys()) {
       await makeDue();
-      const { finishFold, folding } = await foldPastLeaseCap(jobs, held);
+      const { finishFold, folding } = await foldPastLeaseCap(jobs, result);
       finishFold();
       expect(await folding).toBe("LEASE_LOST");
-      expect((await job()).attempt_count, `attempt_count at rest after held pass ${pass + 1}`).toBe(0);
+      expect((await job()).attempt_count, `attempt_count at rest after pass ${pass + 1}`).toBe(0);
     }
 
     await makeDue();
@@ -459,7 +461,7 @@ describe("reconciliation sweep catch-ups", () => {
       reconcile: async () => { throw new Error("upstream 502"); } })).toBe("RETRY_SCHEDULED");
     expect(await job()).toEqual({ attempt_count: 1, run_after: new Date(failedAt.getTime() + RECONCILIATION_RETRY_DELAYS_MS[0]) });
     await sweepReconciliationCatchups(h.deps);
-    expect(await catchupStates(first)).toEqual([{ state: "in_flight" }]);
+    expect(await catchupStates(first)).toEqual([{ state: catchup }]);
   });
 
   it("serializes two concurrent advances per sponsor: the second blocks on the sponsor's own row", async () => {

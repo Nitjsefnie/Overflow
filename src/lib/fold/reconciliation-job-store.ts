@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { SqlClient } from "@/lib/db/types";
+import type { SqlClient, TransactionClient } from "@/lib/db/types";
 import type {
   ClaimedReconciliationJob,
   ReconciliationJobReason,
@@ -17,6 +17,13 @@ type ReconciliationJobLeaseRow = {
   rederivation_generation: string;
   claimed_sweep_generation: string | null;
 };
+
+/** Gives a lost lease's attempt back while the row is released at the count that claim left. */
+async function refundLostLeaseAttempt(sql: SqlClient | TransactionClient, jobId: string, attemptCount: number): Promise<void> {
+  // shortcut: also refunds a count reset and climbed back; key on a claim generation if it bites.
+  await sql`update repository_reconciliation_jobs set attempt_count = attempt_count - 1
+    where id = ${jobId} and state <> ${"RUNNING"} and attempt_count = ${attemptCount}`;
+}
 
 export class PostgresReconciliationJobStore {
   public constructor(private readonly sql: SqlClient) {}
@@ -167,6 +174,7 @@ export class PostgresReconciliationJobStore {
     leaseToken: string,
     rederivationGeneration: number,
     sweepGeneration: number | null,
+    attemptCount: number,
   ): Promise<boolean> {
     // An event that arrived during the fold may not be reflected in it, so a job
     // that took a follow-up becomes a fresh PENDING job instead of disappearing.
@@ -192,6 +200,7 @@ export class PostgresReconciliationJobStore {
           await transaction`update repository_reconciliation_jobs set reason = 'WEBHOOK'
             where id = ${jobId} and reason = 'SWEEP' and sweep_generation = ${sweepGeneration}`;
         }
+        await refundLostLeaseAttempt(transaction, jobId, attemptCount);
         return false;
       }
       if (row.follow_up_requested || !row.request_matches) {
@@ -249,9 +258,7 @@ export class PostgresReconciliationJobStore {
       returning id
     `;
     if (rows.length === 1) return true;
-    // shortcut: also refunds a count reset and climbed back; key on a claim generation if it bites.
-    await this.sql`update repository_reconciliation_jobs set attempt_count = attempt_count - 1
-      where id = ${jobId} and state <> ${"RUNNING"} and attempt_count = ${attemptCount}`;
+    await refundLostLeaseAttempt(this.sql, jobId, attemptCount);
     return false;
   }
 

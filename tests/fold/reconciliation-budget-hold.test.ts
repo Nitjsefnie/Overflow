@@ -227,7 +227,7 @@ describe("reconciliation budget holds under the repository lock", () => {
       .mockResolvedValueOnce({ state: "ADMITTED", holdUntil: null, usage: { debt: 0, measuredAt: now, ratePerSecond: 1 } });
     await expect(drainReconciliationJobs(f.worker, { maxJobs: 3 })).resolves.toEqual(["DEFERRED", "RECONCILED"]);
     expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", held, 1);
-    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", 0, null);
+    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", 0, null, 1);
     expect(f.store.retryReconciliationJob).not.toHaveBeenCalled();
     expect(f.store.failReconciliationJob).not.toHaveBeenCalled();
     expect(f.fold.store.beginRun).toHaveBeenCalledExactlyOnceWith("repository-2", { rederivation: false });
@@ -299,7 +299,7 @@ describe("reconciliation budget holds under the repository lock", () => {
     expect(f.fold.store.assessReconciliationFairness).not.toHaveBeenCalled();
     expect(f.fold.store.getGitHubAccessToken).not.toHaveBeenCalled();
     expect(f.reconcile).not.toHaveBeenCalled();
-    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 0, null);
+    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 0, null, 1);
   });
 
   it("uses the single guarded admission assessment before diagnostics", async () => {
@@ -755,7 +755,7 @@ describe("reconciliation budget holds under the repository lock", () => {
     await expect(runNextReconciliationJob(worker)).resolves.toBe("RECONCILED");
     expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(1);
     expect(reconcile).toHaveBeenCalledWith(4242);
-    expect(store.completeReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", 0, null);
+    expect(store.completeReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", 0, null, 1);
   });
 
   it("claims when there has been no budget reading", async () => {
@@ -1157,7 +1157,7 @@ describe("the sweep request budget binds only the folds that run under it", () =
     expect(spendCalls).toEqual(["sponsor-a", "sponsor-b", "sponsor-b", "sponsor-b"]);
     expect(spent["sponsor-b"]).toBe(3);
     expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt, 1);
-    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", 0, null);
+    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", 0, null, 1);
     expect(f.fold.store.holdRun).toHaveBeenCalledExactlyOnceWith(
       "run-1", "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET", null,
     );
@@ -1307,7 +1307,7 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
     expect(spends).toEqual(["sponsor-1", "sponsor-1", "sponsor-1"]);
     expect(f.fold.store.holdRun).not.toHaveBeenCalled();
     expect(f.fold.store.failRun).not.toHaveBeenCalled();
-    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1, null);
+    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1, null, 1);
   });
 
   const sponsorBacklog = 6;
@@ -1347,7 +1347,7 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
       expect(spends).toEqual(["sponsor-1", "sponsor-1", "sponsor-1"]);
       expect(f.fold.store.holdRun).not.toHaveBeenCalled();
       expect(f.fold.store.failRun).not.toHaveBeenCalled();
-      expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1, null);
+      expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1, null, 1);
     } finally {
       if (originalPrefixed === undefined) delete process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG = originalPrefixed;
       if (originalUnprefixed === undefined) delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.RECONCILIATION_DIFF_ONLY_BACKLOG = originalUnprefixed;
@@ -1429,7 +1429,7 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
     // The cache-miss skip completes the job (the sweep re-offers it later);
     // what the pin discriminates is the skipped shape below.
     await expect(runNextReconciliationJob(f.worker)).resolves.toBe("RECONCILED");
-    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 0, null);
+    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 0, null, 1);
     expect(materialize).not.toHaveBeenCalled();
     expect(requests).toEqual([]);
     expect(spends).toEqual([]);

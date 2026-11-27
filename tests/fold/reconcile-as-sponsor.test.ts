@@ -242,7 +242,7 @@ describe("sponsor quota admission through transport, fold and worker", () => {
       expect(store.completeReconciliationJob).not.toHaveBeenCalled();
     } else {
       expect(harness.gatewaysBuilt).toEqual(["sponsor-token"]);
-      expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 0, null);
+      expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 0, null, 1);
       expect(store.deferReconciliationJob).not.toHaveBeenCalled();
     }
     expect(store.retryReconciliationJob).not.toHaveBeenCalled();
@@ -310,7 +310,7 @@ describe("sponsor quota admission through transport, fold and worker", () => {
     } };
     await expect(drainReconciliationJobs(worker, { maxJobs: 2 })).resolves.toEqual(["BUDGET_HELD", "RECONCILED"]);
     expect(store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt, 1);
-    expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", 0, null);
+    expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", 0, null, 1);
     expect(a.gatewaysBuilt).toEqual([]);
     expect(b.gatewaysBuilt).toEqual(["b-token"]);
     vi.setSystemTime(resetAt);
