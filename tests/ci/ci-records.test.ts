@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { evaluateExpression, isSelected, jobStatus, type ActionsContext } from "../support/github-expression";
+import { evaluateExpression, isSelected, jobStatus, renderExpressions, type ActionsContext } from "../support/github-expression";
 import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
 const records = ["size-baseline", "comment-share", "ci-thresholds", "test-times"].map(name => `.github/${name}.json`);
@@ -19,9 +19,8 @@ interface Job { if?: string; needs?: string | string[]; steps: Step[]; outputs?:
 function workflow(file: string): { on: { push: unknown }; jobs: Record<string, Job> } { return parse(readFileSync(`.github/workflows/${file}.yml`, "utf8")); }
 const [ci, scan] = [workflow("ci").jobs, workflow("code-scanning").jobs];
 const stepOf = (job: Job, id: string) => job.steps.find(step => step.id === id)!;
-// Values (a step's `env:`, a job's `outputs:`) as the runner renders them in a context: each `${{ }}` part evaluated, null as the empty string.
-const render = (values: Record<string, string> | undefined, context: ActionsContext) => Object.fromEntries(Object.entries(values ?? {}).map(([name, value]) =>
-  [name, String(value).replace(/\$\{\{(.*?)\}\}/g, (_, expression: string) => String(evaluateExpression(expression, context) ?? ""))]));
+// Values (a step's `env:`, a job's `outputs:`) as the runner renders them in a context.
+const render = (values: Record<string, string> | undefined, context: ActionsContext) => Object.fromEntries(Object.entries(values ?? {}).map(([name, value]) => [name, renderExpressions(String(value), context)]));
 const [classify, scanClassify, findSource] = [stepOf(ci["postgres-image"]!, "changes"), stepOf(scan.changes!, "changes"), stepOf(ci["record-source"]!, "source")];
 
 describe("ratchet record pushes", () => {
