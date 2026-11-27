@@ -39,10 +39,7 @@ type JobSnapshot = {
   due_now: boolean;
 };
 
-function nextExternalId(): number {
-  externalId += 1;
-  return externalId;
-}
+function nextExternalId(): number { externalId += 1; return externalId; }
 
 async function insertRepository(): Promise<string> {
   const githubUserId = nextExternalId();
@@ -67,9 +64,7 @@ async function insertRepository(): Promise<string> {
 
 function signal(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
-  const promise = new Promise<void>((settle) => {
-    resolve = settle;
-  });
+  const promise = new Promise<void>((settle) => { resolve = settle; });
   return { promise, resolve };
 }
 
@@ -90,9 +85,7 @@ async function waitUntilBlockedOnJobRow(): Promise<void> {
           and wait_event_type = 'Lock'
       ) as waiting
     `;
-    if (waiter.waiting) {
-      return;
-    }
+    if (waiter.waiting) { return; }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("No transaction ever queued behind the reconciliation job row lock.");
@@ -130,9 +123,7 @@ async function jobById(jobId: string): Promise<JobSnapshot | undefined> {
 
 async function claimOrFail(): Promise<ClaimedReconciliationJob> {
   const claimed = await store.claimNextReconciliationJob();
-  if (claimed === null) {
-    throw new Error("Expected a reconciliation job to be claimable.");
-  }
+  if (claimed === null) { throw new Error("Expected a reconciliation job to be claimable."); }
   return claimed;
 }
 
