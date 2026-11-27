@@ -506,7 +506,7 @@ describe("PostgreSQL reconciliation job queue", () => {
 
     try {
       await enqueued.promise;
-      const completing = store.completeReconciliationJob(claimed.id, claimed.leaseToken, claimed.rederivationGeneration);
+      const completing = store.completeReconciliationJob(claimed.id, claimed.leaseToken, claimed.rederivationGeneration, claimed.sweepGeneration);
       // The completion must reach the row and wait there rather than decide from
       // a snapshot taken before the enqueue. Waited on as a lock the database
       // reports, not as an interval.
@@ -602,7 +602,7 @@ describe("PostgreSQL reconciliation job queue", () => {
     expect(second.id).toBe(first.id);
     expect(second.leaseToken).not.toBe(first.leaseToken);
     expect(second.attemptCount).toBe(2);
-    expect(await store.completeReconciliationJob(first.id, first.leaseToken, first.rederivationGeneration)).toBe(false);
+    expect(await store.completeReconciliationJob(first.id, first.leaseToken, first.rederivationGeneration, first.sweepGeneration)).toBe(false);
   });
 
   it("keeps a mid-fold enqueue's follow-up across a reclaimed lease", async () => {
@@ -621,7 +621,7 @@ describe("PostgreSQL reconciliation job queue", () => {
     expect(second.id).toBe(first.id);
     expect((await onlyJobFor(repositoryId)).follow_up_requested).toBe(true);
 
-    expect(await store.completeReconciliationJob(second.id, second.leaseToken, second.rederivationGeneration)).toBe(true);
+    expect(await store.completeReconciliationJob(second.id, second.leaseToken, second.rederivationGeneration, second.sweepGeneration)).toBe(true);
 
     const job = await onlyJobFor(repositoryId);
     expect(job.state).toBe("PENDING");
@@ -635,7 +635,7 @@ describe("PostgreSQL reconciliation job queue", () => {
     await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
     const claimed = await claimOrFail();
 
-    expect(await store.completeReconciliationJob(claimed.id, claimed.leaseToken, claimed.rederivationGeneration)).toBe(true);
+    expect(await store.completeReconciliationJob(claimed.id, claimed.leaseToken, claimed.rederivationGeneration, claimed.sweepGeneration)).toBe(true);
 
     expect(await jobsFor(repositoryId)).toHaveLength(0);
   });
@@ -648,7 +648,7 @@ describe("PostgreSQL reconciliation job queue", () => {
     const reclaimed = await claimOrFail();
     await store.enqueueReconciliationJob(repositoryId, "WEBHOOK");
 
-    expect(await store.completeReconciliationJob(reclaimed.id, reclaimed.leaseToken, reclaimed.rederivationGeneration)).toBe(true);
+    expect(await store.completeReconciliationJob(reclaimed.id, reclaimed.leaseToken, reclaimed.rederivationGeneration, reclaimed.sweepGeneration)).toBe(true);
 
     const job = await onlyJobFor(repositoryId);
     expect(job.state).toBe("PENDING");
@@ -874,7 +874,7 @@ describe("PostgreSQL reconciliation job queue", () => {
     const staleToken = randomUUID();
     const runAfter = new Date(Date.now() + 600_000);
 
-    expect(await store.completeReconciliationJob(claimed.id, staleToken, claimed.rederivationGeneration)).toBe(false);
+    expect(await store.completeReconciliationJob(claimed.id, staleToken, claimed.rederivationGeneration, claimed.sweepGeneration)).toBe(false);
     expect(await store.deferReconciliationJob(claimed.id, staleToken, runAfter)).toBe(false);
     expect(await store.retryReconciliationJob(claimed.id, staleToken, runAfter)).toBe(false);
     expect(await store.failReconciliationJob(claimed.id, staleToken)).toBe(false);

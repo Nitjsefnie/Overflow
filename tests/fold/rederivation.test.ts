@@ -46,7 +46,7 @@ describe("repository re-derivation", () => {
     const { worker, store } = fixture(request);
     expect(await runNextReconciliationJob(worker)).toBe("RECONCILED");
     expect(worker.reconcile).toHaveBeenCalledExactlyOnceWith("repo-1", { rederive: request !== null, reason: "SWEEP" });
-    expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", request === null ? 0 : 1);
+    expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", request === null ? 0 : 1, null);
     expect(store.beginRun).toHaveBeenCalledExactlyOnceWith("repo-1", { rederivation: request !== null });
   });
 
@@ -100,7 +100,7 @@ describe("repository re-derivation", () => {
     await drainThroughWorkerWiring(store, { open: async () => { throw new Error("Inactive reconciliation must not open a pass."); }, discardByRepository: discardPass });
     expect(discardPass).toHaveBeenCalledExactlyOnceWith("repo-1");
     expect(store.beginRun).toHaveBeenCalledExactlyOnceWith("repo-1", { rederivation: true });
-    expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1);
+    expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1, null);
   });
 
   it("settles an inactive repository's pass through the production wiring when the run fails", async () => {
@@ -163,7 +163,7 @@ function fixture(request: Date | null = null, attemptCount = 1) {
     recordVerifiedRepositoryIdentity: async () => {}, markRepositoryUnavailable: async () => {},
     claimNextReconciliationJob: vi.fn<ReconciliationWorkerDependencies["store"]["claimNextReconciliationJob"]>()
       .mockResolvedValueOnce({ id: "job-1", repositoryId: "repo-1", reason: "SWEEP", attemptCount,
-        leaseToken: "lease-1", rederivationRequestedAt: request, rederivationGeneration: request === null ? 0 : 1 }).mockResolvedValue(null),
+        leaseToken: "lease-1", rederivationRequestedAt: request, rederivationGeneration: request === null ? 0 : 1, sweepGeneration: null }).mockResolvedValue(null),
     renewReconciliationJobLease: vi.fn(async () => true),
     completeReconciliationJob: vi.fn<ReconciliationWorkerDependencies["store"]["completeReconciliationJob"]>(async () => true), deferReconciliationJob: vi.fn(async () => true),
     retryReconciliationJob: vi.fn(async () => true), failReconciliationJob: vi.fn(async () => true),

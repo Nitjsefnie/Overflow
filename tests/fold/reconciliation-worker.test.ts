@@ -994,14 +994,14 @@ describe("reconciliation lease heartbeat", () => {
     }
   });
 
-  it("stops on a lost lease and still attempts the guarded outcome write", async () => {
+  it("stops on a lost lease, still attempts the guarded outcome write, and reports the lost lease", async () => {
     const { store, calls } = createFakeStore({ jobs: [job()] });
     const timer = createRenewalTimer();
     const fold = signal();
     const renew = store.renewReconciliationJobLease.bind(store);
     store.renewReconciliationJobLease = async (id, token, deadline) => { await renew(id, token, deadline); return false; };
     const complete = store.completeReconciliationJob.bind(store);
-    store.completeReconciliationJob = async (id, token, rederivationGeneration) => { await complete(id, token, rederivationGeneration); return false; };
+    store.completeReconciliationJob = async (id, token, rederivationGeneration, sweepGeneration) => { await complete(id, token, rederivationGeneration, sweepGeneration); return false; };
     const running = runNextReconciliationJob({ store, reconcile: () => fold.promise, ...timer.dependencies });
     try {
       await timer.armed;
@@ -1010,7 +1010,7 @@ describe("reconciliation lease heartbeat", () => {
       await timer.tick();
       expect(calls.filter(({ method }) => method === "renew")).toHaveLength(1);
       fold.resolve();
-      await expect(running).resolves.toBe("RECONCILED");
+      await expect(running).resolves.toBe("LEASE_LOST");
       expect(calls.at(-1)).toEqual({ method: "complete", args: ["job-1", "lease-1", 0] });
       expect(timer.cancellations).toBe(1);
     } finally {
@@ -1130,8 +1130,8 @@ describe("reconciliation lease heartbeat", () => {
     const setup = signal();
     const written = signal();
     const complete = store.completeReconciliationJob.bind(store);
-    store.completeReconciliationJob = async (id, token, rederivationGeneration) => {
-      const result = await complete(id, token, rederivationGeneration);
+    store.completeReconciliationJob = async (id, token, rederivationGeneration, sweepGeneration) => {
+      const result = await complete(id, token, rederivationGeneration, sweepGeneration);
       written.resolve();
       return result;
     };
@@ -2277,6 +2277,7 @@ function job(overrides: Partial<ClaimedReconciliationJob> = {}): ClaimedReconcil
     leaseToken: "lease-1",
     rederivationRequestedAt: null,
     rederivationGeneration: 0,
+    sweepGeneration: null,
     ...overrides,
   };
 }

@@ -5,6 +5,7 @@ import type { StartedTestContainer } from "testcontainers";
 import { runMigrations } from "../../scripts/migrate";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresRepositorySizeStore } from "@/lib/fold/repository-size";
+import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { PostgresReconciliationJobStore } from "@/lib/fold/reconciliation-job-store";
 import { PostgresSweepCatchupStore } from "@/lib/fold/sweep-catchup-store";
 import {
@@ -15,6 +16,7 @@ import {
   RECONCILIATION_EVIDENCE_FORMAT,
   type ReconciliationEvidence,
 } from "@/lib/fold/reconciliation-evidence";
+import { RECONCILIATION_LEASE_MAX_RENEWAL_MS, runNextReconciliationJob } from "@/lib/fold/reconciliation-worker";
 import { startPostgresContainer } from "../support/postgres-container";
 import { validDifficultyScheme } from "../support/difficulty-scheme";
 
@@ -401,6 +403,42 @@ describe("reconciliation sweep catch-ups", () => {
     await sweepReconciliationCatchups(h.deps);
     expect(h.offered).toEqual([first, second]);
     expect(await catchupStates(first)).toEqual([{ state: "completed" }]);
+  });
+
+  it.each([false, true])("ends a catch-up whose fold outlived the lease renewal cap unless a newer sweep arrived mid-fold (newer sweep: %s)", async (newerSweep) => {
+    const sponsorId = await insertSponsor();
+    const [first, second] = [await insertRepository(sponsorId), await insertRepository(sponsorId)];
+    await storeSize(first, 5);
+    await storeSize(second, 6);
+    const h = harness();
+    h.deps.enqueue = productionEnqueue(h.offered);
+    await sweepReconciliationCatchups(h.deps);
+    const jobs = new PostgresFoldStore(sql);
+    const clock = { value: new Date() };
+    let renew: (() => Promise<void>) | undefined;
+    let finishFold!: () => void;
+    const fold = new Promise<void>((resolve) => { finishFold = resolve; });
+    const folding = runNextReconciliationJob({ store: jobs, now: () => clock.value, reconcile: () => fold,
+      scheduleLeaseRenewal: (callback) => { renew = callback; return () => {}; } });
+    await vi.waitFor(() => expect(renew).toBeDefined());
+
+    // The fold runs past the renewal cap: the lease lapses (set in SQL rather than
+    // waited out) and the capped heartbeat no longer renews it, so the same
+    // store's next drain reclaims the job and defers it behind the running fold.
+    clock.value = new Date(clock.value.getTime() + RECONCILIATION_LEASE_MAX_RENEWAL_MS);
+    await sql`update repository_reconciliation_jobs set lease_expires_at = now() - interval '1 second'`;
+    await renew!();
+    expect(await runNextReconciliationJob({ store: jobs, reconcile: async () => { throw new Error("The reclaim folded."); } })).toBe("DEFERRED");
+    if (newerSweep) await jobs.enqueueReconciliationJob(first, "SWEEP");
+    finishFold();
+    expect(await folding).toBe("LEASE_LOST");
+
+    await sweepReconciliationCatchups(h.deps);
+    expect(await sql`select repository_id::text as repository_id, reason from repository_reconciliation_jobs order by reason`)
+      .toEqual(newerSweep ? [{ repository_id: first, reason: "SWEEP" }] : [{ repository_id: second, reason: "SWEEP" }, { repository_id: first, reason: "WEBHOOK" }]);
+    expect(await sql`select repository_id::text as repository_id, state from reconciliation_sweep_catchups order by state`).toEqual(newerSweep
+      ? [{ repository_id: first, state: "in_flight" }, { repository_id: second, state: "pending" }]
+      : [{ repository_id: first, state: "completed" }, { repository_id: second, state: "in_flight" }]);
   });
 
   it("serializes two concurrent advances per sponsor: the second blocks on the sponsor's own row", async () => {

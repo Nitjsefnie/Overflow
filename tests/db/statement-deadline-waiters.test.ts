@@ -190,7 +190,7 @@ describe("statement deadline waiter paths", () => {
     const lock = await holdRow("repository_reconciliation_jobs", `id = '${job.id}'`);
     try {
       await expect(
-        store.completeReconciliationJob(job.id, leaseToken, 0),
+        store.completeReconciliationJob(job.id, leaseToken, 0, null),
       ).rejects.toMatchObject({ code: "57014" });
 
       // The transaction rolled back whole: the job keeps its lease, so expiry
@@ -203,7 +203,7 @@ describe("statement deadline waiter paths", () => {
       await lock.release();
     }
 
-    expect(await store.completeReconciliationJob(job.id, leaseToken, 0)).toBe(true);
+    expect(await store.completeReconciliationJob(job.id, leaseToken, 0, null)).toBe(true);
     const [gone] = await sql<{ id: string }[]>`
       select id from repository_reconciliation_jobs where id = ${job.id}`;
     expect(gone).toBeUndefined();
