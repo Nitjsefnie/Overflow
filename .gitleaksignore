@@ -1,0 +1,19 @@
+# Gitleaks findings Nitjsefnie-Actions/secret-scan skips, one fingerprint per
+# line (commit:file:rule:line). Each is an inert test fixture, not a credential.
+# The action reads this file from the commit a change is judged against.
+
+# A placeholder GitLab token string the forge fakes hand to the GitLab gateway.
+c50e6fd1a00d4df6e8674a0de7e7a991180157cb:tests/forge/gitlab-commit-read-fold-boundary.test.ts:gitlab-pat:195
+c50e6fd1a00d4df6e8674a0de7e7a991180157cb:tests/forge/gitlab-commit-read-fold-boundary.test.ts:gitlab-pat:233
+c50e6fd1a00d4df6e8674a0de7e7a991180157cb:tests/forge/gitlab-commit-read-fold-boundary.test.ts:gitlab-pat:260
+a92755def9df7db508adb98c66804e8644f7f935:tests/forge/credential-rejection-seam.test.ts:gitlab-pat:61
+62e9eaa7c71ef316aec021b72f6f96db6510d06f:tests/forge/credential-rejection-seam.test.ts:gitlab-pat:61
+
+# A fixed issuance UUID.
+efe1207df09dbad2d95b7e5c7502ae8d7f46e697:tests/moderation/writer-credential.test.ts:generic-api-key:18
+
+# The associated-data string of a known-answer encryption vector.
+c6e607f0644b1c55b85d73720462891965a81ac3:tests/security/token-cipher.test.ts:generic-api-key:116
+
+# A stubbed encryption key of sequential hex digits.
+1194584bb6f2ae87c30aa5b54a03674d3910fd98:tests/api/repositories.test.ts:generic-api-key:685
