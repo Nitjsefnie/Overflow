@@ -15,11 +15,7 @@ const actions = `repos/${repo}/actions/`;
 const runsAt = (sha: string) => actions + `workflows/ci.yml/runs?branch=main&event=push&head_sha=${sha}`;
 
 describe("ratchet record pushes", () => {
-  let root: string;
-  let code: string;
-  let runless: string;
-  let size: string;
-  let head: string;
+  let root: string, code: string, runless: string, size: string, head: string;
   function git(...args: string[]) { return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim(); }
   function commit() {
     git("add", ".");
