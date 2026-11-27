@@ -48,17 +48,16 @@ jobs:
       # nothing more: when the `pnpm` shim runs, corepack otherwise reads
       # `packageManager` from the nearest package.json and downloads THAT
       # version. On this file's legs the checkout is main's own tree, so the
-      # pin's work is to hold the audit at the measured 12.23.0 whatever
-      # `packageManager` main's package.json names — "verified against pnpm
-      # 12.23.0" describes a version this repository chose, not one a manifest
-      # edit picked. The pull-request-facing measurement (a pull request
-      # picking the binary through its own packageManager) is recorded
-      # identically on pr-gates.yml, job dependency-audit's copy of this block.
+      # pin keeps corepack on the installed 12.23.0 whatever `packageManager`
+      # main's package.json names, and no manifest edit picks the binary.
+      # Measured on pnpm 12.23.0: where it names another release,
+      # `pnpm --version` and `pnpm audit` exit with ERR_PNPM_BAD_PM_VERSION
+      # before any request unless `pnpm_config_pm_on_fail` is `ignore`, which
+      # this job does not set (pr-gates.yml's copy of this block does).
       #
       # This has to reach the step that runs `pnpm audit` and not merely the
       # one that installs pnpm, which is why it is here rather than on either
-      # step. Set at job level, the audit step resolves a `pnpm@9.15.9` tree to
-      # 12.23.0; set on the install step alone it resolves to 9.15.9.
+      # step: a step without it selects the `packageManager` release instead.
       COREPACK_ENABLE_PROJECT_SPEC: "0"
       # pnpm 12 does not read npm_config_*. Measured on pnpm 12.23.0: a project
       # `.npmrc` `registry=` redirects `pnpm config get registry` and the audit
