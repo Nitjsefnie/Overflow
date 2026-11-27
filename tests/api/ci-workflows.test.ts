@@ -894,12 +894,7 @@ exit 1
     const npm = config.updates.find((update) => update["package-ecosystem"] === "npm");
     expect(npm).toBeDefined();
     expect(npm!.directory).toBe("/");
-    expect(npm!.schedule).toEqual({
-      interval: "weekly",
-      day: "tuesday",
-      time: "03:17",
-      timezone: "Etc/UTC",
-    });
+    expect(npm!.schedule).toEqual({ interval: "weekly", day: "tuesday", time: "03:17", timezone: "Etc/UTC" });
     expect(npm!["open-pull-requests-limit"]).toBe(5);
     // An automated postgres bump invalidates patches/postgres@3.4.9.patch and
     // its pnpm-lock.yaml patchedDependencies hash, breaking
@@ -973,12 +968,7 @@ exit 1
     // The CI service image lane: it covers ci/Dockerfile, so `find` by ecosystem "docker" returns the root entry first and this lane is found by its directory.
     const ciDocker = config.updates.find((u) => u["package-ecosystem"] === "docker" && u.directory === "/ci/")!;
     expect(ciDocker.directory).toBe("/ci/");
-    expect(ciDocker.schedule).toEqual({
-      interval: "weekly",
-      day: "sunday",
-      time: "05:53",
-      timezone: "Etc/UTC",
-    });
+    expect(ciDocker.schedule).toEqual({ interval: "weekly", day: "sunday", time: "05:53", timezone: "Etc/UTC" });
     expect(ciDocker["open-pull-requests-limit"]).toBe(5);
     // The service image stays within major 17: the exact scope, so the ignore
     // cannot drift to another update type.
@@ -990,12 +980,7 @@ exit 1
     // file the compose database service and POSTGRES_IMAGE read.
     const compose = config.updates.find((u) => u["package-ecosystem"] === "docker-compose")!;
     expect(compose.directory).toBe("/");
-    expect(compose.schedule).toEqual({
-      interval: "weekly",
-      day: "tuesday",
-      time: "05:57",
-      timezone: "Etc/UTC",
-    });
+    expect(compose.schedule).toEqual({ interval: "weekly", day: "tuesday", time: "05:57", timezone: "Etc/UTC" });
     expect(compose["open-pull-requests-limit"]).toBe(5);
     expect(compose.ignore).toEqual([{
       "dependency-name": "postgres",
@@ -1031,12 +1016,7 @@ exit 1
 
     expect(pip).toBeDefined();
     expect(pip!.directory).toBe("/.github/");
-    expect(pip!.schedule).toEqual({
-      interval: "weekly",
-      day: "thursday",
-      time: "05:07",
-      timezone: "Etc/UTC",
-    });
+    expect(pip!.schedule).toEqual({ interval: "weekly", day: "thursday", time: "05:07", timezone: "Etc/UTC" });
     expect(pip!["open-pull-requests-limit"]).toBe(5);
     expect(pip!.groups).toBeUndefined();
     expect(pip!.ignore).toBeUndefined();
