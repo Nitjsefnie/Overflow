@@ -392,6 +392,7 @@ describe("reconciliation sweep catch-ups", () => {
     const h = harness();
     h.deps.enqueue = productionEnqueue(h.offered);
     await sweepReconciliationCatchups(h.deps);
+    await sql`update repository_reconciliation_jobs set sweep_generation = 7`; // shared with no other counter on the row
     const jobs = new PostgresFoldStore(sql);
     const clock = { value: new Date() };
     let renew: (() => Promise<void>) | undefined;
