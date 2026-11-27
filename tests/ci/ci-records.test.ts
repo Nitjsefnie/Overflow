@@ -20,9 +20,7 @@ describe("ratchet record pushes", () => {
   let runless: string;
   let size: string;
   let head: string;
-  function git(...args: string[]) {
-    return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
-  }
+  function git(...args: string[]) { return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim(); }
   function commit() {
     git("add", ".");
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "same subject");
@@ -30,9 +28,7 @@ describe("ratchet record pushes", () => {
   }
   function run(command: string, before: string, env: Record<string, string> = {}) {
     return spawnSync("python3", [script, command], { cwd: root, encoding: "utf8", timeout: 10_000, env: {
-      ...process.env, PATH: `${root}/bin:${process.env.PATH}`, GITHUB_REPOSITORY: repo,
-      OVERFLOW_BEFORE_SHA: before, GITHUB_REF: "refs/heads/main", GITHUB_EVENT_NAME: "push", ...env,
-    } });
+      ...process.env, PATH: `${root}/bin:${process.env.PATH}`, GITHUB_REPOSITORY: repo, OVERFLOW_BEFORE_SHA: before, GITHUB_REF: "refs/heads/main", GITHUB_EVENT_NAME: "push", ...env } });
   }
   beforeAll(async () => {
     root = await temp.createAsync(prefix);
@@ -95,10 +91,8 @@ print(json.dumps(answer))
   const job = (name: string, conclusion: string | null, status = "completed") => ({ name, status, conclusion, run_attempt: 1 });
   const jobsOf = (id: number) => actions + `runs/${id}/jobs?filter=all&per_page=100&page=1`;
   function fixture(override: Record<string, unknown> = {}, measured = code) {
-    const main = { path: ".github/workflows/ci.yml", event: "push", head_branch: "main",
-      head_repository: { full_name: repo }, run_attempt: 1 };
-    const jobs = (plan: string | null, source: ReturnType<typeof job>) => ({ jobs: [
-      job("postgres-image", "success"), job("plan", plan), job("test (1/1)", plan), source] });
+    const main = { path: ".github/workflows/ci.yml", event: "push", head_branch: "main", head_repository: { full_name: repo }, run_attempt: 1 };
+    const jobs = (plan: string | null, source: ReturnType<typeof job>) => ({ jobs: [job("postgres-image", "success"), job("plan", plan), job("test (1/1)", plan), source] });
     return {
       [runsAt(size)]: { workflow_runs: [{ ...main, id: 22, head_sha: size, status: "in_progress" }] },
       [runsAt(runless)]: { workflow_runs: [] },
@@ -117,8 +111,7 @@ print(json.dumps(answer))
   });
 
   it("waits for the original push to finish before passing its artifacts to report", () => {
-    const responses = { ...fixture({ status: "in_progress", conclusion: null }),
-      [actions + "runs/11"]: { status: "completed", conclusion: "success" } };
+    const responses = { ...fixture({ status: "in_progress", conclusion: null }), [actions + "runs/11"]: { status: "completed", conclusion: "success" } };
     const result = source(responses);
     expect(result.stderr).toContain("Waiting for ci run 11");
     expect(result.stdout.trim()).toBe("run-id=11");
@@ -153,8 +146,7 @@ print(json.dumps(answer))
   });
 
   it("uses the successful rerun of a shard that failed on the first attempt", () => {
-    const jobs = [{ name: "plan", conclusion: "success", run_attempt: 1 },
-      { name: "test (1/1)", conclusion: "failure", run_attempt: 1 }, { name: "test (1/1)", conclusion: "success", run_attempt: 2 }];
+    const jobs = [{ name: "plan", conclusion: "success", run_attempt: 1 }, { name: "test (1/1)", conclusion: "failure", run_attempt: 1 }, { name: "test (1/1)", conclusion: "success", run_attempt: 2 }];
     expect(source({ ...fixture({ run_attempt: 2 }), [actions + "runs/11/jobs?filter=all&per_page=100&page=1"]: { jobs } }).stdout.trim()).toBe("run-id=11");
   });
 
@@ -177,8 +169,7 @@ print(json.dumps(answer))
     expect(result.stderr).toContain(`ci run 11 ${reason}`);
   });
 
-  it.each([{ event: "pull_request" }, { head_branch: "other" },
-    { path: ".github/workflows/pr-suite.yml" }, { head_sha: "0".repeat(40) }, { head_repository: { full_name: "other/fork" } }])(
+  it.each([{ event: "pull_request" }, { head_branch: "other" }, { path: ".github/workflows/pr-suite.yml" }, { head_sha: "0".repeat(40) }, { head_repository: { full_name: "other/fork" } }])(
     "refuses artifacts with mismatched provenance %o", override => {
       const result = source(fixture(override));
       expect(result.status).not.toBe(0);
@@ -192,17 +183,13 @@ print(json.dumps(answer))
       git("mv", "source\nfile.ts", records[3]!);
       git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "rename");
       expect(run("classify", code).stdout.trim()).toBe("records-only=false");
-    } finally {
-      git("checkout", "-q", "--detach", head);
-    }
+    } finally { git("checkout", "-q", "--detach", head); }
   });
 });
 
 interface Step { id?: string; run?: string; env?: Record<string, string>; with?: Record<string, unknown> }
 interface Job { if?: string; needs?: string | string[]; steps: Step[]; outputs?: Record<string, string>; "timeout-minutes"?: number }
-function workflow(file: string): { on: { push: unknown }; jobs: Record<string, Job> } {
-  return parse(readFileSync(`.github/workflows/${file}.yml`, "utf8"));
-}
+function workflow(file: string): { on: { push: unknown }; jobs: Record<string, Job> } { return parse(readFileSync(`.github/workflows/${file}.yml`, "utf8")); }
 
 describe("main push workflow routing", () => {
   const ci = workflow("ci").jobs;
@@ -259,11 +246,9 @@ describe("main push workflow routing", () => {
     }
     const step = ci.verify!.steps[0]!;
     expect(step.env).toEqual({ OVERFLOW_RECORDS_ONLY: "${{ needs.postgres-image.outputs.records-only }}",
-      OVERFLOW_SOURCE_RESULT: "${{ needs.record-source.result }}", OVERFLOW_TEST_RESULT: "${{ needs.test.result }}",
-      OVERFLOW_REPORT_RESULT: "${{ needs.report.result }}" });
+      OVERFLOW_SOURCE_RESULT: "${{ needs.record-source.result }}", OVERFLOW_TEST_RESULT: "${{ needs.test.result }}", OVERFLOW_REPORT_RESULT: "${{ needs.report.result }}" });
     for (const [records, test, source, report, status] of [
-      ["false", "success", "skipped", "success", 0], ["true", "skipped", "success", "success", 0],
-      ["false", "skipped", "skipped", "success", 1], ["true", "skipped", "failure", "success", 1],
+      ["false", "success", "skipped", "success", 0], ["true", "skipped", "success", "success", 0], ["false", "skipped", "skipped", "success", 1], ["true", "skipped", "failure", "success", 1],
       ["true", "skipped", "success", "failure", 1], ["false", "failure", "skipped", "success", 1], ["true", "success", "success", "success", 0],
       ["true", "success", "failure", "success", 1], ["true", "failure", "success", "success", 1], ["false", "success", "success", "success", 1],
     ] as const) {
