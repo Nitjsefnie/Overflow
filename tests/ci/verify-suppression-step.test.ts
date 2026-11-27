@@ -308,11 +308,14 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     );
     expect(step.run, "the step must read .npmrc's audit-affecting keys").toContain(".npmrc");
     expect(step.run, "the projection must name the measured workspace settings").toMatch(
-      /"auditConfig", "auditLevel", "registries"/,
+      /"auditConfig", "auditLevel", "registries", "httpsProxy", "proxy", "noProxy", "strictSsl", "cafile", "ca", "registry"/,
     );
     expect(step.run, "the projection must name the measured .npmrc keys").toMatch(
-      /"audit-level", "registry", "strict-ssl", "cafile", "proxy", "https-proxy"/,
+      /"audit-level", "registry", "strict-ssl", "cafile", "ca", "proxy", "https-proxy"/,
     );
+    for (const key of ["auditConfig", "auditLevel", "registries", "httpsProxy", "proxy", "noProxy", "strictSsl", "cafile", "ca", "registry", "audit-level", "strict-ssl", "https-proxy"]) {
+      expect(step.run, key).toContain(`"${key}"`);
+    }
   });
 
   it("prints only the fixed refusal constants — no interpolated, pull-request-controlled bytes", () => {

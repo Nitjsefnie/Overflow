@@ -107,7 +107,7 @@ jobs:
           ws_file=pnpm-workspace.yaml
           npmrc_file=.npmrc
           
-          # Measured on pnpm 12.23.0: workspace auditConfig and auditLevel bind;
+          # Measured on the pinned pnpm: workspace auditConfig and auditLevel bind;
           # pnpm_config_registry outranks .npmrc registry= and workspace registries.
           # .npmrc strict-ssl=false plus cafile= reaches a local TLS endpoint;
           # pnpm_config_strict_ssl=true fails closed; pnpm_config_cafile does not.
@@ -192,7 +192,7 @@ jobs:
               printf 'absent\n'
               return 0
             fi
-            git cat-file blob "${1:?}" | PYTHONPATH="${pyyaml_site}${PYTHONPATH:+:${PYTHONPATH}}" python3 -c "${ws_pre_parse}"
+            git cat-file blob "${1:?}" | PYTHONPATH="${pyyaml_site}${PYTHONPATH:+:${PYTHONPATH}}" python3 -c "${ws_pre_parse}" "${@:2}"
           }
           
           # Projects one side's .npmrc to the canonical form of its audit-affecting
@@ -282,9 +282,20 @@ jobs:
               sys.stderr.write("::error::pnpm-workspace.yaml does not parse as a mapping of settings; refusing to judge the audit-affecting settings without a parse\n")
               sys.exit(1)
           projection = {}
-          for key in ("auditConfig", "auditLevel", "registries"):
+          for key in ("auditConfig", "auditLevel", "registries", "httpsProxy", "proxy", "noProxy", "strictSsl", "cafile", "ca", "registry"):
               if key in parsed:
                   projection[key] = parsed[key]
+          reference = json.loads(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1] not in ("", "absent") else None
+          def ids_of(value):
+              ids = value.get("ignoreGhsas") if isinstance(value, dict) else None
+              return ids if isinstance(ids, list) and all(isinstance(item, str) for item in ids) else None
+          if isinstance(reference, dict):
+              base_cfg, merge_cfg = reference.get("auditConfig"), projection.get("auditConfig")
+              rest = lambda value: json.dumps({k: v for k, v in value.items() if k != "auditConfig"}, sort_keys=True, separators=(",", ":"))
+              base_ids, merge_ids = ids_of(base_cfg), ids_of(merge_cfg)
+              cfg_rest = lambda value: json.dumps({k: v for k, v in value.items() if k != "ignoreGhsas"}, sort_keys=True, separators=(",", ":"))
+              if rest(reference) == rest(projection) and base_ids is not None and merge_ids is not None and cfg_rest(base_cfg) == cfg_rest(merge_cfg) and len(set(merge_ids)) == len(merge_ids) and set(merge_ids) < set(base_ids):
+                  projection["auditConfig"] = base_cfg
           try:
               dump = json.dumps(projection, sort_keys=True, separators=(",", ":"))
           except (TypeError, ValueError):
@@ -310,7 +321,7 @@ jobs:
           except UnicodeDecodeError:
               sys.stderr.write("::error::pnpm-workspace.yaml and .npmrc are not valid UTF-8; refusing\n")
               sys.exit(1)
-          ALLOWED = ("audit-level", "registry", "strict-ssl", "cafile", "proxy", "https-proxy")
+          ALLOWED = ("audit-level", "registry", "strict-ssl", "cafile", "ca", "proxy", "https-proxy")
           projection = {}
           for line in text.split("\n"):
               stripped = line.strip()
@@ -443,7 +454,7 @@ jobs:
           if [ "${base_ws}" != "${merge_ws}" ]; then
             pyyaml_site=$(install_pyyaml FETCH_HEAD) || exit 1
             base_ws_value=$(ws_value_of "${base_ws}") || exit 1
-            merge_ws_value=$(ws_value_of "${merge_ws}") || exit 1
+            merge_ws_value=$(ws_value_of "${merge_ws}" "${base_ws_value}") || exit 1
             if [ "${base_ws_value}" != "${merge_ws_value}" ]; then
               echo "::error::this pull request changes audit-affecting settings in pnpm-workspace.yaml; a pull request cannot change the audit suppression list — the list moves only through a maintainer-reviewed merge"
               exit 1

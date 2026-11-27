@@ -20,3 +20,10 @@ it("records exactly one non-blank reason per accepted advisory id", async () => 
   const ids = [...(await readFile(resolve(root, "pnpm-workspace.yaml"), "utf8")).matchAll(/^    - (GHSA-[\w-]+)$/gm)].map((match) => match[1]);
   expect([[...ids].sort(), Object.values(REASONS).filter((reason) => reason.trim() === "")]).toStrictEqual([Object.keys(REASONS).sort(), []]);
 });
+
+it("pins allowBuilds false for every ignored install script", async () => {
+  const workspace = await readFile(resolve(root, "pnpm-workspace.yaml"), "utf8");
+  for (const name of ["cpu-features", "protobufjs", "ssh2"]) {
+    expect(workspace, name).toMatch(new RegExp(`^  ${name}: false$`, "m"));
+  }
+});
