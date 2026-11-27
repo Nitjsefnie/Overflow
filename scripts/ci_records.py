@@ -75,8 +75,8 @@ def measured_run(run):
         # The tip's report and verify re-gate a borrowed matrix; this run's are not awaited.
         plan, shards = jobs.get("plan", {}), [job for name, job in jobs.items() if name.startswith("test (")]
         # A rerun lists an older attempt's failure until replaced.
-        if any(job.get("status") == "completed" and job["conclusion"] != "success"
-               and (run["status"] == "completed" or job["run_attempt"] == run["run_attempt"]) for job in [plan, *shards]):
+        if any(job.get("status") == "completed" and job["conclusion"] != "success" and job["run_attempt"] == run["run_attempt"]
+               for job in [plan, *shards]):
             return unusable(f"ci run {run_id} did not successfully test the code")
         if shards and all(job.get("conclusion") == "success" for job in [plan, *shards]):
             # A partial or expired set is no matrix.
