@@ -58,7 +58,7 @@ def unusable(message):
 
 
 def measured_run(run):
-    """None for an intervening record-only push, "" for a code run it cannot borrow, else a proven producer."""
+    """None for an intervening record-only push, "" for an unusable run, else a proven producer."""
     run_id = run["id"]
     while True:
         # A failed-jobs-only rerun can reuse successful shards from an earlier
@@ -69,17 +69,16 @@ def measured_run(run):
             if name not in jobs or job["run_attempt"] > jobs[name]["run_attempt"]:
                 jobs[name] = job
         results = {name: job["conclusion"] for name, job in jobs.items()}
-        # Only a records-only push starts record-source.
-        source = jobs.get("record-source", {"status": "completed", "conclusion": "skipped"})
-        if source["status"] == "in_progress" or source["status"] == "completed" and source["conclusion"] != "skipped":
+        # Only a records-only push runs record-source; an unstarted job lists no steps.
+        source = jobs.get("record-source", {"status": "completed", "steps": []})
+        if source["status"] == "in_progress" or source.get("steps"):
             return None
         if run["status"] == "completed":
             shards = [result for name, result in results.items() if name.startswith("test (")]
             if (run["conclusion"] != "success" or results.get("plan") != "success"
                     or not shards or any(result != "success" for result in shards)):
                 return unusable(f"ci run {run_id} did not successfully test the code")
-            # report can warn about a missing shard and leave its times unwritten.
-            # Refuse a partial or expired set before treating it as the matrix.
+            # report may leave a missing shard's times unwritten: a partial or expired set is no matrix.
             artifacts = {a["name"] for a in items(f"runs/{run_id}/artifacts", "artifacts")
                          if not a["expired"] and a["name"].startswith("test-ratchet-")}
             if len(artifacts) != len(shards):

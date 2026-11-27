@@ -88,7 +88,9 @@ print(json.dumps(answer))
     const result = run("source", before, { PYTHONPATH: join(root, "bin") });
     return { ...result, sleeps: readFileSync(join(root, "bin/sleeps"), "utf8").split("\n").filter(Boolean).map(Number) };
   }
-  const job = (name: string, conclusion: string | null, status = "completed") => ({ name, status, conclusion, run_attempt: 1 });
+  // A job that never ran, skipped or cancelled before it started, lists no steps (live API).
+  const job = (name: string, conclusion: string | null, status = "completed", steps = conclusion === null || conclusion === "skipped" ? [] : [{ name: "Set up job" }]) =>
+    ({ name, status, conclusion, steps, run_attempt: 1 });
   const jobsOf = (id: number) => actions + `runs/${id}/jobs?filter=all&per_page=100&page=1`;
   function fixture(override: Record<string, unknown> = {}, measured = code) {
     const main = { path: ".github/workflows/ci.yml", event: "push", head_branch: "main", head_repository: { full_name: repo }, run_attempt: 1 };
@@ -139,8 +141,10 @@ print(json.dumps(answer))
 
   it("walks past records-only runs once their record-source has started, and waits while it is queued", () => {
     const borrowable = { [runsAt(size)]: fixture({ id: 22, head_sha: size })[runsAt(code)], [actions + "runs/22/artifacts?per_page=100&page=1"]: fixture()[actions + "runs/11/artifacts?per_page=100&page=1"] };
-    const finished = source({ ...fixture(), ...borrowable, [jobsOf(22)]: { jobs: [job("plan", "success"), job("test (1/1)", "success"), job("record-source", "success")] } });
-    expect(finished.stdout).toBe("run-id=11\n");
+    for (const conclusion of ["success", "failure", "cancelled"]) {
+      const finished = source({ ...fixture(), ...borrowable, [jobsOf(22)]: { jobs: [job("plan", "success"), job("test (1/1)", "success"), job("record-source", conclusion)] } });
+      expect(finished.stdout, conclusion).toBe("run-id=11\n");
+    }
     const queued = source({ ...fixture(), [actions + "runs/22"]: { status: "in_progress" }, [jobsOf(22)]: [{ jobs: [job("record-source", null, "queued")] }, fixture()[jobsOf(22)]] });
     expect([queued.stdout, queued.sleeps]).toEqual(["run-id=11\n", [20]]);
   });
@@ -158,6 +162,8 @@ print(json.dumps(answer))
 
   it.each([
     ["a failed run", () => fixture({ conclusion: "failure" }), "did not successfully test"], ["a cancelled run", () => fixture({ conclusion: "cancelled" }), "did not successfully test"],
+    ["a cancel before record-source started", () => ({ ...fixture({ conclusion: "cancelled" }), [runsAt(git("rev-parse", code + "^"))]: fixture({}, git("rev-parse", code + "^"))[runsAt(git("rev-parse", code + "^"))],
+      [jobsOf(11)]: { jobs: [job("postgres-image", "cancelled"), job("plan", "cancelled", "completed", []), job("record-source", "cancelled", "completed", [])] } }), "did not successfully test"],
     ["a failed plan", () => ({ ...fixture(), [jobsOf(11)]: { jobs: [job("plan", "failure"), job("test (1/1)", "success")] } }), "did not successfully test"],
     ["no shard", () => ({ ...fixture(), [jobsOf(11)]: { jobs: [job("plan", "success")] } }), "did not successfully test"],
     ["a failed shard", () => ({ ...fixture(), [jobsOf(11)]: { jobs: [job("plan", "success"), job("test (1/1)", "failure")] } }), "did not successfully test"],
