@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { evaluateExpression, isSelected, type ActionsContext } from "../support/github-expression";
+import { evaluateExpression, isSelected, jobStatus, type ActionsContext } from "../support/github-expression";
 import { createOwnedTempDirectoryRegistry } from "../support/owned-temp-directory";
 
 const records = ["size-baseline", "comment-share", "ci-thresholds", "test-times"].map(name => `.github/${name}.json`);
@@ -21,7 +21,7 @@ const [ci, scan] = [workflow("ci").jobs, workflow("code-scanning").jobs];
 const stepOf = (job: Job, id: string) => job.steps.find(step => step.id === id)!;
 // A step's `env:` as the runner renders it in a context: each `${{ }}` part evaluated, null as the empty string.
 const envOf = (step: Step, context: ActionsContext) => Object.fromEntries(Object.entries(step.env ?? {}).map(([name, value]) =>
-  [name, value.replace(/\$\{\{(.*?)\}\}/g, (_, expression: string) => String(evaluateExpression(expression, context) ?? ""))]));
+  [name, String(value).replace(/\$\{\{(.*?)\}\}/g, (_, expression: string) => String(evaluateExpression(expression, context) ?? ""))]));
 const [classify, scanClassify, findSource] = [stepOf(ci["postgres-image"]!, "changes"), stepOf(scan.changes!, "changes"), stepOf(ci["record-source"]!, "source")];
 
 describe("ratchet record pushes", () => {
@@ -232,7 +232,6 @@ print(json.dumps(answer))
 
 // Job-level routing through the same evaluator, as the runner selects a job. A job one of whose listed needs did not succeed
 // runs only if its `if:` calls a status function; a cancelled run is the only other status.
-// shortcut: a skipped need reads as failure(), which no routed `if:` calls; model a skipped status if one starts to.
 describe("main push workflow routing", () => {
   type Needs = { needs: Record<string, { result: string; outputs?: Record<string, string> }> };
   const needs = (records: string | null, source: string, runId?: string, image = "success", rest: Record<string, string> = {}): Needs => ({ needs: {
@@ -242,7 +241,7 @@ describe("main push workflow routing", () => {
   function runs(job: Job, context: Needs, cancelled = false) {
     const results = [job.needs ?? []].flat().map(need => context.needs[need]?.result);
     expect(results, "a row must give every listed need a result").not.toContain(undefined);
-    return isSelected({ if: job.if }, context, cancelled ? "cancelled" : results.every(result => result === "success") ? "success" : "failure");
+    return isSelected({ if: job.if }, context, jobStatus(results, cancelled));
   }
   const check = (job: Job, rows: readonly (readonly [Needs, boolean, boolean?])[]) => {
     for (const [context, held, cancelled] of rows) expect(runs(job, context, cancelled), JSON.stringify([context, cancelled])).toBe(held);
@@ -250,7 +249,8 @@ describe("main push workflow routing", () => {
   it("uses the same diff on main for the planner, test matrix, artifact lookup and CodeQL", () => {
     for (const job of [ci["postgres-image"]!, scan.changes!]) for (const value of ["true", "false"])
       expect(evaluateExpression(job.outputs!["records-only"]!, { steps: { changes: { outputs: { "records-only": value } } } })).toBe(value);
-    check(ci["record-source"]!, [[needs("true", "skipped"), true], [needs("false", "skipped"), false], [needs(null, "skipped", undefined, "failure"), false]]);
+    check(ci["record-source"]!, [[needs("true", "skipped"), true], [needs("false", "skipped"), false], [needs(null, "skipped", undefined, "failure"), false],
+      [needs("true", "skipped", undefined, "failure"), false]]);
     for (const event of ["push", "pull_request", "schedule", "workflow_dispatch"])
       expect(isSelected({ if: scan.changes!.if }, { github: { event_name: event } }, "success"), event).toBe(event === "push");
   });

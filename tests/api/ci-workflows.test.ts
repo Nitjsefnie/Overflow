@@ -4,7 +4,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { isSelected } from "../support/github-expression";
+import { isSelected, jobStatus } from "../support/github-expression";
 
 // A dependabot schedule. `day`, `time` and `timezone` are the keys that move
 // the lane off the default Monday slot and pin its clock, so every consumer of
@@ -1363,8 +1363,7 @@ exit 1
       ["push", "success", "false", true, false], ...["pull_request", "schedule", "workflow_dispatch"].map(event => [event, "skipped", null, false, true] as const),
     ] as const) {
       const context = { github: { event_name: event }, needs: { changes: { result, outputs: records === null ? {} : { "records-only": records } } } };
-      const status = cancelled ? "cancelled" : result === "success" ? "success" : "failure";
-      expect(isSelected({ if: condition }, context, status), [event, result, records, cancelled].join()).toBe(runs);
+      expect(isSelected({ if: condition }, context, jobStatus([result], cancelled)), [event, result, records, cancelled].join()).toBe(runs);
     }
     expect(gateBehavior(rest)).toEqual({
       needs: "changes",
