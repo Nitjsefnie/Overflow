@@ -1,6 +1,6 @@
 {
   "trees": {
-    "tests/": 196349
+    "tests/": 196343
   },
   "schema_version": 1,
   "baseline": {
@@ -8,7 +8,7 @@
     "src/app/globals.css": 1233,
     "src/components/repository-form.tsx": 833,
     "src/lib/fold/repository-fold.ts": 1179,
-    "src/lib/github/client.ts": 1434,
+    "src/lib/github/client.ts": 1429,
     "src/lib/repositories/register.ts": 1974,
     "tests/db/schema.test.ts": 5070,
     "tests/github/graphql.test.ts": 2776
