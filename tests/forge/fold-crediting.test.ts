@@ -198,32 +198,17 @@ describe("fold crediting by the exact forge triple", () => {
     const scenario = await createGitLabScenario({ linked: true });
     const fold = foldOf(scenario);
     expect(fold.settlements).toHaveLength(1);
-    expect(fold.settlements[0]).toMatchObject({
-      status: "SETTLED",
-      creditorId: scenario.linkedUserId,
-      provider: "gitlab",
-      instanceUrl: INSTANCE,
-    });
+    expect(fold.settlements[0]).toMatchObject({ status: "SETTLED", creditorId: scenario.linkedUserId, provider: "gitlab", instanceUrl: INSTANCE });
     await publish(scenario, fold);
     expect(await settlementRows(scenario.repositoryId)).toEqual([
-      expect.objectContaining({
-        status: "SETTLED",
-        creditor_id: scenario.linkedUserId,
-        provider: "gitlab",
-        instance_url: INSTANCE,
-      }),
+      expect.objectContaining({ status: "SETTLED", creditor_id: scenario.linkedUserId, provider: "gitlab", instance_url: INSTANCE }),
     ]);
   });
 
   it("leaves an unlinked GitLab author UNCLAIMED with the forge id recorded", async () => {
     const scenario = await createGitLabScenario({ linked: false });
     const fold = foldOf(scenario);
-    expect(fold.settlements[0]).toMatchObject({
-      status: "UNCLAIMED",
-      creditorId: null,
-      creditorGitHubUserId: FORGE_USER_ID,
-      provider: "gitlab",
-    });
+    expect(fold.settlements[0]).toMatchObject({ status: "UNCLAIMED", creditorId: null, creditorGitHubUserId: FORGE_USER_ID, provider: "gitlab" });
     await publish(scenario, fold);
     expect(await settlementRows(scenario.repositoryId)).toEqual([
       expect.objectContaining({ status: "UNCLAIMED", creditor_github_user_id: String(FORGE_USER_ID) }),
@@ -282,12 +267,7 @@ describe("fold crediting by the exact forge triple", () => {
     const scenario = await createGitLabScenario({ linked: true });
     scenario.snapshot.forgeIdentities = [{
       forgeUserId: FORGE_USER_ID + 1,
-      user: {
-        id: scenario.linkedUserId,
-        githubUserId: 999,
-        githubLogin: "gitlabber",
-        enforcementState: "ACTIVE",
-      },
+      user: { id: scenario.linkedUserId, githubUserId: 999, githubLogin: "gitlabber", enforcementState: "ACTIVE" },
     }];
     expect(foldOf(scenario).settlements[0]).toMatchObject({ status: "UNCLAIMED", creditorId: null });
   });
@@ -402,12 +382,7 @@ describe("linking claims past GitLab work (decision 3 retroactivity)", () => {
       instanceUrl: INSTANCE,
       forgeUserId: FORGE_USER_ID,
     });
-    expect(await settlementRows(scenario.repositoryId)).toEqual([
-      expect.objectContaining({
-        status: "SETTLED",
-        creditor_id: scenario.linkedUserId,
-      }),
-    ]);
+    expect(await settlementRows(scenario.repositoryId)).toEqual([expect.objectContaining({ status: "SETTLED", creditor_id: scenario.linkedUserId })]);
   });
 
   it("moves a self-work GitLab settlement into its calibration and deletes the row", async () => {
