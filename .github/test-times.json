@@ -234,7 +234,8 @@
         22.94
       ],
       "tests/ci/dependency-audit-push.test.ts": [
-        1.82
+        1.82,
+        0.43
       ],
       "tests/ci/dependency-audit-retry.test.ts": [
         4.45
@@ -552,7 +553,8 @@
       ],
       "tests/db/closed-pr-disputes-schema.test.ts": [
         3.71,
-        2.16
+        2.16,
+        1.07
       ],
       "tests/db/closesql-connection-death.test.ts": [
         0.03
@@ -761,7 +763,8 @@
       "tests/db/sweep-round-store.test.ts": [
         4.06,
         1.72,
-        5.52
+        5.52,
+        8.89
       ],
       "tests/db/sweep-walk-schema.test.ts": [
         0.39
@@ -843,7 +846,8 @@
         1.79
       ],
       "tests/deploy/deploy-revision-ledger.test.ts": [
-        13.25
+        13.25,
+        9.15
       ],
       "tests/deploy/deploy-revision-startup-sweep.test.ts": [
         34.79,
@@ -1377,7 +1381,8 @@
         0.13
       ],
       "tests/moderation/credit-adjustment-store.test.ts": [
-        1.49
+        1.49,
+        3.09
       ],
       "tests/moderation/current-role.test.ts": [
         0.06
@@ -1459,7 +1464,8 @@
         1.44
       ],
       "tests/scripts/db-offhost-backup.test.ts": [
-        9.35
+        9.35,
+        6.91
       ],
       "tests/scripts/generate-third-party-notices.test.ts": [
         1.2
