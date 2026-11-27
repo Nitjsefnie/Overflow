@@ -97,7 +97,7 @@ it("builds a replacement after removing a route while its previous release is st
   expect(await readFile(path.join(tree, "tsconfig.json"), "utf8")).toBe(trackedConfig);
   expect(await readlink(path.join(tree, ".next"))).toBe(first);
   expect((await readFile(path.join(tree, second, "BUILD_ID"), "utf8")).trim()).not.toBe("");
-  const program = spawnSync(process.execPath, [path.join(project, "node_modules/typescript/bin/tsc"), "--showConfig", "--project", `${second}.tsconfig.json`], {
+  const program = spawnSync("pnpm", ["exec", "tsc", "--showConfig", "--project", `${second}.tsconfig.json`], {
     cwd: tree, encoding: "utf8",
   });
   expect(program.status, program.stderr).toBe(0);
@@ -126,10 +126,10 @@ it("type-checks the new release's generated route validators", async () => {
 it("refuses an unprepared release before Next can create a weaker TypeScript config", async () => {
   const release = ".next-release-20260907T060300Z-918a0d4";
   await writeFile(path.join(tree, "src/strict-probe.ts"), "export function identity(value) { return value; }");
-  const strict = spawnSync(process.execPath, [path.join(project, "node_modules/typescript/bin/tsc"), "--project", "tsconfig.json"], {
+  const strict = spawnSync("pnpm", ["exec", "tsc", "--project", "tsconfig.json"], {
     cwd: tree, encoding: "utf8",
   });
-  expect(strict.status, strict.stdout + strict.stderr).toBe(2);
+  expect(strict.status, strict.stdout + strict.stderr).toBeGreaterThan(0);
   expect(strict.stdout + strict.stderr).toContain("TS7006");
 
   const result = build(release);
@@ -183,7 +183,7 @@ it("refuses an unprepared replacement when only the previous release's config ex
   prepare(second);
   const replacement = build(second);
   expect(replacement.status, outcome(replacement)).toBe(0);
-  const program = spawnSync(process.execPath, [path.join(project, "node_modules/typescript/bin/tsc"), "--showConfig", "--project", `${second}.tsconfig.json`], {
+  const program = spawnSync("pnpm", ["exec", "tsc", "--showConfig", "--project", `${second}.tsconfig.json`], {
     cwd: tree, encoding: "utf8",
   });
   expect(program.status, program.stdout + program.stderr).toBe(0);

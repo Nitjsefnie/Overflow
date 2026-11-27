@@ -285,6 +285,7 @@ describe.each(LEGS)("$file", ({ file, pr }) => {
           '  case "$1" in',
           "    --redact) redacted=1 ;;",
           "    --no-banner) no_banner=1 ;;",
+          "    --ignore-gitleaks-allow) ;;",
           '    --report-path) report_path="$2"; shift ;;',
           '    --report-format) report_format="$2"; shift ;;',
           '    --baseline-path) baseline="$2"; shift ;;',

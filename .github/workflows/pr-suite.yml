@@ -85,7 +85,7 @@ jobs:
             tests/**/*.test.ts
             tests/**/*.test.tsx
           times: .github/test-times.json
-          cell: ubuntu-latest-node24.17.0
+          cell: ubuntu-latest-node24.22.3
           max-minutes: 10
 
   # One shard of the suite with coverage measured over src/.
@@ -140,7 +140,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.17.0"
+          node-version: "24.22.3"
 
       # Tests run python3 scripts; this is the interpreter the suite job sets up.
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -166,7 +166,7 @@ jobs:
             tests/**/*.test.ts
             tests/**/*.test.tsx
           times: .github/test-times.json
-          cell: ubuntu-latest-node24.17.0
+          cell: ubuntu-latest-node24.22.3
           shard: ${{ matrix.shard }}
           source: src/**
           javascript: src/**
@@ -190,7 +190,7 @@ jobs:
       - uses: Nitjsefnie-Actions/test-ratchet/report@96562a47e9b7fe74b55cc70a4636d1b5d7b542e2 # v2.4.2
         with:
           github-token: ${{ github.token }}
-          cell: ubuntu-latest-node24.17.0
+          cell: ubuntu-latest-node24.22.3
           times: .github/test-times.json
           precision: '2'
           gate-raised-floors: 'true'
@@ -240,7 +240,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.17.0"
+          node-version: "24.22.3"
 
       # The interpreter actionlint.yml installs zizmor with, pinned the same way:
       # full commit SHA plus the release comment. A floating tag would let this

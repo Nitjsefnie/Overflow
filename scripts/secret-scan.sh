@@ -150,6 +150,7 @@ mkdir -p -- "$(dirname -- "$REPORT_PATH")"
 # run green, and a scan that cannot go red reports nothing forever.
 gitleaks git \
   --redact \
+  --ignore-gitleaks-allow \
   --no-banner \
   --report-format json \
   --report-path "$REPORT_PATH" \

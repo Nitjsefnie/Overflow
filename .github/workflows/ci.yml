@@ -113,7 +113,7 @@ jobs:
             tests/**/*.test.ts
             tests/**/*.test.tsx
           times: .github/test-times.json
-          cell: ubuntu-latest-node24.17.0
+          cell: ubuntu-latest-node24.22.3
           max-minutes: 10
 
   # One shard of the suite with coverage measured over src/, against the real
@@ -171,7 +171,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.17.0"
+          node-version: "24.22.3"
 
       - name: Enable the pinned package manager
         run: |
@@ -192,7 +192,7 @@ jobs:
             tests/**/*.test.ts
             tests/**/*.test.tsx
           times: .github/test-times.json
-          cell: ubuntu-latest-node24.17.0
+          cell: ubuntu-latest-node24.22.3
           shard: ${{ matrix.shard }}
           source: src/**
           javascript: src/**
@@ -220,11 +220,9 @@ jobs:
           OVERFLOW_BEFORE_SHA: ${{ github.event.before }}
         run: python3 scripts/ci_records.py source >> "$GITHUB_OUTPUT"
 
-  # Merges the shards' coverage, gates it against the floor in
-  # .github/ci-thresholds.json and, on a push to main, commits the raised
-  # records with the main-push environment's deploy key. It checks out the
-  # event's commit and runs only the action: no repository or dependency code
-  # runs where the key is.
+  # Only the pinned action runs with the records key. The one-point coverage
+  # gap keeps the floor close. Half-point hysteresis limits record churn,
+  # and two decimal places preserve small gains when the floor advances.
   report:
     needs: [postgres-image, test, record-source]
     if: ${{ !cancelled() && (needs.postgres-image.outputs.records-only != 'true' || needs.record-source.result == 'success') }}
@@ -244,7 +242,7 @@ jobs:
         with:
           github-token: ${{ github.token }}
           run-id: ${{ needs.record-source.outputs.run-id || github.run_id }}
-          cell: ubuntu-latest-node24.17.0
+          cell: ubuntu-latest-node24.22.3
           times: .github/test-times.json
           precision: '2'
           records-only-rise: 'true'
@@ -350,7 +348,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.17.0"
+          node-version: "24.22.3"
 
       - name: Enable the pinned package manager
         run: |

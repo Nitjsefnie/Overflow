@@ -1,33 +1,13 @@
 name: claim
-
-# GitHub has no built-in self-assignment; in Overflow the assignee field is what reserves a
-# sponsor's credit, and the assignment fires the `issues` `assigned` webhook Overflow already
-# reconciles, so the claim reaches the ledger with no further wiring. `/claim` assigns the commenter
-# to an open, unassigned issue; `/unclaim` and `/release` are one command under two names removing
-# only the commenter's OWN assignment.
-
 on:
   issue_comment:  # zizmor: ignore[dangerous-triggers]
     types: [created]
-
 concurrency:
-  # Per issue, NOT cancel-in-progress: two racers must both get an answer. `queue: max` is what
-  # makes that true rather than aspirational — GitHub keeps ONE pending run per concurrency group
-  # and cancels the older pending one even at cancel-in-progress false, so with the default single
-  # slot the second of three /claim comments landing on one issue while a run is in progress is
-  # dropped unanswered. The queue is the only setting that holds the
-  # arrivals instead of replacing them; cancel-in-progress alone buys nothing here.
   group: claim-${{ github.event.issue.number }}
   cancel-in-progress: false
   queue: max
-
 jobs:
   claim:
-    # Bots never claim, and the action itself enforces the exact body — this condition only decides
-    # whether a run starts at all. What it must NOT do is pre-filter the event: a job whose `if`
-    # does not match starts no run, so /claim on a pull request or on a closed issue is met with
-    # silence. claim answers such a command with a reply that DECLINES it, and that reply is the
-    # only thing telling the author the workflow saw them at all.
     if: >-
       github.event.comment.user.type != 'Bot'
       && (contains(github.event.comment.body, '/claim')
@@ -35,28 +15,11 @@ jobs:
           || contains(github.event.comment.body, '/release'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
-
-    # Narrowest token: nothing reads the tree, so no checkout and no contents: read. Scoped to the
-    # job, as the action's reference block has it, so the grant travels with the job that needs it
-    # instead of standing for the whole workflow.
     permissions:
       issues: write
       pull-requests: write
-
     steps:
       - uses: Nitjsefnie-Actions/claim@31261cf9310ad42718c6843305d5992530529d87 # v3.0.3
         with:
-          # The claim policy, from the action's own reference block. Without it the limits are
-          # unenforced: one account can hold an unbounded number of claims, so a handful of
-          # comments on unrelated issues reserves the sponsor's whole headroom, and a claim nobody
-          # releases never expires on its own. `admin=-1` is the action's spelling for unlimited,
-          # and `expire` is in days.
-          #
-          # `expire` schedules nothing: expiry is LAZY, evaluated only inside the run that answers a
-          # comment, so seven idle days do not unassign anybody by themselves. What the seven days
-          # buy is that an idle claim becomes takeover-able by the next commenter and
-          # privileged-releasable by a write+ actor; until one of those happens the assignment
-          # stands, and the sponsor's reserve points stand with it — the reserve query keys on an
-          # open issue with an assignee and never on claim age.
           max-claims: 'read=2, triage=4, write=6, maintain=10, admin=-1'
           expire: '7'

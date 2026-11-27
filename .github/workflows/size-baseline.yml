@@ -7,8 +7,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  # Repo-wide group bounds PR runs, as comment share's does; queue: max holds a
-  # peer PR's pending run that the default single slot would cancel.
+  # Bound concurrent PR runs and queue every waiting PR.
   group: size-baseline-${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && 'repo-wide' || github.sha }}
   cancel-in-progress: false
   queue: max
@@ -28,11 +27,13 @@ jobs:
         uses: Nitjsefnie-Actions/size-ratchet@84009b67a653bd057115a0318b61da7b937d810a # v4.0.3
         with:
           ceilings: ''
+          # Test fixtures need more room. Keep migrations small.
           overrides: |
             src/: 800
             tests/: 2500
             scripts/: 800
             db/migrations/: 400
+          # CI, dependency records and Compose are outside source ceilings.
           exclude: |
             .github/
             docker-compose.yml
