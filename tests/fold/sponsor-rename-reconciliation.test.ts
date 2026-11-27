@@ -55,18 +55,9 @@ const tokenEncryptionKey = Buffer.alloc(32, 41).toString("base64url");
 
 type FixtureActor = { login: string | null; githubUserId: number | null };
 
-const sponsorBeforeTheRename: FixtureActor = {
-  login: STORED_SPONSOR_LOGIN,
-  githubUserId: SPONSOR_GITHUB_USER_ID,
-};
-const sponsorAfterTheRename: FixtureActor = {
-  login: RENAMED_SPONSOR_LOGIN,
-  githubUserId: SPONSOR_GITHUB_USER_ID,
-};
-const impostorHoldingTheFreedLogin: FixtureActor = {
-  login: STORED_SPONSOR_LOGIN,
-  githubUserId: IMPOSTOR_GITHUB_USER_ID,
-};
+const sponsorBeforeTheRename: FixtureActor = { login: STORED_SPONSOR_LOGIN, githubUserId: SPONSOR_GITHUB_USER_ID };
+const sponsorAfterTheRename: FixtureActor = { login: RENAMED_SPONSOR_LOGIN, githubUserId: SPONSOR_GITHUB_USER_ID };
+const impostorHoldingTheFreedLogin: FixtureActor = { login: STORED_SPONSOR_LOGIN, githubUserId: IMPOSTOR_GITHUB_USER_ID };
 
 type IssueRow = {
   id: string;
@@ -119,13 +110,7 @@ describe("reconcileRepository across a sponsor's GitHub account rename", () => {
       ownerName: "example/renamed-sponsor",
       githubWebhookId: 9_410_002,
     });
-    let issues = [openIssue({
-      id: renamedSponsorIssueGitHubId,
-      number: 1,
-      ownerName,
-      author: sponsorBeforeTheRename,
-      opening: sponsorBeforeTheRename,
-    })];
+    let issues = [openIssue({ id: renamedSponsorIssueGitHubId, number: 1, ownerName, author: sponsorBeforeTheRename, opening: sponsorBeforeTheRename })];
     const github = gateway(ownerName, () => issues);
 
     // `adds` counts settlements and calibrations rather than issues, so the
@@ -148,13 +133,7 @@ describe("reconcileRepository across a sponsor's GitHub account rename", () => {
     // The sponsor renamed on GitHub. Every payload now carries the new login
     // against the same numeric account, and nothing signs the sponsor in, so
     // the stored login stays as it was.
-    issues = [openIssue({
-      id: renamedSponsorIssueGitHubId,
-      number: 1,
-      ownerName,
-      author: sponsorAfterTheRename,
-      opening: sponsorAfterTheRename,
-    })];
+    issues = [openIssue({ id: renamedSponsorIssueGitHubId, number: 1, ownerName, author: sponsorAfterTheRename, opening: sponsorAfterTheRename })];
     const second = await reconcile(store, github, repositoryId);
 
     await expect(storedSponsorLogin()).resolves.toBe(STORED_SPONSOR_LOGIN);
@@ -223,13 +202,7 @@ describe("reconcileRepository across a sponsor's GitHub account rename", () => {
       ownerName: "example/impostor-opening",
       githubWebhookId: 9_410_004,
     });
-    let issues = [openIssue({
-      id: impostorIssueGitHubId,
-      number: 1,
-      ownerName,
-      author: sponsorBeforeTheRename,
-      opening: sponsorBeforeTheRename,
-    })];
+    let issues = [openIssue({ id: impostorIssueGitHubId, number: 1, ownerName, author: sponsorBeforeTheRename, opening: sponsorBeforeTheRename })];
     const github = gateway(ownerName, () => issues);
 
     await reconcile(store, github, repositoryId);
@@ -239,13 +212,7 @@ describe("reconcileRepository across a sponsor's GitHub account rename", () => {
     // and applied the opening label. The issue genuinely has no opening the
     // sponsor gave it, so losing it is correct — what must not happen is losing
     // it silently.
-    issues = [openIssue({
-      id: impostorIssueGitHubId,
-      number: 1,
-      ownerName,
-      author: sponsorAfterTheRename,
-      opening: impostorHoldingTheFreedLogin,
-    })];
+    issues = [openIssue({ id: impostorIssueGitHubId, number: 1, ownerName, author: sponsorAfterTheRename, opening: impostorHoldingTheFreedLogin })];
     const second = await reconcile(store, github, repositoryId);
 
     await expect(runStatus(second.runId)).resolves.toBe("COMPLETED");
@@ -391,11 +358,7 @@ async function registerRepository(input: {
     )
     returning id
   `;
-  return {
-    repositoryId: repository.id,
-    store: new PostgresFoldStore(sql, tokenEncryptionKey),
-    ownerName: input.ownerName,
-  };
+  return { repositoryId: repository.id, store: new PostgresFoldStore(sql, tokenEncryptionKey), ownerName: input.ownerName };
 }
 
 function difficultyScheme() {

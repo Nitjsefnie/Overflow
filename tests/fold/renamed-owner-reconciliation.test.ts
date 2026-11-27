@@ -64,24 +64,14 @@ describe("reconciliation after the opening account is renamed", () => {
     // GitHub renames the author's account. The login GitHub reports for the
     // issue's author moves with it, the labelling event keeps its actor, its node
     // id and its timestamp, and so does the actor login displayed beside it.
-    issue = openedIssue({
-      githubIssueId,
-      authorLogin: renamedAuthorLogin,
-      raterLogin,
-      title: "A renamed author's opened issue",
-    });
+    issue = openedIssue({ githubIssueId, authorLogin: renamedAuthorLogin, raterLogin, title: "A renamed author's opened issue" });
 
     await expect(reconcileRepository({ store, github }, repositoryId)).resolves.toMatchObject({ skipped: false });
     await expect(sql`
       select status from reconciliation_runs where repository_id = ${repositoryId} order by started_at
     `).resolves.toEqual([{ status: "COMPLETED" }, { status: "COMPLETED" }]);
     await expect(storedIssue(githubIssueId)).resolves.toEqual([
-      openedIssueRow({
-        githubIssueId,
-        title: "A renamed author's opened issue",
-        ownerLogin: renamedAuthorLogin,
-        actorLogin: raterLogin,
-      }),
+      openedIssueRow({ githubIssueId, title: "A renamed author's opened issue", ownerLogin: renamedAuthorLogin, actorLogin: raterLogin }),
     ]);
   });
 
@@ -108,12 +98,7 @@ describe("reconciliation after the opening account is renamed", () => {
     // GitHub renames the sponsor's account, so the labelling event reports the
     // new login against the same unchanged event. The stored account row follows,
     // the actor's display text follows, and the author's login does not move.
-    issue = openedIssue({
-      githubIssueId,
-      authorLogin,
-      raterLogin: renamedRaterLogin,
-      title: "A renamed rater's opened issue",
-    });
+    issue = openedIssue({ githubIssueId, authorLogin, raterLogin: renamedRaterLogin, title: "A renamed rater's opened issue" });
     await sql`update users set github_login = ${renamedRaterLogin} where id = ${sponsorId}`;
 
     await expect(reconcileRepository({ store, github }, repositoryId)).resolves.toMatchObject({ skipped: false });
@@ -121,12 +106,7 @@ describe("reconciliation after the opening account is renamed", () => {
       select status from reconciliation_runs where repository_id = ${repositoryId} order by started_at
     `).resolves.toEqual([{ status: "COMPLETED" }, { status: "COMPLETED" }]);
     await expect(storedIssue(githubIssueId)).resolves.toEqual([
-      openedIssueRow({
-        githubIssueId,
-        title: "A renamed rater's opened issue",
-        ownerLogin: authorLogin,
-        actorLogin: renamedRaterLogin,
-      }),
+      openedIssueRow({ githubIssueId, title: "A renamed rater's opened issue", ownerLogin: authorLogin, actorLogin: renamedRaterLogin }),
     ]);
   });
 
@@ -172,16 +152,10 @@ describe("reconciliation after the opening account is renamed", () => {
 
     await expect(reconcileRepository({ store, github }, repositoryId)).resolves.toMatchObject({ skipped: false });
     await expect(unwritableReason(githubIssueId)).resolves.toEqual([
-      {
-        kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
-        reason: expect.stringContaining(storedName),
-      },
+      { kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST", reason: expect.stringContaining(storedName) },
     ]);
     await expect(unwritableReason(githubIssueId)).resolves.toEqual([
-      {
-        kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST",
-        reason: expect.stringContaining(observedName),
-      },
+      { kind: "CROSS_REPOSITORY_CLOSING_PULL_REQUEST", reason: expect.stringContaining(observedName) },
     ]);
 
     // The first run also refreshed the stored path, so the second reads the
@@ -285,11 +259,5 @@ async function registeredRepository(ownerLogin: string) {
       ${externalId++}, ${sql.json(difficultyScheme)})
     returning id
   `;
-  return {
-    store: new PostgresFoldStore(sql, tokenEncryptionKey),
-    repositoryId,
-    sponsorId,
-    githubIssueId: externalId++,
-    ownerName,
-  };
+  return { store: new PostgresFoldStore(sql, tokenEncryptionKey), repositoryId, sponsorId, githubIssueId: externalId++, ownerName };
 }
