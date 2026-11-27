@@ -2237,7 +2237,8 @@
       ],
       "tests/db/fold-revision.test.ts": [
         1.35,
-        2.36
+        2.36,
+        3.39
       ],
       "tests/db/forge-identities.test.ts": [
         0.28
