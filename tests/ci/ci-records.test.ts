@@ -89,8 +89,7 @@ print(json.dumps(answer))
     return { ...result, sleeps: readFileSync(join(root, "bin/sleeps"), "utf8").split("\n").filter(Boolean).map(Number) };
   }
   // A job that never ran, skipped or cancelled before it started, lists no steps (live API).
-  const job = (name: string, conclusion: string | null, status = "completed", steps = conclusion === null || conclusion === "skipped" ? [] : [{ name: "Set up job" }]) =>
-    ({ name, status, conclusion, steps, run_attempt: 1 });
+  const job = (name: string, conclusion: string | null, status = "completed", steps = conclusion && conclusion !== "skipped" ? [{ name: "Set up job" }] : []) => ({ name, status, conclusion, steps, run_attempt: 1 });
   const jobsOf = (id: number) => actions + `runs/${id}/jobs?filter=all&per_page=100&page=1`;
   function fixture(override: Record<string, unknown> = {}, measured = code) {
     const main = { path: ".github/workflows/ci.yml", event: "push", head_branch: "main", head_repository: { full_name: repo }, run_attempt: 1 };
@@ -113,8 +112,7 @@ print(json.dumps(answer))
   });
 
   it("waits for the original push to finish before passing its artifacts to report", () => {
-    const responses = { ...fixture({ status: "in_progress", conclusion: null }), [actions + "runs/11"]: { status: "completed", conclusion: "success" } };
-    const result = source(responses);
+    const result = source({ ...fixture({ status: "in_progress", conclusion: null }), [actions + "runs/11"]: { status: "completed", conclusion: "success" } });
     expect(result.stderr).toContain("Waiting for ci run 11");
     expect(result.stdout.trim()).toBe("run-id=11");
   });
@@ -141,10 +139,8 @@ print(json.dumps(answer))
 
   it("walks past records-only runs once their record-source has started, and waits while it is queued", () => {
     const borrowable = { [runsAt(size)]: fixture({ id: 22, head_sha: size })[runsAt(code)], [actions + "runs/22/artifacts?per_page=100&page=1"]: fixture()[actions + "runs/11/artifacts?per_page=100&page=1"] };
-    for (const conclusion of ["success", "failure", "cancelled"]) {
-      const finished = source({ ...fixture(), ...borrowable, [jobsOf(22)]: { jobs: [job("plan", "success"), job("test (1/1)", "success"), job("record-source", conclusion)] } });
-      expect(finished.stdout, conclusion).toBe("run-id=11\n");
-    }
+    for (const conclusion of ["success", "failure", "cancelled"])
+      expect(source({ ...fixture(), ...borrowable, [jobsOf(22)]: { jobs: [job("plan", "success"), job("test (1/1)", "success"), job("record-source", conclusion)] } }).stdout, conclusion).toBe("run-id=11\n");
     const queued = source({ ...fixture(), [actions + "runs/22"]: { status: "in_progress" }, [jobsOf(22)]: [{ jobs: [job("record-source", null, "queued")] }, fixture()[jobsOf(22)]] });
     expect([queued.stdout, queued.sleeps]).toEqual(["run-id=11\n", [20]]);
   });
@@ -202,8 +198,7 @@ describe("main push workflow routing", () => {
   const scan = workflow("code-scanning").jobs;
   it("uses the same diff on main for the planner, test matrix, artifact lookup and CodeQL", () => {
     for (const job of [ci["postgres-image"]!, scan.changes!]) {
-      expect(job.steps).toContainEqual(expect.objectContaining({ id: "changes",
-        env: { OVERFLOW_BEFORE_SHA: "${{ github.event.before }}" }, run: 'python3 scripts/ci_records.py classify >> "$GITHUB_OUTPUT"' }));
+      expect(job.steps).toContainEqual(expect.objectContaining({ id: "changes", env: { OVERFLOW_BEFORE_SHA: "${{ github.event.before }}" }, run: 'python3 scripts/ci_records.py classify >> "$GITHUB_OUTPUT"' }));
       expect(job.outputs?.["records-only"]).toBe("${{ steps.changes.outputs.records-only }}");
     }
     expect(ci["record-source"]!.if).toBe("needs.postgres-image.outputs.records-only == 'true'");
@@ -229,8 +224,7 @@ describe("main push workflow routing", () => {
     const name = "record-source";
     const producer = ci[name]!;
     const consumers = Object.values(ci).filter(job => [job.needs].flat().includes(name));
-    const reads = consumers.flatMap(job => job.steps.flatMap(step => Object.values(step.with ?? {})))
-      .flatMap(input => typeof input === "string" ? [...input.matchAll(/\bneeds\.([\w-]+)\.outputs\.([\w-]+)/g)] : []);
+    const reads = consumers.flatMap(job => job.steps.flatMap(step => Object.values(step.with ?? {}))).flatMap(input => typeof input === "string" ? [...input.matchAll(/\bneeds\.([\w-]+)\.outputs\.([\w-]+)/g)] : []);
     const outputs = Object.entries(producer.outputs ?? {});
     expect(outputs.length).toBeGreaterThan(0);
     for (const [output, expression] of outputs) {
