@@ -347,6 +347,10 @@ jobs:
       # pull request picks the binary and "verified against pnpm 12.23.0"
       # describes a version it chose.
       COREPACK_ENABLE_PROJECT_SPEC: "0"
+      # pnpm 12 exits ERR_PNPM_BAD_PM_VERSION when the audited manifest names
+      # another packageManager. The installed binary stays the pin; this tells
+      # it to audit that manifest anyway.
+      pnpm_config_pm_on_fail: "ignore"
       # The registry pin holds the advisory endpoint at npmjs even if a future
       # edit materializes a pull-request .npmrc alongside the manifests.
       pnpm_config_registry: "https://registry.npmjs.org/"
@@ -641,7 +645,14 @@ jobs:
               request.on("end", () => {
                 response.end(JSON.stringify({ advisories: {}, metadata: { vulnerabilities: {} } }));
                 try {
-                  resolve(Object.keys(JSON.parse(Buffer.concat(chunks).toString("utf8")).dependencies));
+                  const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+                  const listed = body && typeof body.dependencies === "object" && body.dependencies && !Array.isArray(body.dependencies)
+                    ? Object.keys(body.dependencies)
+                    : body && typeof body === "object" && !Array.isArray(body) && Object.values(body).every((value) => Array.isArray(value))
+                      ? ["."]
+                      : null;
+                  if (!listed) throw new Error("audit request shape");
+                  resolve(listed);
                 } catch (error) {
                   reject(error);
                 }

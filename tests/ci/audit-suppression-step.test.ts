@@ -171,11 +171,14 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     );
     expect(run, "the leg must read .npmrc's audit-affecting keys").toContain(".npmrc");
     expect(run, "the projection must name the measured workspace settings").toMatch(
-      /"auditConfig", "auditLevel", "registries"/,
+      /"auditConfig", "auditLevel", "registries", "httpsProxy", "proxy", "noProxy", "strictSsl", "cafile", "ca", "registry"/,
     );
     expect(run, "the projection must name the measured .npmrc keys").toMatch(
-      /"audit-level", "registry", "strict-ssl", "cafile", "proxy", "https-proxy"/,
+      /"audit-level", "registry", "strict-ssl", "cafile", "ca", "proxy", "https-proxy"/,
     );
+    for (const key of ["auditConfig", "auditLevel", "registries", "httpsProxy", "proxy", "noProxy", "strictSsl", "cafile", "ca", "registry", "audit-level", "strict-ssl", "https-proxy"]) {
+      expect(run, key).toContain(`"${key}"`);
+    }
   });
 
   it("prints only the fixed refusal constants, and no pull-request bytes", () => {
@@ -397,6 +400,16 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     ["every id", { ignoreGhsas: [ID_A, ID_B] }, { ignoreGhsas: [] }],
   ])("passes a merge tree that only removes %s from ignoreGhsas", async (_label, base, merge) => {
     const fx = await fixture(listed(base), listed(merge));
+    await expectPasses(fx);
+  });
+
+  it("passes a workspace ignoreGhsas list that only shrinks", async () => {
+    const base = "auditConfig:\n  ignoreGhsas:\n    - GHSA-vfj7-8cjw-p6xm\n    - GHSA-pxg6-pf52-xh8x\n";
+    const merge = "auditConfig:\n  ignoreGhsas:\n    - GHSA-vfj7-8cjw-p6xm\n";
+    const fx = await fixture(PACKAGE_JSON(undefined), PACKAGE_JSON(undefined), {
+      base: { "pnpm-workspace.yaml": base },
+      merge: { "pnpm-workspace.yaml": merge },
+    });
     await expectPasses(fx);
   });
 

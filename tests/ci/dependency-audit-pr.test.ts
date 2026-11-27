@@ -37,6 +37,7 @@ const ENV_PINS: Record<string, string> = {
   pnpm_config_registry: "https://registry.npmjs.org/",
   pnpm_config_strict_ssl: "true",
   pnpm_config_audit_level: "low",
+  pnpm_config_pm_on_fail: "ignore",
 };
 
 /** Every fixed refusal the step's prologue can print; content-free constants. */
@@ -236,7 +237,7 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
   /** The local audit request that names the importers pnpm walks; `walked` POSTs one listing `ids` (the root alone by default). */
   const HC = "head audit --json --registry http://127.0.0.1:PORT/";
   const BC = "base audit --json --registry http://127.0.0.1:PORT/";
-  const walked = (...ids: string[]): Outcome[] => [{ code: 0, stdout: "", post: { dependencies: Object.fromEntries((ids.length > 0 ? ids : ["."]).map((id) => [id, {}])) } }];
+  const walked = (...ids: string[]): Outcome[] => [{ code: 0, stdout: "", post: ids.length > 0 ? { dependencies: Object.fromEntries(ids.map((id) => [id, {}])) } : { x: ["1.0.0"] } }];
   const headWhy = (...selectors: string[]): string => `head why --json ${selectors.join(" ")}`;
   const baseWhy = (...selectors: string[]): string => `base why --json ${selectors.join(" ")}`;
   const G1 = "GHSA-2222-3333-4444";
@@ -363,7 +364,7 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
         'const outcomes = JSON.parse(fs.readFileSync(dir + "/calls.json", "utf8"))[call];',
         'if (!outcomes) { process.stderr.write("unmodeled pnpm call: " + call + "\\n"); process.exit(97); }',
         "const outcome = outcomes[Math.min(served, outcomes.length) - 1];",
-        'const posted = outcome.post === undefined ? Promise.resolve() : fetch(registry + "-/npm/v1/security/audits/quick", { method: "POST", body: JSON.stringify(outcome.post) }).then((response) => response.text());',
+        'const posted = outcome.post === undefined ? Promise.resolve() : fetch(registry + "-/npm/v1/security/advisories/bulk", { method: "POST", body: JSON.stringify(outcome.post) }).then((response) => response.text());',
         'posted.then(() => { process.stdout.write(outcome.stdout); process.stderr.write(outcome.stderr ?? ""); process.exit(outcome.code); });',
         "",
       ].join("\n"),

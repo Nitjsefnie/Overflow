@@ -115,8 +115,9 @@ function runCommand(command: string, databaseUrl?: string, cwd = repositoryRoot)
       PATH: process.env.PATH, // Find the installed pnpm and Node executables.
       HOME: configDirectory,
       XDG_CONFIG_HOME: configDirectory,
-      npm_config_userconfig: npmConfig,
-      npm_config_globalconfig: npmConfig,
+      pnpm_config_userconfig: npmConfig,
+      pnpm_config_globalconfig: npmConfig,
+      pnpm_config_pm_on_fail: "ignore",
       // Keep the installed Corepack distribution cache available with an empty
       // HOME. This is Corepack's cache-location precedence, not pnpm config.
       COREPACK_HOME: process.env.COREPACK_HOME ?? join(
@@ -164,7 +165,7 @@ function runCommand(command: string, databaseUrl?: string, cwd = repositoryRoot)
 describe("documented reconciliation CLI commands", () => {
   it("does not inherit a global pnpmfile that injects Node options through the lifecycle shell", () => {
     const fixture = tempDirectories.create(join(tmpdir(), "reconcile-cli-pnpmfile-"));
-    const previousPnpmfile = process.env.npm_config_global_pnpmfile;
+    const previousPnpmfile = process.env.pnpm_config_global_pnpmfile;
     try {
       const { packageManager } = JSON.parse(readFileSync(join(repositoryRoot, "package.json"), "utf8"));
       writeFileSync(join(fixture, "package.json"), JSON.stringify({
@@ -182,9 +183,10 @@ describe("documented reconciliation CLI commands", () => {
 
       // First prove an unsanitized child sees this lifecycle shell; pnpm exec
       // would miss the injection and make the isolation assertion meaningless.
-      process.env.npm_config_global_pnpmfile = pnpmfile;
+      const controlEnv = { ...process.env, pnpm_config_global_pnpmfile: pnpmfile, pnpm_config_pm_on_fail: "ignore" };
+      delete controlEnv.COREPACK_ENABLE_PROJECT_SPEC;
       const control = spawnSync("pnpm", ["--silent", "run", "inspect-options"], {
-        cwd: fixture, env: process.env, encoding: "utf8", timeout: 60_000,
+        cwd: fixture, env: controlEnv, encoding: "utf8", timeout: 60_000,
       });
       if (control.error) throw control.error;
       expect(control.signal).toBeNull();
@@ -195,8 +197,8 @@ describe("documented reconciliation CLI commands", () => {
       expect(isolated.status, isolated.stderr).toBe(0);
       expect(JSON.parse(isolated.stdout)).toBeNull();
     } finally {
-      if (previousPnpmfile === undefined) delete process.env.npm_config_global_pnpmfile;
-      else process.env.npm_config_global_pnpmfile = previousPnpmfile;
+      if (previousPnpmfile === undefined) delete process.env.pnpm_config_global_pnpmfile;
+      else process.env.pnpm_config_global_pnpmfile = previousPnpmfile;
       tempDirectories.dispose(fixture);
     }
   });
