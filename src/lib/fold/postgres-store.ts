@@ -255,8 +255,9 @@ export class PostgresFoldStore implements ReconciliationStore, WebhookDeliverySt
     jobId: string,
     leaseToken: string,
     runAfter: Date,
+    attemptCount: number,
   ): Promise<boolean> {
-    return this.reconciliationJobs.deferReconciliationJob(jobId, leaseToken, runAfter);
+    return this.reconciliationJobs.deferReconciliationJob(jobId, leaseToken, runAfter, attemptCount);
   }
 
   public async retryReconciliationJob(

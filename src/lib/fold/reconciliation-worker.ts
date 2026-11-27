@@ -16,7 +16,7 @@ export type ReconciliationWorkerStore = {
   claimNextReconciliationJob(): Promise<ClaimedReconciliationJob | null>;
   renewReconciliationJobLease(jobId: string, leaseToken: string, renewalDeadline: Date): Promise<boolean>;
   completeReconciliationJob(jobId: string, leaseToken: string, rederivationGeneration: number, sweepGeneration: number | null): Promise<boolean>;
-  deferReconciliationJob(jobId: string, leaseToken: string, runAfter: Date): Promise<boolean>;
+  deferReconciliationJob(jobId: string, leaseToken: string, runAfter: Date, attemptCount: number): Promise<boolean>;
   retryReconciliationJob(jobId: string, leaseToken: string, runAfter: Date): Promise<boolean>;
   failReconciliationJob(jobId: string, leaseToken: string): Promise<boolean>;
   getReconciliationCooldown(repositoryId: string): Promise<Date | null>;
@@ -152,8 +152,8 @@ export const RECONCILIATION_WORKER_POLL_INTERVAL_MS = 5_000;
  * That reclaim has already replaced the lease token, so the original fold has
  * lost authority over its own queue bookkeeping even though the competing
  * fold was stopped: its completion only consumes its captured sweep, if no
- * newer one arrived. Neither mechanism fences writes after session loss;
- * that belongs to issue 210.
+ * newer one arrived, and its deferral only refunds its attempt. Neither
+ * mechanism fences writes after session loss; that belongs to issue 210.
  * Different repositories can proceed independently, but a due job behind four
  * occupied slots still waits for
  * capacity; this bound does not promise unconditional poll-bounded pickup.
@@ -195,7 +195,7 @@ export type ReconciliationJobOutcome =
   | "DEFERRED"
   | "RETRY_SCHEDULED"
   | "FAILED"
-  // The fold finished, but its lease no longer held the job.
+  // The fold ended, but its lease no longer held the job to record it.
   | "LEASE_LOST"
   // Holding trades freshness for enough budget to keep reconciliation possible.
   // The claimed job releases its lease and returns at its sponsor's reset time.
@@ -248,12 +248,8 @@ export async function runNextReconciliationJob(
     // The reclaim already consumed an attempt and superseded the old token;
     // refunding that attempt depends on this deferral write succeeding.
     const now = dependencies.now ?? (() => new Date());
-    await store.deferReconciliationJob(
-      job.id,
-      job.leaseToken,
-      new Date(now().getTime() + RECONCILIATION_WORKER_POLL_INTERVAL_MS),
-    );
-    return "DEFERRED";
+    const runAfter = new Date(now().getTime() + RECONCILIATION_WORKER_POLL_INTERVAL_MS);
+    return await store.deferReconciliationJob(job.id, job.leaseToken, runAfter, job.attemptCount) ? "DEFERRED" : "LEASE_LOST";
   }
   // Claim ownership synchronously before setup or any other awaited work.
   inFlightRepositories.add(job.repositoryId);
@@ -279,28 +275,24 @@ export async function runNextReconciliationJob(
       }
       if (notBefore) {
         // Deferral refunds the claim: GitHub's limit must not exhaust job attempts.
-        await store.deferReconciliationJob(job.id, job.leaseToken, notBefore);
-        return "DEFERRED";
+        return await store.deferReconciliationJob(job.id, job.leaseToken, notBefore, job.attemptCount) ? "DEFERRED" : "LEASE_LOST";
       }
       const delayMs = RECONCILIATION_RETRY_DELAYS_MS[job.attemptCount - 1];
       if (delayMs === undefined) {
-        await store.failReconciliationJob(job.id, job.leaseToken);
-        return "FAILED";
+        return await store.failReconciliationJob(job.id, job.leaseToken) ? "FAILED" : "LEASE_LOST";
       }
-      await store.retryReconciliationJob(
-        job.id,
-        job.leaseToken,
-        new Date(now().getTime() + delayMs),
-      );
-      return "RETRY_SCHEDULED";
+      const retried = await store.retryReconciliationJob(job.id, job.leaseToken, new Date(now().getTime() + delayMs));
+      return retried ? "RETRY_SCHEDULED" : "LEASE_LOST";
     }
 
     if (result?.skipped && !result.sweepPending) {
-      await store.deferReconciliationJob(
+      const deferred = await store.deferReconciliationJob(
         job.id,
         job.leaseToken,
         result.sweepHeldUntil ?? result.budgetHeldUntil ?? result.fairnessHeldUntil ?? await deferralTime(store, job.repositoryId, now()),
+        job.attemptCount,
       );
+      if (!deferred) return "LEASE_LOST";
       return result.sweepHeldUntil || result.budgetHeldUntil ? "BUDGET_HELD" : "DEFERRED";
     }
 

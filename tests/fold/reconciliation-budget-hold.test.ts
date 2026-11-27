@@ -150,7 +150,7 @@ describe("reconciliation budget holds under the repository lock", () => {
       sponsorId: "sponsor-1", observedCost: 5, observedResponses: 2, unmeasuredResponses: 0,
     });
     expect(f.fold.store.failRun).not.toHaveBeenCalled();
-    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
+    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt, 1);
   });
 
   it("records the sweep request budget when an admitted crawl exhausts its requests", async () => {
@@ -167,7 +167,7 @@ describe("reconciliation budget holds under the repository lock", () => {
     expect(f.fold.store.holdRun).toHaveBeenCalledExactlyOnceWith("run-1", "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET", null);
     expect(f.fold.store.failRun).not.toHaveBeenCalled();
     expect(materialize).not.toHaveBeenCalled();
-    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
+    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt, 1);
   });
 
   it("records no cost when a budget recheck holds before any GraphQL response", async () => {
@@ -202,7 +202,7 @@ describe("reconciliation budget holds under the repository lock", () => {
     f.store.claimNextReconciliationJob.mockResolvedValueOnce({ id: "job-1", repositoryId: "repository-1",
       reason: "SWEEP", attemptCount: 1, leaseToken: "lease-1", rederivationRequestedAt: now, rederivationGeneration: 2, sweepGeneration: null });
     await expect(runNextReconciliationJob(f.worker)).resolves.toBe("DEFERRED");
-    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", held);
+    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", held, 1);
     expect(f.fold.store.getGitHubAccessToken).not.toHaveBeenCalled();
     expect(f.fold.store.beginRun).not.toHaveBeenCalled();
     expect(f.fold.store.holdRun).not.toHaveBeenCalled();
@@ -226,7 +226,7 @@ describe("reconciliation budget holds under the repository lock", () => {
       .mockResolvedValueOnce({ state: "HELD", holdUntil: held, usage: { debt: 100, measuredAt: now, ratePerSecond: 1 } })
       .mockResolvedValueOnce({ state: "ADMITTED", holdUntil: null, usage: { debt: 0, measuredAt: now, ratePerSecond: 1 } });
     await expect(drainReconciliationJobs(f.worker, { maxJobs: 3 })).resolves.toEqual(["DEFERRED", "RECONCILED"]);
-    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", held);
+    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", held, 1);
     expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", 0, null);
     expect(f.store.retryReconciliationJob).not.toHaveBeenCalled();
     expect(f.store.failReconciliationJob).not.toHaveBeenCalled();
@@ -237,7 +237,7 @@ describe("reconciliation budget holds under the repository lock", () => {
   it("keeps the reserve deadline ahead of fairness", async () => {
     const f = fixture(499);
     await expect(runNextReconciliationJob(f.worker)).resolves.toBe("BUDGET_HELD");
-    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
+    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt, 1);
     expect(f.fold.store.assessReconciliationFairness).not.toHaveBeenCalled();
     expect(f.fold.store.getGitHubAccessToken).not.toHaveBeenCalled();
     expect(f.fold.store.beginRun).not.toHaveBeenCalled();
@@ -561,7 +561,7 @@ describe("reconciliation budget holds under the repository lock", () => {
     expect(logged).toHaveBeenCalledTimes(2);
     expect(logged.mock.calls[0]).toEqual([expect.any(String), expect.any(Error)]);
     expect(logged.mock.calls[1]).toEqual([expect.any(String)]);
-    expect(store.deferReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", resetAt);
+    expect(store.deferReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", resetAt, 1);
     expect(reconcile).not.toHaveBeenCalled();
   });
 
@@ -634,7 +634,7 @@ describe("reconciliation budget holds under the repository lock", () => {
         await expect(runNextReconciliationJob(worker)).resolves.toBe("BUDGET_HELD");
       }
       expect(fault).toHaveBeenCalledTimes(2);
-      expect(store.deferReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", resetAt);
+      expect(store.deferReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", resetAt, 1);
       expect(reconcile).not.toHaveBeenCalled();
     },
   );
@@ -744,7 +744,7 @@ describe("reconciliation budget holds under the repository lock", () => {
   it("defers a claimed job below the reserve without starting a run or reaching GitHub", async () => {
     const { fold, store, reconcile, worker } = fixture(499);
     await expect(runNextReconciliationJob(worker)).resolves.toBe("BUDGET_HELD");
-    expect(store.deferReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", resetAt);
+    expect(store.deferReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", resetAt, 1);
     expect(reconcile).not.toHaveBeenCalled();
     expect(store.retryReconciliationJob).not.toHaveBeenCalled();
     expect(fold.store.beginRun).not.toHaveBeenCalled();
@@ -783,7 +783,7 @@ describe("reconciliation budget holds under the repository lock", () => {
     await expect(runNextReconciliationJob(worker)).resolves.toBe("BUDGET_HELD");
     expect(read).toHaveBeenCalledExactlyOnceWith("sponsor-1");
     expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(1);
-    expect(store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
+    expect(store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt, 1);
   });
 
   it("reports only entering and leaving a hold across fresh drains", async () => {
@@ -796,7 +796,7 @@ describe("reconciliation budget holds under the repository lock", () => {
     expect(onBudgetChange).toHaveBeenLastCalledWith({
       owner: "sponsor-1", state: "BELOW_RESERVE", reading: reading(499), reserve: 500, changed: true,
     });
-    expect(store.deferReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", resetAt);
+    expect(store.deferReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", resetAt, 1);
 
     budgetStore.record("sponsor-1", { ...reading(1000, new Date("2026-09-07T11:01:00Z")),
       resetAt: new Date("2026-09-07T12:00:00Z") });
@@ -816,7 +816,7 @@ describe("reconciliation budget holds under the repository lock", () => {
     fold.onBudgetChange = () => { throw failure; };
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     await expect(runNextReconciliationJob(worker)).resolves.toBe("BUDGET_HELD");
-    expect(store.deferReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", resetAt);
+    expect(store.deferReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", resetAt, 1);
     expect(logged).toHaveBeenCalledWith(expect.any(String), failure);
   });
 
@@ -855,7 +855,7 @@ describe("reconciliation budget holds under the repository lock", () => {
     });
     await expect(drainReconciliationJobs(worker, { maxJobs: 2 })).resolves.toEqual(["RECONCILED", "BUDGET_HELD"]);
     expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(2);
-    expect(store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", resetAt);
+    expect(store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", resetAt, 1);
     expect(getRepository).toHaveBeenNthCalledWith(1, "repository-1");
     expect(getRepository).toHaveBeenNthCalledWith(2, "repository-2");
     expect(fold.store.beginRun).toHaveBeenCalledExactlyOnceWith("repository-1", { rederivation: false });
@@ -868,7 +868,7 @@ describe("reconciliation budget holds under the repository lock", () => {
     vi.stubEnv("OVERFLOW_GITHUB_GRAPHQL_BUDGET_RESERVE", "700");
     fold.budget = createReconciliationBudgetGate();
     await expect(runNextReconciliationJob(worker)).resolves.toBe("BUDGET_HELD");
-    expect(store.deferReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", resetAt);
+    expect(store.deferReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", resetAt, 1);
     expect(budgetStore.readState("sponsor-1")).toBe("BELOW_RESERVE");
   });
 
@@ -919,7 +919,7 @@ describe("reconciliation budget holds under the repository lock", () => {
     const schedule = startWorker.mock.calls[0][0] as { drain(): Promise<unknown> };
     await expect(schedule.drain()).resolves.toEqual(["BUDGET_HELD"]);
     expect(informed).toHaveBeenCalledExactlyOnceWith(expect.any(String), { BUDGET_HELD: 1 });
-    expect(store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
+    expect(store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt, 1);
     expect(fold.store.beginRun).not.toHaveBeenCalled();
     informed.mockClear();
     worker.store = { ...store, claimNextReconciliationJob: vi.fn(async () => null) };
@@ -1105,7 +1105,7 @@ describe("the sweep request budget binds only the folds that run under it", () =
     expect(f.fold.store.holdRun).toHaveBeenCalledExactlyOnceWith(
       "run-2", "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET", null,
     );
-    expect(f.store.deferReconciliationJob).toHaveBeenLastCalledWith("job-2", "lease-2", resetAt);
+    expect(f.store.deferReconciliationJob).toHaveBeenLastCalledWith("job-2", "lease-2", resetAt, 1);
   });
 
   it("holds only the spent sponsor's sweep fold on the drain path, spending each fold's own sponsor", async () => {
@@ -1156,7 +1156,7 @@ describe("the sweep request budget binds only the folds that run under it", () =
     await expect(drainReconciliationJobs(f.worker, { maxJobs: 3 })).resolves.toEqual(["BUDGET_HELD", "RECONCILED"]);
     expect(spendCalls).toEqual(["sponsor-a", "sponsor-b", "sponsor-b", "sponsor-b"]);
     expect(spent["sponsor-b"]).toBe(3);
-    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
+    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt, 1);
     expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", 0, null);
     expect(f.fold.store.holdRun).toHaveBeenCalledExactlyOnceWith(
       "run-1", "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET", null,
@@ -1450,7 +1450,7 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
     expect(f.fold.store.holdRun).toHaveBeenCalledExactlyOnceWith(
       "run-1", "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET", null,
     );
-    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
+    expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt, 1);
     expect(f.store.retryReconciliationJob).not.toHaveBeenCalled();
     expect(f.store.failReconciliationJob).not.toHaveBeenCalled();
     expect(materialize).not.toHaveBeenCalled();

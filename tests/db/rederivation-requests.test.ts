@@ -176,7 +176,7 @@ describe("durable repository re-derivation requests", () => {
     const released = outcome === "retry"
       ? await store.retryReconciliationJob(job.id, job.leaseToken, runAfter)
       : outcome === "defer"
-        ? await store.deferReconciliationJob(job.id, job.leaseToken, runAfter)
+        ? await store.deferReconciliationJob(job.id, job.leaseToken, runAfter, job.attemptCount)
         : await store.failReconciliationJob(job.id, job.leaseToken);
     expect(released).toBe(true);
     expect((await rows())[0]).toMatchObject({
