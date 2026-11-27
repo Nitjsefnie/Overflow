@@ -183,7 +183,7 @@ describe("documented reconciliation CLI commands", () => {
 
       // First prove an unsanitized child sees this lifecycle shell; pnpm exec
       // would miss the injection and make the isolation assertion meaningless.
-      const controlEnv = { ...process.env, pnpm_config_global_pnpmfile: pnpmfile, pnpm_config_pm_on_fail: "ignore" };
+      const controlEnv: Record<string, string | undefined> = { ...process.env, pnpm_config_global_pnpmfile: pnpmfile, pnpm_config_pm_on_fail: "ignore" };
       delete controlEnv.COREPACK_ENABLE_PROJECT_SPEC;
       const control = spawnSync("pnpm", ["--silent", "run", "inspect-options"], {
         cwd: fixture, env: controlEnv, encoding: "utf8", timeout: 60_000,

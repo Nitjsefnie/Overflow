@@ -4,57 +4,22 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 /**
- * Contract suites over `.github/workflows/ci.yml` assert that the verify job's
- * test steps EXIST. None of them asserts that those steps RUN, because nothing
- * else evaluates `if:`. Each of the three `if:` expressions guarding the test
- * steps can be rewritten so that it never fires on a pull request, and each such
- * mutation leaves the rest of the `tests/ci/` surface green — the third disables
- * both test steps at once, so the job concludes green having executed zero of
- * 6 646 tests.
+ * ci.yml contract suites assert that verify's test steps exist. They do not
+ * assert that those steps run, because nothing else evaluates `if:`. A guard
+ * can be rewritten so it never fires on a pull request and the rest of
+ * tests/ci stays green.
  *
- * The gap is specifically REACHABILITY, and the controls say so: mutating what
- * a step RUNS is killed by an existing suite, so these suites are not inert.
- * What no existing suite could see is a step that is present in the YAML and
- * never selected, which is the only shape in which a merge gate stops gating.
+ * This suite simulates step selection. It evaluates each verify step's `if:`
+ * for each event the workflow can receive and asserts the command sequence
+ * GitHub would execute. A condition that cannot fire is a step absent from
+ * that list.
  *
- * So this suite is a STEP-SELECTION SIMULATION rather than a wiring pin. It
- * implements the subset of GitHub's expression language ci.yml actually uses,
- * evaluates each verify step's `if:` against a context for each event the
- * workflow can receive, and asserts over the command sequence GitHub would
- * execute. A condition that cannot fire is then not a string in a file but a
- * step that is absent from the selected list, and the assertions below are
- * about that list.
- *
- * TWO RULES SHAPE THE EVALUATOR, and both exist because a silent `false` would
- * reproduce the very defect this suite closes:
- *
- * 1. **An expression the parser does not understand THROWS**, naming the
- *    expression. A parser that returned `false` for something it could not
- *    parse would make every step look unreachable, and the suite's verdicts
- *    would then be an artefact of the parser's ignorance rather than a fact
- *    about ci.yml — the assertions would pass or fail for reasons that have
- *    nothing to do with the workflow. For the same reason a context value that
- *    is not a scalar throws rather than coercing, and a property path rooted
- *    at something that is not a GitHub context throws rather than resolving to
- *    null: `githbu.event_name` is a typo, and a typo that reads as "no such
- *    context" is a step that silently stops running.
- * 2. **Absent is null, and null is falsy but not equal to a non-numeric
- *    string.** `steps.detect-docs.outputs.docs_only` is null before the
- *    detect step has run, and `... != 'true'` must still hold then — that is
- *    what lets the test step run at all.
- *
- * ONE LIMITATION is deliberate and stated rather than modelled: the scenarios
- * assume every preceding step succeeded, which is what GitHub's implicit
- * `success()` on a step carrying no `if:` means, and never simulate a
- * cancelled or failed job (only Half 4's upload pairs run on a red one). A
- * status function's suppression of that requirement is therefore invisible to
- * them — `!cancelled()` appended to a test step's condition, or `always()`,
- * would leave every scenario verdict unchanged even though it changes what a
- * cancelled run executes.
- *
- * Reordering tolerance is deliberate: the assertions are membership plus the
- * one order that carries meaning (migrations before tests), never an absolute
- * index, so moving an unrelated step cannot fail the suite.
+ * Two rules, because a silent false would hide the defect this suite closes:
+ * an expression the parser does not understand throws, and a non-scalar
+ * context value throws rather than coercing; absent is null, and null is
+ * falsy but not equal to a non-numeric string, so `!= 'true'` holds before
+ * detect-docs has run.
+ * Scenarios assume preceding steps succeeded. Assertions are membership plus migrations-before-tests.
  */
 
 /* -------------------------------------------------------------------------- */
