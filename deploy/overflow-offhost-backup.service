@@ -5,7 +5,7 @@
 # /etc/systemd/system/overflow-offhost-backup.service. deploy/backup-restore.md
 # is the procedure: it stands up the least-privilege backup role, the
 # /etc/overflow/backup.env environment file this unit reads (the age recipient
-# and channel additions only; the osc token is deliberately not in the file,
+# and channel additions only; the overflow token is deliberately not in the file,
 # it travels as a credential loaded from the canonical path), the
 # backup directory and the restore and drill steps.
 
@@ -32,8 +32,8 @@ Type=oneshot
 # mailbox CLI: a python3 script under /root, reached through the single
 # BindReadOnlyPaths below (see the sandbox comment at the file for why
 # ProtectHome is spelled tmpfs and not yes). Nothing else under /root is
-# reachable; the osc token reaches the mailbox CLI as a credential loaded
-# from the canonical file ~/.agent-bundle/discord/osc.token: PID 1 reads it
+# reachable; the overflow token reaches the mailbox CLI as a credential loaded
+# from the canonical file ~/.agent-bundle/discord/overflow.token: PID 1 reads it
 # before the sandbox is assembled and hands it over through
 # CREDENTIALS_DIRECTORY, which the script bridges to DISCORD_TOKEN, so the
 # environment file carries no token and no second copy of it exists to go
@@ -82,12 +82,12 @@ ProtectSystem=strict
 ProtectHome=tmpfs
 BindReadOnlyPaths=/root/.agent-bundle/scripts/discord_mb.py
 
-# The osc identity's bot token, loaded from its canonical file at every
+# The overflow identity's bot token, loaded from its canonical file at every
 # start: systemd reads it before the sandbox is assembled and hands the
-# script the path $CREDENTIALS_DIRECTORY/osc_token, which the script bridges
+# script the path $CREDENTIALS_DIRECTORY/overflow_token, which the script bridges
 # to DISCORD_TOKEN. A token rotation edits only the canonical file; no
 # Overflow-side copy exists to go stale.
-LoadCredential=osc_token:/root/.agent-bundle/discord/osc.token
+LoadCredential=overflow_token:/root/.agent-bundle/discord/overflow.token
 PrivateTmp=yes
 PrivateDevices=yes
 ReadWritePaths=/var/backups/overflow
