@@ -111,10 +111,27 @@ print(json.dumps(answer))
     expect(result.stdout.trim()).toBe("run-id=11");
   });
 
-  it("waits for the original push to finish before passing its artifacts to report", () => {
-    const result = source({ ...fixture({ status: "in_progress", conclusion: null }), [actions + "runs/11"]: { status: "completed", conclusion: "success" } });
-    expect(result.stderr).toContain("Waiting for ci run 11");
-    expect(result.stdout.trim()).toBe("run-id=11");
+  // Issue 1772's source run: plan done, the shard running for two polls, then its success and artifact
+  // while report and verify are still to run; the run itself completes only after verify.
+  it("borrows on the first poll after the source's shards and artifacts succeed, before its report and verify", () => {
+    const poll = (...rest: ReturnType<typeof job>[]) => ({ jobs: [job("plan", "success"), job("record-source", "skipped"), ...rest] });
+    const [running, passed, inProgress] = [job("test (1/1)", null, "in_progress"), job("test (1/1)", "success"), { status: "in_progress" }];
+    const result = source({ ...fixture({ status: "in_progress", conclusion: null }), [actions + "runs/11"]: [inProgress, inProgress, inProgress, { status: "completed", conclusion: "success" }],
+      [jobsOf(11)]: [poll(running), poll(running), poll(passed, job("report", null, "queued")), poll(passed, job("report", "success"), job("verify", null, "in_progress"))] });
+    expect([result.stdout, result.sleeps]).toEqual(["run-id=11\n", [20, 20]]);
+    expect(source(fixture({ conclusion: "failure" })).stdout, "the source's own verify failed").toBe("run-id=11\n");
+    const failed = source({ ...fixture({ status: "in_progress", conclusion: null }), [jobsOf(11)]: { jobs: [job("plan", "success"), job("test (1/1)", "failure"), job("report", null, "queued")] },
+      [actions + "runs/11"]: { status: "completed", conclusion: "failure" } });
+    expect([failed.stdout, failed.sleeps]).toEqual(["run-id=\n", []]);
+  });
+
+  it("keeps waiting while the shard or its artifact is not listed yet, and falls back once the run ends without them", () => {
+    const [running, artifacts] = [fixture({ status: "in_progress", conclusion: null }), actions + "runs/11/artifacts?per_page=100&page=1"];
+    const lagging = source({ ...running, [jobsOf(11)]: [{ jobs: [job("plan", "success")] }, running[jobsOf(11)], running[jobsOf(11)]],
+      [artifacts]: [{ artifacts: [] }, running[artifacts]], [actions + "runs/11"]: { status: "in_progress" } });
+    expect([lagging.stdout, lagging.sleeps]).toEqual(["run-id=11\n", [20, 20]]);
+    const ended = source({ ...running, [artifacts]: { artifacts: [] }, [actions + "runs/11"]: { status: "completed", conclusion: "success" } });
+    expect([ended.stdout, ended.sleeps]).toEqual(["run-id=\n", [20]]);
   });
 
   it("waits for the preceding push to appear in the workflow runs listing", () => {
@@ -146,7 +163,7 @@ print(json.dumps(answer))
   });
 
   it("uses the successful rerun of a shard that failed on the first attempt", () => {
-    const jobs = [{ name: "plan", conclusion: "success", run_attempt: 1 }, { name: "test (1/1)", conclusion: "failure", run_attempt: 1 }, { name: "test (1/1)", conclusion: "success", run_attempt: 2 }];
+    const jobs = [job("plan", "success"), job("test (1/1)", "failure"), { ...job("test (1/1)", "success"), run_attempt: 2 }];
     expect(source({ ...fixture({ run_attempt: 2 }), [actions + "runs/11/jobs?filter=all&per_page=100&page=1"]: { jobs } }).stdout.trim()).toBe("run-id=11");
   });
 
@@ -157,7 +174,7 @@ print(json.dumps(answer))
   });
 
   it.each([
-    ["a failed run", () => fixture({ conclusion: "failure" }), "did not successfully test"], ["a cancelled run", () => fixture({ conclusion: "cancelled" }), "did not successfully test"],
+    ["a cancelled shard", () => ({ ...fixture({ conclusion: "cancelled" }), [jobsOf(11)]: { jobs: [job("plan", "success"), job("test (1/1)", "cancelled")] } }), "did not successfully test"],
     ["a cancel before record-source started", () => ({ ...fixture({ conclusion: "cancelled" }), [runsAt(git("rev-parse", code + "^"))]: fixture({}, git("rev-parse", code + "^"))[runsAt(git("rev-parse", code + "^"))],
       [jobsOf(11)]: { jobs: [job("postgres-image", "cancelled"), job("plan", "cancelled", "completed", []), job("record-source", "cancelled", "completed", [])] } }), "did not successfully test"],
     ["a failed plan", () => ({ ...fixture(), [jobsOf(11)]: { jobs: [job("plan", "failure"), job("test (1/1)", "success")] } }), "did not successfully test"],

@@ -61,29 +61,31 @@ def measured_run(run):
     """None for an intervening record-only push, "" for an unusable run, else a proven producer."""
     run_id = run["id"]
     while True:
-        # A failed-jobs-only rerun can reuse successful shards from an earlier
-        # attempt. Keep each job's newest execution, as report does for artifacts.
+        # A failed-jobs-only rerun can reuse earlier shards: keep each job's newest attempt.
         jobs = {}
         for job in items(f"runs/{run_id}/jobs?filter=all", "jobs"):
             name = job["name"]
             if name not in jobs or job["run_attempt"] > jobs[name]["run_attempt"]:
                 jobs[name] = job
-        results = {name: job["conclusion"] for name, job in jobs.items()}
-        # Only a records-only push runs record-source; an unstarted job lists no steps.
+        # Only a records-only push runs record-source; one cancelled before it started lists
+        # no steps, so that run reads as a code run.
         source = jobs.get("record-source", {"status": "completed", "steps": []})
         if source["status"] == "in_progress" or source.get("steps"):
             return None
-        if run["status"] == "completed":
-            shards = [result for name, result in results.items() if name.startswith("test (")]
-            if (run["conclusion"] != "success" or results.get("plan") != "success"
-                    or not shards or any(result != "success" for result in shards)):
-                return unusable(f"ci run {run_id} did not successfully test the code")
-            # report may leave a missing shard's times unwritten: a partial or expired set is no matrix.
+        # The tip's own report and verify re-gate a borrowed matrix, so this run's are not awaited.
+        plan, shards = jobs.get("plan", {}), [job for name, job in jobs.items() if name.startswith("test (")]
+        if any(job.get("status") == "completed" and job["conclusion"] != "success" for job in [plan, *shards]):
+            return unusable(f"ci run {run_id} did not successfully test the code")
+        if shards and all(job.get("status") == "completed" for job in [plan, *shards]):
+            # A partial or expired artifact set is no matrix.
             artifacts = {a["name"] for a in items(f"runs/{run_id}/artifacts", "artifacts")
                          if not a["expired"] and a["name"].startswith("test-ratchet-")}
-            if len(artifacts) != len(shards):
+            if len(artifacts) == len(shards):
+                return run_id
+            if run["status"] == "completed":
                 return unusable(f"ci run {run_id} has {len(artifacts)} artifacts for {len(shards)} shards")
-            return run_id
+        elif run["status"] == "completed":
+            return unusable(f"ci run {run_id} did not successfully test the code")
         print(f"Waiting for ci run {run_id}", file=sys.stderr, flush=True)
         time.sleep(20)
         run = api(f"runs/{run_id}")
@@ -91,7 +93,7 @@ def measured_run(run):
 
 def source_run(before):
     # A rebase merge may have several commits but only its pushed tip has a
-    # run. Skip earlier record runs even while their reports are still waiting.
+    # run. Skip earlier record runs, even ones still waiting.
     for sha in subprocess.check_output(["git", "rev-list", "--first-parent", before], text=True).splitlines():
         endpoint = f"workflows/ci.yml/runs?branch=main&event=push&head_sha={sha}"
         runs = api(endpoint)["workflow_runs"]
