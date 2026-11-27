@@ -662,7 +662,7 @@ describe("reconcileRepository", () => {
         now, scheduleLeaseRenewal: () => () => {},
         onFailure: (_id, error) => { failures.push(error); clock = new Date(clock.getTime() + 7000); },
         store: {
-          claimNextReconciliationJob: async () => ({ id: "job-deadline", repositoryId: "repository", reason: "SWEEP", attemptCount: 5, leaseToken: "lease-deadline", rederivationRequestedAt: null, rederivationGeneration: 0 }),
+          claimNextReconciliationJob: async () => ({ id: "job-deadline", repositoryId: "repository", reason: "SWEEP", attemptCount: 5, leaseToken: "lease-deadline", rederivationRequestedAt: null, rederivationGeneration: 0, sweepGeneration: null }),
           renewReconciliationJobLease: async () => true,
           completeReconciliationJob: async () => { throw new Error("unexpected completion"); },
           retryReconciliationJob: async () => { throw new Error("unexpected retry"); },

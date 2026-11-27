@@ -15,7 +15,7 @@ const LEASE_HEARTBEAT_FAILURE_KEY = "reconciliation-lease-heartbeat";
 export type ReconciliationWorkerStore = {
   claimNextReconciliationJob(): Promise<ClaimedReconciliationJob | null>;
   renewReconciliationJobLease(jobId: string, leaseToken: string, renewalDeadline: Date): Promise<boolean>;
-  completeReconciliationJob(jobId: string, leaseToken: string, rederivationGeneration: number): Promise<boolean>;
+  completeReconciliationJob(jobId: string, leaseToken: string, rederivationGeneration: number, sweepGeneration: number | null): Promise<boolean>;
   deferReconciliationJob(jobId: string, leaseToken: string, runAfter: Date): Promise<boolean>;
   retryReconciliationJob(jobId: string, leaseToken: string, runAfter: Date): Promise<boolean>;
   failReconciliationJob(jobId: string, leaseToken: string): Promise<boolean>;
@@ -105,7 +105,7 @@ export const RECONCILIATION_LEASE_RENEWAL_INTERVAL_MS = 5_000;
  * An external reclaimer hits the sixty-second
  * lock deadline and enters retry backoff, eventually reaching FAILED after
  * enough attempts, with a visible last_failure_at, instead of renewing RUNNING
- * forever.
+ * forever. A fold that finishes after the reclaim returns LEASE_LOST.
  */
 export const RECONCILIATION_LEASE_MAX_RENEWAL_MS = 10 * 60_000;
 
@@ -149,10 +149,10 @@ export const RECONCILIATION_WORKER_POLL_INTERVAL_MS = 5_000;
  * live lease. If a lease expires during a fold, the repository advisory lock
  * serializes that repository's folds while its session survives. Local
  * repository exclusion prevents a same-store reclaim from folding concurrently.
- * That reclaim has already replaced the lease token, so the original fold has
- * lost authority over its own queue bookkeeping even though the competing
- * fold was stopped. Neither mechanism fences writes after session loss; that
- * belongs to issue 210.
+ * That reclaim has already replaced the lease token, so the original fold's
+ * completion consumes only the sweep its claim captured, even though the
+ * competing fold was stopped. Neither mechanism fences writes after session
+ * loss; that belongs to issue 210.
  * Different repositories can proceed independently, but a due job behind four
  * occupied slots still waits for
  * capacity; this bound does not promise unconditional poll-bounded pickup.
@@ -194,6 +194,8 @@ export type ReconciliationJobOutcome =
   | "DEFERRED"
   | "RETRY_SCHEDULED"
   | "FAILED"
+  // The fold finished, but its lease no longer held the job.
+  | "LEASE_LOST"
   // Holding trades freshness for enough budget to keep reconciliation possible.
   // The claimed job releases its lease and returns at its sponsor's reset time.
   | "BUDGET_HELD";
@@ -301,8 +303,8 @@ export async function runNextReconciliationJob(
       return result.sweepHeldUntil || result.budgetHeldUntil ? "BUDGET_HELD" : "DEFERRED";
     }
 
-    await store.completeReconciliationJob(job.id, job.leaseToken, job.rederivationGeneration);
-    return "RECONCILED";
+    const completed = await store.completeReconciliationJob(job.id, job.leaseToken, job.rederivationGeneration, job.sweepGeneration);
+    return completed ? "RECONCILED" : "LEASE_LOST";
   } finally {
     try {
       await stopRenewal?.();

@@ -15,4 +15,5 @@ export type ClaimedReconciliationJob = {
   leaseToken: string;
   rederivationRequestedAt: Date | null;
   rederivationGeneration: number;
+  sweepGeneration: number | null;
 };

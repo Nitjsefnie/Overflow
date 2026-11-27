@@ -15,6 +15,7 @@ type ReconciliationJobLeaseRow = {
   lease_token: string;
   rederivation_requested_at: Date | null;
   rederivation_generation: string;
+  claimed_sweep_generation: string | null;
 };
 
 export class PostgresReconciliationJobStore {
@@ -127,7 +128,8 @@ export class PostgresReconciliationJobStore {
         repository_reconciliation_jobs.attempt_count,
         repository_reconciliation_jobs.lease_token::text as lease_token,
         repository_reconciliation_jobs.rederivation_requested_at,
-        repository_reconciliation_jobs.rederivation_generation
+        repository_reconciliation_jobs.rederivation_generation,
+        repository_reconciliation_jobs.claimed_sweep_generation
     `;
     const [row] = rows;
     return row === undefined
@@ -140,6 +142,7 @@ export class PostgresReconciliationJobStore {
           leaseToken: row.lease_token,
           rederivationRequestedAt: row.rederivation_requested_at,
           rederivationGeneration: Number(row.rederivation_generation),
+          sweepGeneration: row.claimed_sweep_generation === null ? null : Number(row.claimed_sweep_generation),
         };
   }
 
@@ -163,6 +166,7 @@ export class PostgresReconciliationJobStore {
     jobId: string,
     leaseToken: string,
     rederivationGeneration: number,
+    sweepGeneration: number | null,
   ): Promise<boolean> {
     // An event that arrived during the fold may not be reflected in it, so a job
     // that took a follow-up becomes a fresh PENDING job instead of disappearing.
@@ -182,6 +186,12 @@ export class PostgresReconciliationJobStore {
         for update
       `;
       if (row === undefined) {
+        // The lease was lost but the fold finished: consume the sweep it captured
+        // unless a newer one arrived, so a catch-up can end.
+        if (sweepGeneration !== null) {
+          await transaction`update repository_reconciliation_jobs set reason = 'WEBHOOK'
+            where id = ${jobId} and reason = 'SWEEP' and sweep_generation = ${sweepGeneration}`;
+        }
         return false;
       }
       if (row.follow_up_requested || !row.request_matches) {

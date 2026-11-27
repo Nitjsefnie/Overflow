@@ -242,7 +242,7 @@ describe("sponsor quota admission through transport, fold and worker", () => {
       expect(store.completeReconciliationJob).not.toHaveBeenCalled();
     } else {
       expect(harness.gatewaysBuilt).toEqual(["sponsor-token"]);
-      expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 0);
+      expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 0, null);
       expect(store.deferReconciliationJob).not.toHaveBeenCalled();
     }
     expect(store.retryReconciliationJob).not.toHaveBeenCalled();
@@ -310,7 +310,7 @@ describe("sponsor quota admission through transport, fold and worker", () => {
     } };
     await expect(drainReconciliationJobs(worker, { maxJobs: 2 })).resolves.toEqual(["BUDGET_HELD", "RECONCILED"]);
     expect(store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
-    expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", 0);
+    expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", 0, null);
     expect(a.gatewaysBuilt).toEqual([]);
     expect(b.gatewaysBuilt).toEqual(["b-token"]);
     vi.setSystemTime(resetAt);
@@ -366,7 +366,7 @@ describe("sponsor quota admission through transport, fold and worker", () => {
 
 function queueStore() {
   return {
-    claimNextReconciliationJob: vi.fn(async () => ({ id: "job-1", repositoryId: "repo-1", reason: "SWEEP" as const, attemptCount: 1, leaseToken: "lease-1", rederivationRequestedAt: null, rederivationGeneration: 0 })),
+    claimNextReconciliationJob: vi.fn(async () => ({ id: "job-1", repositoryId: "repo-1", reason: "SWEEP" as const, attemptCount: 1, leaseToken: "lease-1", rederivationRequestedAt: null, rederivationGeneration: 0, sweepGeneration: null })),
     renewReconciliationJobLease: vi.fn(async () => true),
     completeReconciliationJob: vi.fn<ReconciliationWorkerStore["completeReconciliationJob"]>(async () => true),
     deferReconciliationJob: vi.fn(async () => true),

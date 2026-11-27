@@ -268,7 +268,7 @@ function createQueueingStore() {
         attemptCount: 1,
         leaseToken: job.leaseToken,
         rederivationRequestedAt: null,
-        rederivationGeneration: 0,
+        rederivationGeneration: 0, sweepGeneration: null,
       };
     },
     async renewReconciliationJobLease(jobId, leaseToken) {

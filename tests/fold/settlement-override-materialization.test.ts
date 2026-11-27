@@ -458,7 +458,7 @@ async function drainQueue(
       throw new Error(`No gateway was registered for queued repository ${job.repositoryId}.`);
     }
     await reconcileRepository({ store, github }, job.repositoryId);
-    const completed = await store.completeReconciliationJob(job.id, job.leaseToken, job.rederivationGeneration);
+    const completed = await store.completeReconciliationJob(job.id, job.leaseToken, job.rederivationGeneration, job.sweepGeneration);
     if (!completed) {
       throw new Error("Completing the claimed job failed, so the queue would never drain.");
     }

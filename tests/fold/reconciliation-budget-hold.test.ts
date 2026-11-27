@@ -39,7 +39,7 @@ function fixture(remaining?: number) {
   const store = {
     claimNextReconciliationJob: vi.fn<ReconciliationWorkerStore["claimNextReconciliationJob"]>(async () => ({
       id: "job-1", repositoryId: "repository-1", reason: "SWEEP" as const,
-      attemptCount: 1, leaseToken: "lease-1", rederivationRequestedAt: null, rederivationGeneration: 0,
+      attemptCount: 1, leaseToken: "lease-1", rederivationRequestedAt: null, rederivationGeneration: 0, sweepGeneration: null,
     })),
     renewReconciliationJobLease: vi.fn(async () => true),
     completeReconciliationJob: vi.fn<ReconciliationWorkerStore["completeReconciliationJob"]>(async () => true),
@@ -200,7 +200,7 @@ describe("reconciliation budget holds under the repository lock", () => {
     f.fold.store.assessReconciliationFairness = vi.fn<ReconciliationStore["assessReconciliationFairness"]>(async () => ({ state: "HELD", holdUntil: held,
       usage: { debt: 100, measuredAt: now, ratePerSecond: 1 } }));
     f.store.claimNextReconciliationJob.mockResolvedValueOnce({ id: "job-1", repositoryId: "repository-1",
-      reason: "SWEEP", attemptCount: 1, leaseToken: "lease-1", rederivationRequestedAt: now, rederivationGeneration: 2 });
+      reason: "SWEEP", attemptCount: 1, leaseToken: "lease-1", rederivationRequestedAt: now, rederivationGeneration: 2, sweepGeneration: null });
     await expect(runNextReconciliationJob(f.worker)).resolves.toBe("DEFERRED");
     expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", held);
     expect(f.fold.store.getGitHubAccessToken).not.toHaveBeenCalled();
@@ -216,10 +216,10 @@ describe("reconciliation budget holds under the repository lock", () => {
     const f = fixture(4000);
     const held = new Date(now.getTime() + 30_000);
     const expensive = { id: "job-1", repositoryId: "repository-1", reason: "SWEEP" as const,
-      attemptCount: 1, leaseToken: "lease-1", rederivationRequestedAt: now, rederivationGeneration: 2 };
+      attemptCount: 1, leaseToken: "lease-1", rederivationRequestedAt: now, rederivationGeneration: 2, sweepGeneration: null };
     f.store.claimNextReconciliationJob.mockResolvedValueOnce(expensive)
       .mockResolvedValueOnce({ ...expensive, id: "job-2", repositoryId: "repository-2", leaseToken: "lease-2",
-        rederivationRequestedAt: null, rederivationGeneration: 0 }).mockResolvedValueOnce(null);
+        rederivationRequestedAt: null, rederivationGeneration: 0, sweepGeneration: null }).mockResolvedValueOnce(null);
     const repository = (await f.fold.store.getRepository("repository-1"))!;
     f.fold.store.getRepository = async (id) => ({ ...repository, id, githubRepositoryId: id === "repository-1" ? 4242 : 4243 });
     f.fold.store.assessReconciliationFairness = vi.fn<ReconciliationStore["assessReconciliationFairness"]>()
@@ -227,7 +227,7 @@ describe("reconciliation budget holds under the repository lock", () => {
       .mockResolvedValueOnce({ state: "ADMITTED", holdUntil: null, usage: { debt: 0, measuredAt: now, ratePerSecond: 1 } });
     await expect(drainReconciliationJobs(f.worker, { maxJobs: 3 })).resolves.toEqual(["DEFERRED", "RECONCILED"]);
     expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", held);
-    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", 0);
+    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", 0, null);
     expect(f.store.retryReconciliationJob).not.toHaveBeenCalled();
     expect(f.store.failReconciliationJob).not.toHaveBeenCalled();
     expect(f.fold.store.beginRun).toHaveBeenCalledExactlyOnceWith("repository-2", { rederivation: false });
@@ -299,7 +299,7 @@ describe("reconciliation budget holds under the repository lock", () => {
     expect(f.fold.store.assessReconciliationFairness).not.toHaveBeenCalled();
     expect(f.fold.store.getGitHubAccessToken).not.toHaveBeenCalled();
     expect(f.reconcile).not.toHaveBeenCalled();
-    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 0);
+    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 0, null);
   });
 
   it("uses the single guarded admission assessment before diagnostics", async () => {
@@ -412,7 +412,7 @@ describe("reconciliation budget holds under the repository lock", () => {
       state = "RUNNING";
       attempts++;
       return { id: "job-1", repositoryId: "repository-1", reason: "SWEEP", attemptCount: attempts,
-        leaseToken: "lease-1", rederivationRequestedAt: null, rederivationGeneration: 0 };
+        leaseToken: "lease-1", rederivationRequestedAt: null, rederivationGeneration: 0, sweepGeneration: null };
     };
     worker.store.deferReconciliationJob = async (_id, _lease, deadline) => {
       state = "PENDING"; attempts--; runAfter = deadline; return true;
@@ -455,7 +455,7 @@ describe("reconciliation budget holds under the repository lock", () => {
         if (state !== "PENDING" || runAfter.getTime() > now.getTime()) return null;
         state = "RUNNING";
         attempts++;
-        return { id: "job-1", repositoryId: "repository-1", reason: "SWEEP", attemptCount: attempts, leaseToken: "lease-1", rederivationRequestedAt: null, rederivationGeneration: 0 };
+        return { id: "job-1", repositoryId: "repository-1", reason: "SWEEP", attemptCount: attempts, leaseToken: "lease-1", rederivationRequestedAt: null, rederivationGeneration: 0, sweepGeneration: null };
       });
       const defer = vi.fn<ReconciliationWorkerStore["deferReconciliationJob"]>(async (_id, _lease, deadline) => {
         deadline.toISOString();
@@ -755,7 +755,7 @@ describe("reconciliation budget holds under the repository lock", () => {
     await expect(runNextReconciliationJob(worker)).resolves.toBe("RECONCILED");
     expect(store.claimNextReconciliationJob).toHaveBeenCalledTimes(1);
     expect(reconcile).toHaveBeenCalledWith(4242);
-    expect(store.completeReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", 0);
+    expect(store.completeReconciliationJob).toHaveBeenCalledWith("job-1", "lease-1", 0, null);
   });
 
   it("claims when there has been no budget reading", async () => {
@@ -842,7 +842,7 @@ describe("reconciliation budget holds under the repository lock", () => {
   it("defers the next claimed repository when its budget falls during the preceding fold", async () => {
     const { fold, worker, budgetStore, store, reconcile } = fixture(500);
     const first = { id: "job-1", repositoryId: "repository-1", reason: "SWEEP" as const,
-      attemptCount: 1, leaseToken: "lease-1", rederivationRequestedAt: null, rederivationGeneration: 0 };
+      attemptCount: 1, leaseToken: "lease-1", rederivationRequestedAt: null, rederivationGeneration: 0, sweepGeneration: null };
     store.claimNextReconciliationJob.mockResolvedValueOnce(first).mockResolvedValueOnce({ ...first,
       id: "job-2", repositoryId: "repository-2", leaseToken: "lease-2" });
     const repository = (await fold.store.getRepository("repository-1"))!;
@@ -1071,7 +1071,7 @@ describe("the sweep request budget binds only the folds that run under it", () =
   function job(reason: "WEBHOOK" | "SWEEP", index: number) {
     return {
       id: `job-${index}`, repositoryId: "repository-1", reason,
-      attemptCount: 1, leaseToken: `lease-${index}`, rederivationRequestedAt: null, rederivationGeneration: 0,
+      attemptCount: 1, leaseToken: `lease-${index}`, rederivationRequestedAt: null, rederivationGeneration: 0, sweepGeneration: null,
     };
   }
 
@@ -1157,7 +1157,7 @@ describe("the sweep request budget binds only the folds that run under it", () =
     expect(spendCalls).toEqual(["sponsor-a", "sponsor-b", "sponsor-b", "sponsor-b"]);
     expect(spent["sponsor-b"]).toBe(3);
     expect(f.store.deferReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", resetAt);
-    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", 0);
+    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-2", "lease-2", 0, null);
     expect(f.fold.store.holdRun).toHaveBeenCalledExactlyOnceWith(
       "run-1", "Reconciliation held for the sweep request budget.", "SWEEP_REQUEST_BUDGET", null,
     );
@@ -1252,14 +1252,14 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
   function rederivationJob(index: number) {
     return {
       id: `job-${index}`, repositoryId: "repository-1", reason: "REDERIVATION" as const,
-      attemptCount: 1, leaseToken: `lease-${index}`, rederivationRequestedAt: now, rederivationGeneration: 1,
+      attemptCount: 1, leaseToken: `lease-${index}`, rederivationRequestedAt: now, rederivationGeneration: 1, sweepGeneration: null,
     };
   }
 
   function webhookJob(index: number) {
     return {
       id: `job-${index}`, repositoryId: "repository-1", reason: "WEBHOOK" as const,
-      attemptCount: 1, leaseToken: `lease-${index}`, rederivationRequestedAt: null, rederivationGeneration: 0,
+      attemptCount: 1, leaseToken: `lease-${index}`, rederivationRequestedAt: null, rederivationGeneration: 0, sweepGeneration: null,
     };
   }
 
@@ -1307,7 +1307,7 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
     expect(spends).toEqual(["sponsor-1", "sponsor-1", "sponsor-1"]);
     expect(f.fold.store.holdRun).not.toHaveBeenCalled();
     expect(f.fold.store.failRun).not.toHaveBeenCalled();
-    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1);
+    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1, null);
   });
 
   const sponsorBacklog = 6;
@@ -1347,7 +1347,7 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
       expect(spends).toEqual(["sponsor-1", "sponsor-1", "sponsor-1"]);
       expect(f.fold.store.holdRun).not.toHaveBeenCalled();
       expect(f.fold.store.failRun).not.toHaveBeenCalled();
-      expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1);
+      expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1, null);
     } finally {
       if (originalPrefixed === undefined) delete process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.OVERFLOW_RECONCILIATION_DIFF_ONLY_BACKLOG = originalPrefixed;
       if (originalUnprefixed === undefined) delete process.env.RECONCILIATION_DIFF_ONLY_BACKLOG; else process.env.RECONCILIATION_DIFF_ONLY_BACKLOG = originalUnprefixed;
@@ -1429,7 +1429,7 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
     // The cache-miss skip completes the job (the sweep re-offers it later);
     // what the pin discriminates is the skipped shape below.
     await expect(runNextReconciliationJob(f.worker)).resolves.toBe("RECONCILED");
-    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 0);
+    expect(f.store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 0, null);
     expect(materialize).not.toHaveBeenCalled();
     expect(requests).toEqual([]);
     expect(spends).toEqual([]);
