@@ -634,7 +634,7 @@ jobs:
           // not say where its importer id ends, so the lockfile has to name the root
           // importer and no other. No YAML parser is installed here: only the layout
           // pnpm writes is read, and every other spelling is refused.
-          const ENTRY = /^ {4,}(?:\x27[^\x27]*\x27|[A-Za-z0-9._~\/-]+):(?: (?:\{\}|\x27[^\x27]*\x27|[^ \x27"{}\[\]&*|>!#%@\x60][^"{}\[\]#]*))?$/;
+          const ENTRY = /^ {4,}(?:\x27[^\x27]*\x27|[A-Za-z0-9._~\/-]+):(?: (?:\{\}|\x27[^\x27]*\x27|(?![-?:,](?:\s|$))[^\s\x27"{}\[\]&*|>!#%@\x60].*))?$/;
           const rootAlone = (dir) => {
             const text = fs.readFileSync(dir + "/pnpm-lock.yaml", "utf8");
             let opening = true;
