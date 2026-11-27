@@ -114,7 +114,7 @@ print(json.dumps(answer))
     const result = source({ ...fixture({ status: "in_progress", conclusion: null }), [actions + "runs/11"]: [inProgress, inProgress, inProgress, { status: "completed", conclusion: "success", run_attempt: 1 }],
       [jobsOf(11)]: [poll(running), poll(running), poll(passed, job("report", null, "queued")), poll(passed, job("report", "success"), job("verify", null, "in_progress"))] });
     expect([result.stdout, result.sleeps]).toEqual(["run-id=11\n", [20, 20]]);
-    expect(source(fixture({ conclusion: "failure" })).stdout, "the source's own verify failed").toBe("run-id=11\n");
+    for (const conclusion of ["failure", "cancelled"]) expect(source(fixture({ conclusion })).stdout, `the source run ended ${conclusion} after its shards`).toBe("run-id=11\n");
     const failed = source({ ...fixture({ status: "in_progress", conclusion: null }), [jobsOf(11)]: { jobs: [job("plan", "success"), job("test (1/1)", "failure"), job("report", null, "queued")] },
       [actions + "runs/11"]: { status: "completed", conclusion: "failure", run_attempt: 1 } });
     expect([failed.stdout, failed.sleeps]).toEqual(["run-id=\n", []]);
