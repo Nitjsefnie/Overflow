@@ -2207,7 +2207,8 @@
         0.18
       ],
       "tests/db/credit-issued.test.ts": [
-        1.13
+        1.13,
+        2.39
       ],
       "tests/db/data-subject-requests.test.ts": [
         2.83
@@ -2558,7 +2559,8 @@
         0.2
       ],
       "tests/docs/env-recovery-commands.test.ts": [
-        1.52
+        1.52,
+        0.45
       ],
       "tests/docs/incident-response-recovery.test.ts": [
         0.04
@@ -2900,7 +2902,8 @@
       "tests/lib/dispute-http-surface.test.ts": [
         7.48,
         5.31,
-        13.31
+        13.31,
+        3.65
       ],
       "tests/lib/drain-summary-logger.test.ts": [
         0.01
@@ -2934,7 +2937,8 @@
       ],
       "tests/lib/http-surface-non-envelope.test.ts": [
         155.4,
-        81.77
+        81.77,
+        55.73
       ],
       "tests/lib/http-surface-record.test.ts": [
         74.23,
@@ -3188,7 +3192,8 @@
       "tests/scripts/ratchets.test.ts": [
         6.49,
         4.49,
-        10.74
+        10.74,
+        3.33
       ],
       "tests/scripts/resolve-suite-pull-request.test.ts": [
         37.76
