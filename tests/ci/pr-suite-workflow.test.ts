@@ -404,8 +404,11 @@ describe("the pull request suite workflow", () => {
       "node scripts/check-prerendered-routes.ts", "node scripts/check-page-geometry.mjs", "node scripts/check-perf-budget.ts"];
     const indices = order.map((command) => suite.steps.indexOf(stepRunning(command)));
     expect(indices).toEqual([...indices].sort((a, b) => a - b));
-    expect(suite.env).toEqual(expect.objectContaining({ COREPACK_ENABLE_PROJECT_SPEC: "0", pnpm_config_registry: "https://registry.npmjs.org/",
-      OVERFLOW_DATABASE_URL: "postgresql://overflow:overflow@127.0.0.1:5432/overflow_ci" }));
+    expect(suite.env).toEqual(expect.objectContaining({
+      COREPACK_ENABLE_PROJECT_SPEC: "0",
+      pnpm_config_registry: "https://registry.npmjs.org/",
+      OVERFLOW_DATABASE_URL: "postgresql://overflow:overflow@127.0.0.1:5432/overflow_ci",
+    }));
     // The job's environment is an exact SET, for the same reason the step's keys
     // and the job's keys are: an environment every step inherits is an input to
     // every step, and one arbitrary key there was measured defeating the hash
@@ -427,8 +430,18 @@ describe("the pull request suite workflow", () => {
         "exactly: a pip-resolving key (`PIP_FIND_LINKS`, `PIP_NO_INDEX`, `PIP_INDEX_URL`, " +
         "`PIP_CONFIG_FILE`) there lets the pull request supply the artifact the hashes are " +
         "checked against. Add a key here deliberately, with its reason.",
-    ).toEqual(["AUTH_GITHUB_ID", "AUTH_GITHUB_SECRET", "AUTH_SECRET", "COREPACK_ENABLE_PROJECT_SPEC", "OVERFLOW_APP_URL", "OVERFLOW_DATABASE_URL",
-      "OVERFLOW_GITHUB_WEBHOOK_URL", "OVERFLOW_MODERATOR_GITHUB_USER_IDS", "OVERFLOW_TOKEN_ENCRYPTION_KEY", "pnpm_config_registry"]);
+    ).toEqual([
+      "AUTH_GITHUB_ID",
+      "AUTH_GITHUB_SECRET",
+      "AUTH_SECRET",
+      "COREPACK_ENABLE_PROJECT_SPEC",
+      "OVERFLOW_APP_URL",
+      "OVERFLOW_DATABASE_URL",
+      "OVERFLOW_GITHUB_WEBHOOK_URL",
+      "OVERFLOW_MODERATOR_GITHUB_USER_IDS",
+      "OVERFLOW_TOKEN_ENCRYPTION_KEY",
+      "pnpm_config_registry",
+    ]);
   });
 
   it("judges nothing: no gate script whose verdict verify owns runs here", () => {
