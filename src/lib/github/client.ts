@@ -11,6 +11,8 @@ import { getRepositoryHistoryCount } from "@/lib/github/repository-count";
 import { hasNextLink, lastLinkPage } from "@/lib/github/link-pagination";
 import { getCommitAuthor } from "@/lib/github/commit-author";
 import { z } from "zod";
+import { manifestCommentRows, manifestEventRows, perIssueEventRows } from "@/lib/github/manifest-rows";
+import { } from "@/lib/github/subject-listing";
 import { checkSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
 import { CollectionWalkBound } from "@/lib/github/collection-walk-bound";
@@ -1421,14 +1423,3 @@ async function responseJson<T>(response: GitHubRestResponse): Promise<T> {
     throw new Error("GitHub API response was invalid.");
   }
 }
-
-/**
- * Repo-wide event rows carry the owning issue; per-issue event rows do not —
- * the request path names it. Comment rows carry `issue_url` on both paths.
- */
-const manifestEventRows = z.array(z.object({
-  node_id: z.string().min(1), event: z.string(),
-  issue: z.object({ id: z.number().int().positive().safe(), number: z.number().int().positive().safe() }),
-}));
-const perIssueEventRows = z.array(z.object({ node_id: z.string().min(1), event: z.string() }));
-const manifestCommentRows = z.array(z.object({ node_id: z.string().min(1), issue_url: z.url() }));
