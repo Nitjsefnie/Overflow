@@ -188,6 +188,7 @@ print(json.dumps(answer))
     ["no shard", () => ({ ...fixture(), [jobsOf(11)]: { jobs: [job("plan", "success")] } }), "did not successfully test"],
     ["a failed shard", () => ({ ...fixture(), [jobsOf(11)]: { jobs: [job("plan", "success"), job("test (1/1)", "failure")] } }), "did not successfully test"],
     ["no artifact", () => ({ ...fixture(), [actions + "runs/11/artifacts?per_page=100&page=1"]: { artifacts: [] } }), "has 0 artifacts for 1 shards"],
+    ["an extra artifact", () => ({ ...fixture(), [actions + "runs/11/artifacts?per_page=100&page=1"]: { artifacts: ["1_1", "1_2"].map(cell => ({ name: `test-ratchet-cell-${cell}`, expired: false })) } }), "has 2 artifacts for 1 shards"],
     ["an expired artifact", () => ({ ...fixture(), [actions + "runs/11/artifacts?per_page=100&page=1"]: { artifacts: [{ name: "test-ratchet-cell-1_1", expired: true }] } }), "has 0 artifacts for 1 shards"],
   ])("hands the tip its own matrix with an empty run id when the same-code run has %s", (_, responses, reason) => {
     const result = source(responses());
