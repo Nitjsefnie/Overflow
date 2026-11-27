@@ -604,6 +604,7 @@ jobs:
           
           npmrc_pre_parse=$(cat <<'PY'
           import json
+          import re
           import sys
           
           data = sys.stdin.buffer.read()
@@ -620,7 +621,7 @@ jobs:
               sys.exit(1)
           ALLOWED = ("audit-level", "registry", "strict-ssl", "cafile", "ca", "proxy", "https-proxy")
           projection = {}
-          for line in text.split("\n"):
+          for line in re.split(r"\r\n|\r|\n", text):
               stripped = line.strip()
               if not stripped or stripped.startswith("#") or stripped.startswith(";"):
                   continue
@@ -632,6 +633,9 @@ jobs:
               value = value.strip()
               if not key:
                   sys.stderr.write("::error::.npmrc carries a line that is neither blank, a comment, nor key=value; refusing to judge its audit-affecting keys without a parse\n")
+                  sys.exit(1)
+              if not re.fullmatch(r"@[a-z0-9][a-z0-9._-]*:registry|[a-z0-9_][a-z0-9._-]*", key):
+                  sys.stderr.write("::error::.npmrc carries a key that is not a plain unquoted name; refusing to judge it\n")
                   sys.exit(1)
               if key in ALLOWED:
                   projection[key] = value

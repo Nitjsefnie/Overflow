@@ -81,6 +81,7 @@ const REFUSALS = {
     "::error::this pull request changes audit-affecting settings in pnpm-workspace.yaml; a " +
     "pull request cannot change the audit suppression list — the list moves only through a " +
     "maintainer-reviewed merge",
+  npmrcKey: "::error::.npmrc carries a key that is not a plain unquoted name; refusing to judge it",
   npmrcParse:
     "::error::.npmrc carries a line that is neither blank, a comment, nor key=value; refusing " +
     "to judge its audit-affecting keys without a parse",
@@ -680,7 +681,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
   });
 
   it("refuses strict-ssl, cafile or a proxy added in .npmrc", async () => {
-    for (const line of ["strict-ssl=false", "cafile=/etc/attacker.pem", "https-proxy=http://127.0.0.1:1"]) {
+    for (const line of ["strict-ssl=false", "cafile=/etc/attacker.pem", "https-proxy=http://127.0.0.1:1", "save-exact=true\rca=x"]) {
       const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
         merge: { ".npmrc": `${line}\n` },
       });
@@ -689,14 +690,18 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
   });
 
   it("passes when .npmrc carries only a scoped registry key", async () => {
-    // Measured on pnpm 10.33.0 (probe leg n4b, real advisory with
-    // github_advisory_id): the audit's advisory POST goes to the DEFAULT
+    // Measured on pnpm 12.23.0 (two local endpoints, audit of a
+    // lockfile with scoped packages): the audit's advisory POST goes to the DEFAULT
     // registry; @scope:registry does not redirect it. The allowlist therefore
     // excludes scoped keys, and this case pins that exclusion.
     const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
       merge: { ".npmrc": "@attk:registry=https://attacker.invalid/\n" },
     });
     await expectPasses(fx);
+  });
+
+  it.each(['"https-proxy"=x', "'ca'=x", '"ca"="x"', '"cafile"=x', "//registry.npmjs.org/:cafile=x", '//registry.npmjs.org/:ca="x"', "ca[]=x"])("refuses the .npmrc spelling %s", async (line) => {
+    await expectRefuses(await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), { merge: { ".npmrc": `${line}\n` } }), REFUSALS.npmrcKey);
   });
 
   it("refuses an unparseable .npmrc whose bytes differ from the base", async () => {
