@@ -3022,7 +3022,8 @@
         0.15
       ],
       "tests/moderation/credit-adjustment-store.test.ts": [
-        3.01
+        3.01,
+        4.03
       ],
       "tests/moderation/current-role.test.ts": [
         0.06
@@ -3084,7 +3085,8 @@
         0.55
       ],
       "tests/scripts/check-legal-revisions.test.ts": [
-        3.37
+        3.37,
+        5.87
       ],
       "tests/scripts/check-page-geometry-board.test.ts": [
         0.38
