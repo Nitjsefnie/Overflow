@@ -231,11 +231,7 @@ describe("running the next reconciliation job", () => {
       if (writes === 1) { writing.resolve(); await held.promise; }
       return true;
     };
-    const dependencies = {
-      store,
-      reconcile: async () => { folded += 1; },
-      scheduleLeaseRenewal: () => () => {},
-    };
+    const dependencies = { store, reconcile: async () => { folded += 1; }, scheduleLeaseRenewal: () => () => {} };
     const first = runNextReconciliationJob(dependencies);
     try {
       await writing.promise;
@@ -251,10 +247,7 @@ describe("running the next reconciliation job", () => {
   it.each(["FAILED", "skipped result", "retry write rejection", "rejecting stop"] as const)(
     "admits a second same-store fold after terminal path %s",
     async (path) => {
-      const { store } = createFakeStore({ jobs: [
-        job({ attemptCount: path === "FAILED" ? 5 : 1 }),
-        job(),
-      ] });
+      const { store } = createFakeStore({ jobs: [job({ attemptCount: path === "FAILED" ? 5 : 1 }), job()] });
       const failure = new Error("fold or cleanup failed");
       const consoleFailure = new Error("both console fallbacks failed");
       let firstJob = true;
@@ -352,10 +345,7 @@ describe("running the next reconciliation job", () => {
       await expect(drainReconciliationJobs(dependencies, { maxJobs: 1 })).resolves.toEqual(["DEFERRED"]);
       expect(heartbeats).toBe(1);
       expect(folded).toEqual(["repo-a"]);
-      expect(calls).toContainEqual({
-        method: "defer",
-        args: ["job-1", "reclaimed", new Date("2030-01-02T03:04:10.000Z"), 1],
-      });
+      expect(calls).toContainEqual({ method: "defer", args: ["job-1", "reclaimed", new Date("2030-01-02T03:04:10.000Z"), 1] });
       await expect(drainReconciliationJobs(dependencies, { maxJobs: 1 })).resolves.toEqual(["RECONCILED"]);
       expect(folded).toEqual(["repo-a", "repo-b"]);
       held.resolve();
@@ -409,12 +399,7 @@ describe("running the next reconciliation job", () => {
     const { store, calls } = createFakeStore();
 
     await expect(
-      runNextReconciliationJob({
-        store,
-        reconcile: async () => {
-          throw new Error("nothing should be reconciled");
-        },
-      }),
+      runNextReconciliationJob({ store, reconcile: async () => { throw new Error("nothing should be reconciled"); } }),
     ).resolves.toBe("IDLE");
 
     expect(calls).toEqual([{ method: "claim", args: [] }]);
@@ -425,26 +410,15 @@ describe("running the next reconciliation job", () => {
     const reconciled: string[] = [];
 
     await expect(
-      runNextReconciliationJob({
-        store,
-        reconcile: async (repositoryId) => {
-          reconciled.push(repositoryId);
-        },
-      }),
+      runNextReconciliationJob({ store, reconcile: async (repositoryId) => { reconciled.push(repositoryId); } }),
     ).resolves.toBe("RECONCILED");
 
     expect(reconciled).toEqual(["repo-a"]);
-    expect(calls).toEqual([
-      { method: "claim", args: [] },
-      { method: "complete", args: ["job-1", "lease-1", 0, null] },
-    ]);
+    expect(calls).toEqual([{ method: "claim", args: [] }, { method: "complete", args: ["job-1", "lease-1", 0, null] }]);
   });
 
   it("defers to the cooldown the store reports and consumes no attempt", async () => {
-    const { store, calls } = createFakeStore({
-      jobs: [job()],
-      cooldown: new Date("2030-01-02T03:30:00.000Z"),
-    });
+    const { store, calls } = createFakeStore({ jobs: [job()], cooldown: new Date("2030-01-02T03:30:00.000Z") });
 
     await expect(
       runNextReconciliationJob({
@@ -472,17 +446,11 @@ describe("running the next reconciliation job", () => {
       }),
     ).resolves.toBe("DEFERRED");
 
-    expect(calls.at(-1)).toEqual({
-      method: "defer",
-      args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z"), 1],
-    });
+    expect(calls.at(-1)).toEqual({ method: "defer", args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z"), 1] });
   });
 
   it("defers by the first retry delay when the reported cooldown lapses exactly now", async () => {
-    const { store, calls } = createFakeStore({
-      jobs: [job()],
-      cooldown: new Date("2030-01-02T03:04:05.678Z"),
-    });
+    const { store, calls } = createFakeStore({ jobs: [job()], cooldown: new Date("2030-01-02T03:04:05.678Z") });
 
     await expect(
       runNextReconciliationJob({
@@ -492,19 +460,13 @@ describe("running the next reconciliation job", () => {
       }),
     ).resolves.toBe("DEFERRED");
 
-    expect(calls.at(-1)).toEqual({
-      method: "defer",
-      args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z"), 1],
-    });
+    expect(calls.at(-1)).toEqual({ method: "defer", args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z"), 1] });
   });
 
   it("defers by the first retry delay when the reported cooldown lapsed before now", async () => {
     // Deferring to a cooldown already behind the clock would make the job due
     // the moment it was deferred, and the poll loop would spin on it.
-    const { store, calls } = createFakeStore({
-      jobs: [job()],
-      cooldown: new Date("2030-01-02T02:04:05.678Z"),
-    });
+    const { store, calls } = createFakeStore({ jobs: [job()], cooldown: new Date("2030-01-02T02:04:05.678Z") });
 
     await expect(
       runNextReconciliationJob({
@@ -514,10 +476,7 @@ describe("running the next reconciliation job", () => {
       }),
     ).resolves.toBe("DEFERRED");
 
-    expect(calls.at(-1)).toEqual({
-      method: "defer",
-      args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z"), 1],
-    });
+    expect(calls.at(-1)).toEqual({ method: "defer", args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z"), 1] });
   });
 
   it("schedules each retry at the delay that attempt has earned", async () => {
@@ -548,10 +507,7 @@ describe("running the next reconciliation job", () => {
       ).resolves.toBe("RETRY_SCHEDULED");
 
       expect(reported).toEqual([{ repositoryId: "repo-a", error: failure }]);
-      expect(calls).toEqual([
-        { method: "claim", args: [] },
-        { method: "retry", args: ["job-1", "lease-1", new Date(runAfter)] },
-      ]);
+      expect(calls).toEqual([{ method: "claim", args: [] }, { method: "retry", args: ["job-1", "lease-1", new Date(runAfter)] }]);
     }
   });
 
@@ -574,10 +530,7 @@ describe("running the next reconciliation job", () => {
     ).resolves.toBe("FAILED");
 
     expect(reported).toEqual([failure]);
-    expect(calls).toEqual([
-      { method: "claim", args: [] },
-      { method: "fail", args: ["job-1", "lease-1"] },
-    ]);
+    expect(calls).toEqual([{ method: "claim", args: [] }, { method: "fail", args: ["job-1", "lease-1"] }]);
   });
 
   it("records the retry even when the failure reporter itself throws", async () => {
@@ -596,10 +549,7 @@ describe("running the next reconciliation job", () => {
       }),
     ).resolves.toBe("RETRY_SCHEDULED");
 
-    expect(calls.at(-1)).toEqual({
-      method: "retry",
-      args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z")],
-    });
+    expect(calls.at(-1)).toEqual({ method: "retry", args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z")] });
   });
 
   it("reports a fold that throws on the console when no reporter is attached", async () => {
@@ -618,13 +568,8 @@ describe("running the next reconciliation job", () => {
         }),
       ).resolves.toBe("RETRY_SCHEDULED");
 
-      expect(calls.at(-1)).toEqual({
-        method: "retry",
-        args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z")],
-      });
-      expect(logged.mock.calls).toEqual([
-        ["Reconciliation failed for repository", "repo-a", errorLogToken(unfolded)],
-      ]);
+      expect(calls.at(-1)).toEqual({ method: "retry", args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z")] });
+      expect(logged.mock.calls).toEqual([["Reconciliation failed for repository", "repo-a", errorLogToken(unfolded)]]);
     } finally {
       logged.mockRestore();
     }
@@ -651,13 +596,8 @@ describe("running the next reconciliation job", () => {
     try {
       await expect(runNextReconciliationJob(dependencies)).resolves.toBe("RETRY_SCHEDULED");
 
-      expect(calls.at(-1)).toEqual({
-        method: "retry",
-        args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z")],
-      });
-      expect(logged.mock.calls).toEqual([
-        ["Reconciliation failed for repository", "repo-a", errorLogToken(unfolded)],
-      ]);
+      expect(calls.at(-1)).toEqual({ method: "retry", args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z")] });
+      expect(logged.mock.calls).toEqual([["Reconciliation failed for repository", "repo-a", errorLogToken(unfolded)]]);
     } finally {
       logged.mockRestore();
     }
@@ -689,16 +629,11 @@ describe("running the next reconciliation job", () => {
       ).resolves.toBe("RETRY_SCHEDULED");
 
       expect(reports).toEqual(["repo-a"]);
-      expect(calls.at(-1)).toEqual({
-        method: "retry",
-        args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z")],
-      });
+      expect(calls.at(-1)).toEqual({ method: "retry", args: ["job-1", "lease-1", new Date("2030-01-02T03:05:05.678Z")] });
       await settle();
       await settle();
       expect(rejections.seen).toEqual([]);
-      expect(logged.mock.calls).toEqual([
-        ["Reconciliation failed for repository", "repo-a", errorLogToken(unfolded)],
-      ]);
+      expect(logged.mock.calls).toEqual([["Reconciliation failed for repository", "repo-a", errorLogToken(unfolded)]]);
     } finally {
       logged.mockRestore();
       rejections.restore();
@@ -803,10 +738,7 @@ describe("reconciliation lease heartbeat", () => {
       await timer.tick();
       time += 5_000;
       await timer.tick();
-      expect(calls).toEqual([
-        { method: "claim", args: [] },
-        { method: "renew", args: ["job-1", "lease-1"] },
-      ]);
+      expect(calls).toEqual([{ method: "claim", args: [] }, { method: "renew", args: ["job-1", "lease-1"] }]);
       expect(timer.cancellations).toBe(1);
     } finally {
       fold.resolve();
@@ -852,11 +784,7 @@ describe("reconciliation lease heartbeat", () => {
     const { store, calls } = createFakeStore({ jobs: [job()] });
     const timer = createRenewalTimer();
     const fold = signal();
-    const running = runNextReconciliationJob({
-      store,
-      reconcile: () => fold.promise,
-      ...timer.dependencies,
-    });
+    const running = runNextReconciliationJob({ store, reconcile: () => fold.promise, ...timer.dependencies });
     await timer.armed;
 
     try {
@@ -1064,9 +992,7 @@ describe("reconciliation lease heartbeat", () => {
       expect(schedule).toHaveBeenCalledWith(expect.any(Function), 5_000);
       expect(unref).toHaveBeenCalledTimes(1);
       fire();
-      expect(calls.filter(({ method }) => method === "renew")).toEqual([
-        { method: "renew", args: ["job-1", "lease-1"] },
-      ]);
+      expect(calls.filter(({ method }) => method === "renew")).toEqual([{ method: "renew", args: ["job-1", "lease-1"] }]);
       fold.resolve();
       await expect(running).resolves.toBe("RECONCILED");
       expect(cancel.mock.calls).toEqual([[timer]]);
@@ -1283,10 +1209,7 @@ describe("draining the reconciliation queue", () => {
     const { store, calls } = createFakeStore({ jobs: moreJobsThanAnyDrainTakes() });
 
     await expect(
-      drainReconciliationJobs(
-        { store, reconcile: async () => {} },
-        { maxJobs: 3 },
-      ),
+      drainReconciliationJobs({ store, reconcile: async () => {} }, { maxJobs: 3 }),
     ).resolves.toEqual(["RECONCILED", "RECONCILED", "RECONCILED"]);
 
     expect(calls.filter((call) => call.method === "claim")).toHaveLength(3);
@@ -1295,9 +1218,7 @@ describe("draining the reconciliation queue", () => {
   it("stops after fifty jobs when no bound is given", async () => {
     const { store, calls } = createFakeStore({ jobs: moreJobsThanAnyDrainTakes() });
 
-    await expect(
-      drainReconciliationJobs({ store, reconcile: async () => {} }),
-    ).resolves.toHaveLength(50);
+    await expect(drainReconciliationJobs({ store, reconcile: async () => {} })).resolves.toHaveLength(50);
 
     expect(calls.filter((call) => call.method === "claim")).toHaveLength(50);
   });
@@ -1335,11 +1256,7 @@ describe("the scheduled reconciliation worker", () => {
     vi.useFakeTimers();
     let started = 0;
 
-    startReconciliationWorker({
-      drain: async () => { started += 1; },
-      concurrency: 1,
-      intervalMs,
-    });
+    startReconciliationWorker({ drain: async () => { started += 1; }, concurrency: 1, intervalMs });
     await vi.advanceTimersByTimeAsync(0);
     expect(started).toBe(1);
     for (let poll = 1; poll <= 12; poll += 1) {
@@ -1387,13 +1304,7 @@ describe("the scheduled reconciliation worker", () => {
     const timer = createTimer();
     let drains = 0;
 
-    startReconciliationWorker({
-      drain: async () => {
-        drains += 1;
-      },
-      schedule: timer.schedule,
-      concurrency: 1,
-    });
+    startReconciliationWorker({ drain: async () => { drains += 1; }, schedule: timer.schedule, concurrency: 1 });
     await timer.settle();
 
     expect(drains).toBe(1);
@@ -1687,12 +1598,8 @@ describe("the scheduled reconciliation worker", () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     let started = 0;
 
-    const schedule = {
-      drain: async () => { started += 1; await held.promise; },
-      schedule: timer.schedule,
-    };
-    Object.defineProperty(schedule, "concurrency",
-      kind === "accessor" ? { get: () => concurrency } : { value: concurrency });
+    const schedule = { drain: async () => { started += 1; await held.promise; }, schedule: timer.schedule };
+    Object.defineProperty(schedule, "concurrency", kind === "accessor" ? { get: () => concurrency } : { value: concurrency });
     startReconciliationWorker(schedule);
     expect(started).toBe(4);
     for (let tick = 0; tick < 4; tick += 1) await timer.tick();
@@ -1733,10 +1640,7 @@ describe("the scheduled reconciliation worker", () => {
       schedule: timer.schedule,
       get concurrency(): number { throw unreadable; },
     });
-    expect(logged.mock.calls).toEqual([
-      [DEFAULTED_CONCURRENCY_MESSAGE, unreadable],
-      [DEFAULTED_CONCURRENCY_MESSAGE],
-    ]);
+    expect(logged.mock.calls).toEqual([[DEFAULTED_CONCURRENCY_MESSAGE, unreadable], [DEFAULTED_CONCURRENCY_MESSAGE]]);
     for (let tick = 0; tick < 4; tick += 1) await timer.tick();
     expect(started).toBe(4);
   });
@@ -1880,12 +1784,7 @@ describe("the scheduled reconciliation worker", () => {
   it("honours an interval the caller chooses", async () => {
     const timer = createTimer();
 
-    startReconciliationWorker({
-      concurrency: 1,
-      drain: async () => {},
-      schedule: timer.schedule,
-      intervalMs: 250,
-    });
+    startReconciliationWorker({ concurrency: 1, drain: async () => {}, schedule: timer.schedule, intervalMs: 250 });
     await timer.settle();
 
     expect(timer.intervalMs).toBe(250);
@@ -1941,9 +1840,7 @@ describe("the scheduled reconciliation worker", () => {
       // and really rejected, rather than for a drain that never happened.
       expect(drains).toBe(1);
       expect(rejections.seen).toEqual([]);
-      expect(logged.mock.calls).toEqual([
-        ["Reconciliation worker could not drain the job queue", errorLogToken(undrained)],
-      ]);
+      expect(logged.mock.calls).toEqual([["Reconciliation worker could not drain the job queue", errorLogToken(undrained)]]);
     } finally {
       logged.mockRestore();
       rejections.restore();
@@ -1976,9 +1873,7 @@ describe("the scheduled reconciliation worker", () => {
       await timer.settle();
 
       expect(rejections.seen).toEqual([]);
-      expect(logged.mock.calls).toEqual([
-        ["Reconciliation worker could not drain the job queue", errorLogToken(undrained)],
-      ]);
+      expect(logged.mock.calls).toEqual([["Reconciliation worker could not drain the job queue", errorLogToken(undrained)]]);
 
       // A reporter that could not even be read must still leave the worker able
       // to drain again.
@@ -2017,9 +1912,7 @@ describe("the scheduled reconciliation worker", () => {
 
       expect(reports).toEqual([undrained]);
       expect(rejections.seen).toEqual([]);
-      expect(logged.mock.calls).toEqual([
-        ["Reconciliation worker could not drain the job queue", errorLogToken(undrained)],
-      ]);
+      expect(logged.mock.calls).toEqual([["Reconciliation worker could not drain the job queue", errorLogToken(undrained)]]);
     } finally {
       logged.mockRestore();
       rejections.restore();
@@ -2203,9 +2096,7 @@ describe("the bounded lease-heartbeat failure site", () => {
     // The other cases never cross a job boundary; this one runs a
     // second job on the same logger while the outage still stands, where a
     // fresh-per-job logger would print a full trace per wake again.
-    const { store } = createFakeStore({
-      jobs: [job(), job({ id: "job-2", repositoryId: "repo-b" })],
-    });
+    const { store } = createFakeStore({ jobs: [job(), job({ id: "job-2", repositoryId: "repo-b" })] });
     const firstTimer = createRenewalTimer();
     const secondTimer = createRenewalTimer();
     const firstFold = signal();
@@ -2366,9 +2257,7 @@ function createTimer() {
 
 function signal() {
   let resolve!: () => void;
-  const promise = new Promise<void>((settle) => {
-    resolve = () => { heldSignals.delete(resolve); settle(); };
-  });
+  const promise = new Promise<void>((settle) => { resolve = () => { heldSignals.delete(resolve); settle(); }; });
   heldSignals.add(resolve);
   return { promise, resolve };
 }
