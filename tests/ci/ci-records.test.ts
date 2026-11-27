@@ -19,8 +19,8 @@ interface Job { if?: string; needs?: string | string[]; steps: Step[]; outputs?:
 function workflow(file: string): { on: { push: unknown }; jobs: Record<string, Job> } { return parse(readFileSync(`.github/workflows/${file}.yml`, "utf8")); }
 const [ci, scan] = [workflow("ci").jobs, workflow("code-scanning").jobs];
 const stepOf = (job: Job, id: string) => job.steps.find(step => step.id === id)!;
-// A step's `env:` as the runner renders it in a context: each `${{ }}` part evaluated, null as the empty string.
-const envOf = (step: Step, context: ActionsContext) => Object.fromEntries(Object.entries(step.env ?? {}).map(([name, value]) =>
+// Values (a step's `env:`, a job's `outputs:`) as the runner renders them in a context: each `${{ }}` part evaluated, null as the empty string.
+const render = (values: Record<string, string> | undefined, context: ActionsContext) => Object.fromEntries(Object.entries(values ?? {}).map(([name, value]) =>
   [name, String(value).replace(/\$\{\{(.*?)\}\}/g, (_, expression: string) => String(evaluateExpression(expression, context) ?? ""))]));
 const [classify, scanClassify, findSource] = [stepOf(ci["postgres-image"]!, "changes"), stepOf(scan.changes!, "changes"), stepOf(ci["record-source"]!, "source")];
 
@@ -38,7 +38,7 @@ describe("ratchet record pushes", () => {
     writeFileSync(join(root, "output"), "");
     const result = spawnSync("bash", ["-e", "-c", step.run!], { cwd: root, encoding: "utf8", timeout: 10_000, env: { ...process.env, PATH: `${root}/bin:${process.env.PATH}`,
       GITHUB_REPOSITORY: repo, GITHUB_REF: "refs/heads/main", GITHUB_EVENT_NAME: "push", ...env,
-      ...envOf(step, { github: { event: { before }, token: "fixture" } }), GITHUB_OUTPUT: join(root, "output") } });
+      ...render(step.env, { github: { event: { before }, token: "fixture" } }), GITHUB_OUTPUT: join(root, "output") } });
     return { ...result, stdout: readFileSync(join(root, "output"), "utf8") };
   }
   beforeAll(async () => {
@@ -98,7 +98,10 @@ print(json.dumps(answer))
     writeFileSync(join(root, "bin/responses.json"), JSON.stringify(responses));
     writeFileSync(join(root, "bin/sleeps"), "");
     const result = run(findSource, before, { PYTHONPATH: join(root, "bin") });
-    return { ...result, sleeps: readFileSync(join(root, "bin/sleeps"), "utf8").split("\n").filter(Boolean).map(Number) };
+    // Dependent jobs read record-source's `outputs:` evaluated over the step's output lines; a step that wrote none hands on none.
+    const outputs = Object.fromEntries(result.stdout.split("\n").filter(Boolean).map(line => line.split(/=(.*)/s)));
+    const stdout = result.stdout && Object.entries(render(ci["record-source"]!.outputs, { steps: { source: { outputs } } })).map(([name, value]) => `${name}=${value}\n`).join("");
+    return { ...result, stdout, sleeps: readFileSync(join(root, "bin/sleeps"), "utf8").split("\n").filter(Boolean).map(Number) };
   }
   // A job that never ran, skipped or cancelled before it started, lists no steps (live API).
   const job = (name: string, conclusion: string | null, status = "completed", steps = conclusion && conclusion !== "skipped" ? [{ name: "Set up job" }] : []) => ({ name, status, conclusion, steps, run_attempt: 1 });
@@ -312,7 +315,7 @@ describe("main push workflow routing", () => {
       ["true", "skipped", "success", "failure", 1], ["false", "failure", "skipped", "success", 1], ["true", "success", "success", "success", 0],
       ["true", "success", "failure", "success", 1], ["true", "failure", "success", "success", 1], ["false", "success", "success", "success", 1],
     ] as const) {
-      const env = envOf(step, { needs: { "postgres-image": { outputs: { "records-only": records } }, test: { result: test }, "record-source": { result: source }, report: { result: report } } });
+      const env = render(step.env, { needs: { "postgres-image": { outputs: { "records-only": records } }, test: { result: test }, "record-source": { result: source }, report: { result: report } } });
       expect(spawnSync("bash", ["-ec", step.run!], { env: { NODE_ENV: "test", ...env } }).status, JSON.stringify(env)).toBe(status);
     }
   });
