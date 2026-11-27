@@ -36,54 +36,33 @@ const LINUX_ONLY = process.platform === "linux";
 
 /** `pnpm audit --json` over a lockfile with no known vulnerabilities. */
 const CLEAN: ScriptedOutcome = {
-  code: 0,
-  stderr: "",
+  code: 0, stderr: "",
   stdout: JSON.stringify({
-    actions: [],
-    advisories: {},
-    muted: [],
-    metadata: {
-      vulnerabilities: { info: 0, low: 0, moderate: 0, high: 0, critical: 0 },
-      dependencies: 688,
-      devDependencies: 0,
-      optionalDependencies: 0,
-      totalDependencies: 688,
-    },
+    actions: [], advisories: {}, muted: [],
+    metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 0, critical: 0 }, dependencies: 688, devDependencies: 0, optionalDependencies: 0, totalDependencies: 688 },
   }),
 };
 
 /** `pnpm audit --json` over a lockfile pinning lodash 4.17.11 (trimmed). */
 const ADVISORIES: ScriptedOutcome = {
-  code: 1,
-  stderr: "",
+  code: 1, stderr: "",
   stdout: JSON.stringify({
     actions: [],
     advisories: {
       1106913: {
-        findings: [{ version: "4.17.11", paths: [".>lodash"] }],
-        module_name: "lodash",
-        severity: "high",
-        title: "Command Injection in lodash",
-        vulnerable_versions: "<4.17.21",
-        patched_versions: ">=4.17.21",
+        findings: [{ version: "4.17.11", paths: [".>lodash"] }], module_name: "lodash", severity: "high",
+        title: "Command Injection in lodash", vulnerable_versions: "<4.17.21", patched_versions: ">=4.17.21",
       },
     },
     muted: [],
-    metadata: {
-      vulnerabilities: { info: 0, low: 0, moderate: 3, high: 3, critical: 1 },
-      dependencies: 1,
-      devDependencies: 0,
-      optionalDependencies: 0,
-      totalDependencies: 1,
-    },
+    metadata: { vulnerabilities: { info: 0, low: 0, moderate: 3, high: 3, critical: 1 }, dependencies: 1, devDependencies: 0, optionalDependencies: 0, totalDependencies: 1 },
   }),
 };
 
 /** `pnpm audit --json` against an advisory endpoint answering `status`. */
 function registryFailure(status: number, code: string): ScriptedOutcome {
   return {
-    code: 1,
-    stderr: "",
+    code: 1, stderr: "",
     stdout: JSON.stringify({
       error: {
         code,
@@ -98,8 +77,7 @@ function registryFailure(status: number, code: string): ScriptedOutcome {
 
 function mixedRegistryFailure(transient: number, answered: number): ScriptedOutcome {
   return {
-    code: 1,
-    stderr: "",
+    code: 1, stderr: "",
     stdout: JSON.stringify({
       error: {
         code: "ERR_PNPM_AUDIT_BAD_RESPONSE",
@@ -120,8 +98,7 @@ const SPLIT_ANSWER = mixedRegistryFailure(503, 403);
 
 const OUT_OF_RANGE = registryFailure(600, "ERR_PNPM_AUDIT_BAD_RESPONSE");
 const REFUSED: ScriptedOutcome = {
-  code: 1,
-  stderr: "",
+  code: 1, stderr: "",
   stdout: JSON.stringify({
     error: {
       code: "ECONNREFUSED",
@@ -135,14 +112,12 @@ const UNREADABLE: ScriptedOutcome = { code: 1, stdout: "", stderr: " ERROR  Unkn
 const UNTRUSTED: ScriptedOutcome = { code: 1, stderr: "", stdout: CLEAN.stdout };
 
 const NO_ADVISORIES_FIELD: ScriptedOutcome = {
-  code: 0,
-  stderr: "",
+  code: 0, stderr: "",
   stdout: JSON.stringify({ actions: [], muted: [], metadata: { dependencies: 688 } }),
 };
 
 const NO_LOCKFILE: ScriptedOutcome = {
-  code: 1,
-  stderr: "",
+  code: 1, stderr: "",
   stdout: JSON.stringify({
     error: {
       code: "ERR_PNPM_AUDIT_NO_LOCKFILE",
@@ -153,14 +128,7 @@ const NO_LOCKFILE: ScriptedOutcome = {
   }),
 };
 
-type Step = {
-  name?: string;
-  uses?: string;
-  run?: string;
-  with?: Record<string, unknown>;
-  env?: Record<string, string>;
-  "continue-on-error"?: unknown;
-};
+type Step = { name?: string; uses?: string; run?: string; with?: Record<string, unknown>; env?: Record<string, string>; "continue-on-error"?: unknown };
 
 describe("the dependency audit workflow's audit step", () => {
   let steps: Step[] = [];
@@ -188,7 +156,6 @@ describe("the dependency audit workflow's audit step", () => {
   });
 
   it("executes nothing from the pull request, and reads the lockfile as data", () => {
-
     const checkout = steps.filter((step) => step.uses?.startsWith("actions/checkout"));
     expect(checkout).toHaveLength(1);
     const run = auditSteps[0]?.run ?? "";
@@ -201,7 +168,6 @@ describe("the dependency audit workflow's audit step", () => {
   });
 
   it("keeps the retry inside the workflow, where a pull request cannot replace it", () => {
-
     const run = auditSteps[0]?.run ?? "";
     expect(run).not.toMatch(/\bnode\s+(\.\/)?scripts\//);
     expect(run).not.toMatch(/\bbash\s+(\.\/)?scripts\//);
@@ -269,10 +235,7 @@ describe("the dependency audit workflow's audit step", () => {
       await tempDirectories.disposeAsync(root);
     });
 
-    function runStep(
-      outcomes: ScriptedOutcome[],
-      options?: { delaySeconds?: string },
-    ): { status: number | null; stdout: string; attempts: number; sleeps: string[] } {
+    function runStep(outcomes: ScriptedOutcome[], options?: { delaySeconds?: string }): { status: number | null; stdout: string; attempts: number; sleeps: string[] } {
       cases += 1;
       const home = join(root, `case-${cases}`);
       mkdirSync(join(home, "bin"), { recursive: true });
@@ -283,17 +246,10 @@ describe("the dependency audit workflow's audit step", () => {
       writeFileSync(
         join(home, "bin", "pnpm"),
         [
-          "#!/usr/bin/env node",
-          'const fs = require("node:fs");',
-          'const dir = process.env.AUDIT_STUB_DIR;',
-          'const n = Number(fs.readFileSync(dir + "/counter", "utf8").trim());',
-          'fs.writeFileSync(dir + "/counter", String(n + 1));',
-          'const outcomes = JSON.parse(fs.readFileSync(dir + "/outcomes.json", "utf8"));',
-          "const outcome = outcomes[Math.min(n, outcomes.length - 1)];",
-          "process.stdout.write(outcome.stdout);",
-          "process.stderr.write(outcome.stderr);",
-          "process.exit(outcome.code);",
-          "",
+          "#!/usr/bin/env node", 'const fs = require("node:fs");', 'const dir = process.env.AUDIT_STUB_DIR;',
+          'const n = Number(fs.readFileSync(dir + "/counter", "utf8").trim());', 'fs.writeFileSync(dir + "/counter", String(n + 1));',
+          'const outcomes = JSON.parse(fs.readFileSync(dir + "/outcomes.json", "utf8"));', "const outcome = outcomes[Math.min(n, outcomes.length - 1)];",
+          "process.stdout.write(outcome.stdout);", "process.stderr.write(outcome.stderr);", "process.exit(outcome.code);", "",
         ].join("\n"),
       );
       writeFileSync(
@@ -309,13 +265,7 @@ describe("the dependency audit workflow's audit step", () => {
       const script = join(home, "audit.sh");
       writeFileSync(script, auditSteps[0]!.run!);
 
-      const env: NodeJS.ProcessEnv = {
-        ...process.env,
-        PATH: `${join(home, "bin")}:${process.env.PATH}`,
-        AUDIT_STUB_DIR: home,
-
-        OVERFLOW_EVENT_NAME: "schedule",
-      };
+      const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${join(home, "bin")}:${process.env.PATH}`, AUDIT_STUB_DIR: home, OVERFLOW_EVENT_NAME: "schedule" };
       // Omitting the key entirely is how the shipped default is exercised.
       if (options?.delaySeconds !== undefined) {
         env.DEPENDENCY_AUDIT_RETRY_DELAY_SECONDS = options.delaySeconds;
@@ -324,12 +274,8 @@ describe("the dependency audit workflow's audit step", () => {
       }
 
       const result = runBoundedScript(["bash", "-e", script], home, env, STEP_TIMEOUT_MS);
-      return {
-        status: result.status,
-        stdout: result.stdout,
-        attempts: Number(readFileSync(counter, "utf8").trim()),
-        sleeps: readFileSync(join(home, "sleeps"), "utf8").split("\n").filter((line) => line !== ""),
-      };
+      return { status: result.status, stdout: result.stdout, attempts: Number(readFileSync(counter, "utf8").trim()),
+        sleeps: readFileSync(join(home, "sleeps"), "utf8").split("\n").filter((line) => line !== "") };
     }
 
     /** The delay every case below asks for unless it is testing the default. */
@@ -343,7 +289,6 @@ describe("the dependency audit workflow's audit step", () => {
     });
 
     it("fails a lockfile carrying advisories, on the first attempt and without retrying", () => {
-
       const outcome = runStep([ADVISORIES], { delaySeconds: RETRY_DELAY });
       expect(outcome.status).toBe(1);
       expect(outcome.attempts).toBe(1);
@@ -369,7 +314,6 @@ describe("the dependency audit workflow's audit step", () => {
     });
 
     it("spends exactly its retry budget on a registry outage and then fails", () => {
-
       const outcome = runStep([SERVER_5XX], { delaySeconds: RETRY_DELAY });
       expect(outcome.status).toBe(1);
       expect(outcome.attempts).toBe(3);
@@ -387,7 +331,6 @@ describe("the dependency audit workflow's audit step", () => {
     });
 
     it("does not retry a registry answer that is not transient", () => {
-
       const forbidden = runStep([FORBIDDEN], { delaySeconds: RETRY_DELAY });
       expect(forbidden.status).toBe(1);
       expect(forbidden.attempts).toBe(1);
@@ -415,7 +358,6 @@ describe("the dependency audit workflow's audit step", () => {
     });
 
     it("names each way of failing to produce a verdict by what actually happened", () => {
-
       const seen: Record<string, string> = {};
       for (const [name, outcome, expected, forbidden] of [
         ["unparseable", UNREADABLE, "no JSON report", "carried"],
@@ -451,7 +393,6 @@ describe("the dependency audit workflow's audit step", () => {
     });
 
     it("does not retry when one endpoint's answer is transient and the other's is not", () => {
-
       const outcome = runStep([SPLIT_ANSWER], { delaySeconds: RETRY_DELAY });
       expect(outcome.status).toBe(1);
       expect(outcome.attempts).toBe(1);
@@ -468,14 +409,12 @@ describe("the dependency audit workflow's audit step", () => {
     });
 
     it("fails closed when the audit produced no readable report at all", () => {
-
       const outcome = runStep([UNREADABLE], { delaySeconds: RETRY_DELAY });
       expect(outcome.status).toBe(1);
       expect(outcome.attempts).toBe(1);
     });
 
     it("fails an empty advisories map that arrived with a nonzero exit", () => {
-
       const outcome = runStep([UNTRUSTED], { delaySeconds: RETRY_DELAY });
       expect(outcome.status).toBe(1);
       expect(outcome.attempts).toBe(1);
@@ -483,7 +422,6 @@ describe("the dependency audit workflow's audit step", () => {
     });
 
     it("reports neither a clean lockfile nor an advisory when the report has no advisories field", () => {
-
       const outcome = runStep([NO_ADVISORIES_FIELD], { delaySeconds: RETRY_DELAY });
       expect(outcome.status).toBe(1);
       expect(outcome.attempts).toBe(1);
@@ -491,7 +429,6 @@ describe("the dependency audit workflow's audit step", () => {
     });
 
     it("leaves nothing running when the step script never terminates", async () => {
-
       const marker = `audit-runaway-${randomBytes(8).toString("hex")}`;
       const home = join(root, marker);
       mkdirSync(home, { recursive: true });
