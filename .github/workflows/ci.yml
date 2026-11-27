@@ -201,9 +201,9 @@ jobs:
           javascript: src/**
 
   # Keep all repository code and API polling outside the job holding the deploy key.
-  # It retries failed API calls and waits for the code push it borrows, so its cap
-  # outlasts that run's postgres-image, plan, test, report and verify timeouts
-  # end to end, with room for queueing and retry sleeps.
+  # It retries failed API calls and waits for the borrowed push's tests, or its
+  # end when shards or artifacts never show, so its cap outlasts that run's
+  # postgres-image, plan, test, report and verify timeouts, queues and retries.
   record-source:
     needs: postgres-image
     if: needs.postgres-image.outputs.records-only == 'true'
