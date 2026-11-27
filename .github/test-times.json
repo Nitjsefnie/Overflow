@@ -2361,7 +2361,8 @@
         0.02
       ],
       "tests/db/schema.test.ts": [
-        13.04
+        13.04,
+        7.95
       ],
       "tests/db/shutdown-backlog-drain.test.ts": [
         3.1
@@ -2452,7 +2453,8 @@
         0.0
       ],
       "tests/deploy/container-build-script.test.ts": [
-        3.43
+        3.43,
+        2.22
       ],
       "tests/deploy/container-image.test.ts": [
         131.39,
@@ -2493,7 +2495,8 @@
       ],
       "tests/deploy/next-config.test.ts": [
         31.27,
-        19.8
+        19.8,
+        13.97
       ],
       "tests/deploy/postgres-patch.test.ts": [
         0.08
@@ -2766,7 +2769,8 @@
         0.0
       ],
       "tests/forge/gitlab-client.test.ts": [
-        2.02
+        2.02,
+        0.7
       ],
       "tests/forge/gitlab-commit-read-fold-boundary.test.ts": [
         0.02
@@ -2931,7 +2935,8 @@
       ],
       "tests/lib/http/error-response.test.ts": [
         5.44,
-        3.72
+        3.72,
+        2.32
       ],
       "tests/lib/journal-levels.test.ts": [
         0.71
@@ -3114,7 +3119,8 @@
         0.04
       ],
       "tests/scripts/ledger-relay-publication.test.ts": [
-        2.52
+        2.52,
+        0.95
       ],
       "tests/scripts/ledger-relay-refused-producer.test.ts": [
         0.02
@@ -3188,7 +3194,8 @@
         5.03
       ],
       "tests/security/credential-reencryption-postgres.test.ts": [
-        5.16
+        5.16,
+        2.55
       ],
       "tests/security/github-authorization-url.test.ts": [
         0.27
