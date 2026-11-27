@@ -211,5 +211,7 @@ describe("GitLab open issue IDs", () => {
     expect(await client.listOpenIssueIds(repository)).toEqual([41, 57]);
     expect(request?.pathname).toBe("/api/v4/projects/group%2Fsubgroup%2Fproject/issues");
     expect(request?.searchParams.get("state")).toBe("opened");
+    expect(request?.searchParams.get("pagination")).toBe("keyset");
+    expect(request?.searchParams.get("order_by")).toBe("created_at");
   });
 });
