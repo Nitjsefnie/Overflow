@@ -1363,7 +1363,7 @@ exit 1
       ["push", "success", "false", true, false], ...["pull_request", "schedule", "workflow_dispatch"].map(event => [event, "skipped", null, false, true] as const),
     ] as const) {
       const context = { github: { event_name: event }, needs: { changes: { result, outputs: records === null ? {} : { "records-only": records } } } };
-      expect(isSelected({ if: condition }, context, jobStatus([result], cancelled)), [event, result, records, cancelled].join()).toBe(runs);
+      expect(isSelected({ if: condition }, context, jobStatus(analyze, workflow.jobs, context.needs, cancelled)), [event, result, records, cancelled].join()).toBe(runs);
     }
     expect(gateBehavior(rest)).toEqual({
       needs: "changes",

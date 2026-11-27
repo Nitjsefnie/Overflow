@@ -306,8 +306,15 @@ export function selectSteps(steps: readonly WorkflowStep[], context: ActionsCont
   return steps.filter((step) => isSelected(step, context, status));
 }
 
-// A job's status for its `if:`: the run's when cancelled, else success only when every listed need succeeded.
-// shortcut: a skipped need reads as failure(), which no routed `if:` calls; model a skipped status if one starts to.
-export const jobStatus = (results: readonly (string | undefined)[], cancelled = false): JobStatus =>
-  cancelled ? "cancelled" : results.every((result) => result === "success") ? "success" : "failure";
+type Needs = { needs?: string | string[] };
+
+// A job's status for its `if:` in a workflow's `jobs`: the run's when cancelled, else success only when every ancestor
+// succeeded, since GitHub applies a failed or skipped need to every job below it in the needs chain, not only to its own.
+// shortcut: a skipped ancestor reads as failure(), which no routed `if:` calls; model a skipped status if one starts to.
+export function jobStatus(job: Needs, jobs: Record<string, Needs>, results: Record<string, { result: string }>, cancelled = false): JobStatus {
+  const ancestors = (from: Needs): string[] => [from.needs ?? []].flat().flatMap((need) => [need, ...ancestors(jobs[need]!)]);
+  const unknown = ancestors(job).filter((need) => results[need] === undefined);
+  if (unknown.length > 0) throw new Error(`a job's status reads every ancestor's result, and none is given for ${unknown.join(", ")}`);
+  return cancelled ? "cancelled" : ancestors(job).every((need) => results[need]!.result === "success") ? "success" : "failure";
+}
 
