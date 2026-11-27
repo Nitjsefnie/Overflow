@@ -60,11 +60,7 @@ describe("GitHub Actions release gates", () => {
     // PENDING run per concurrency group and cancels the older pending one even
     // at cancel-in-progress false, so without it the second of three /claim
     // comments landing while a run is in progress is dropped unanswered.
-    expect(workflow.concurrency).toEqual({
-      group: "claim-${{ github.event.issue.number }}",
-      "cancel-in-progress": false,
-      queue: "max",
-    });
+    expect(workflow.concurrency).toEqual({ group: "claim-${{ github.event.issue.number }}", "cancel-in-progress": false, queue: "max" });
     expect(gateBehavior(workflow.jobs)).toEqual({
       claim: {
         if: "github.event.comment.user.type != 'Bot'"
@@ -101,10 +97,7 @@ describe("GitHub Actions release gates", () => {
   it("checks admission through the reviewed shared action without a consumer checkout", async () => {
     const workflow = await readWorkflow("pr-gate.yml");
     expect(workflow.permissions).toEqual({ contents: "read", "pull-requests": "write", issues: "read" });
-    expect(workflow.concurrency).toEqual({
-      group: "pr-gate-${{ github.event.pull_request.number }}",
-      "cancel-in-progress": false,
-    });
+    expect(workflow.concurrency).toEqual({ group: "pr-gate-${{ github.event.pull_request.number }}", "cancel-in-progress": false });
     expect(gateBehavior(workflow.jobs)).toEqual({
       gate: {
         if: "github.event.pull_request.user.type != 'Bot' && github.event.pull_request.draft == false",
@@ -341,10 +334,7 @@ fi
     // trigger, which is the class the split exists to close.
     expect(workflow.on).not.toHaveProperty("pull_request_target");
     expect(workflow.permissions).toEqual({ contents: "read" });
-    expect(workflow.concurrency).toEqual({
-      group: "ci-${{ github.sha }}",
-      "cancel-in-progress": false,
-    });
+    expect(workflow.concurrency).toEqual({ group: "ci-${{ github.sha }}", "cancel-in-progress": false });
 
     const verify = workflow.jobs.verify!;
     expect(verify.services?.postgres?.options).toContain("pg_isready");
@@ -392,10 +382,7 @@ fi
     // Concurrency group names are repository-global, so this one must not be
     // ci.yml's: a collision would let a pull request cancel a merged SHA's
     // pending push run, which the deploy gate refuses on.
-    expect(workflow.concurrency).toEqual({
-      group: "ci-pr-${{ github.event.workflow_run.head_sha }}",
-      "cancel-in-progress": false,
-    });
+    expect(workflow.concurrency).toEqual({ group: "ci-pr-${{ github.event.workflow_run.head_sha }}", "cancel-in-progress": false });
     const verify = workflow.jobs.verify!;
     // No PostgreSQL service: nothing in this leg applies a migration, because
     // the pull request's own code — which is what would need the schema — runs
@@ -1490,10 +1477,7 @@ exit 1
     // Carried verbatim from the file. tests/ci/concurrency.test.ts is what
     // holds the classification, and it pins these same two values, so the two
     // suites cannot drift apart on the block.
-    expect(workflow.concurrency).toEqual({
-      group: "scorecard-${{ github.ref }}",
-      "cancel-in-progress": true,
-    });
+    expect(workflow.concurrency).toEqual({ group: "scorecard-${{ github.ref }}", "cancel-in-progress": true });
 
     // Widened for `name`, which the shared job type omits: every workflow pinned
     // above this point leaves its job unnamed, so the field is not needed there.
