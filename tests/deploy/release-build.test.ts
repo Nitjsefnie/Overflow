@@ -20,6 +20,7 @@ beforeEach(async () => {
     await copyFile(path.join(project, file), path.join(tree, file));
   }
   trackedConfig = await readFile(path.join(tree, "tsconfig.json"), "utf8");
+  process.env.pnpm_config_verify_deps_before_run = "false";
   // Read the installed dependencies without changing their ownership or modes.
   await symlink(path.join(project, "node_modules"), path.join(tree, "node_modules"), "dir");
   await writeFile(path.join(tree, "src/app/layout.tsx"), `
@@ -32,6 +33,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  delete process.env.pnpm_config_verify_deps_before_run;
   await tempDirectories.disposeAsync(tree);
 });
 
