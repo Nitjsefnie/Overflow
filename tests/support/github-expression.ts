@@ -1,6 +1,6 @@
-// The subset of GitHub Actions expressions the workflows use, evaluated as the runner does, and the
-// step selector built on it. Anything outside the subset throws rather than reading as false; the
-// rules and their reasons are in tests/ci/verify-step-reachability.test.ts, beside this module's tests.
+// The subset of GitHub Actions expressions the workflows use, evaluated as the runner does, and the step and job
+// selection built on it. Anything outside the subset throws rather than reading as false; the evaluator's first rules
+// are argued in tests/ci/verify-step-reachability.test.ts, and each later one (name case, rendering, job status) here.
 
 export type WorkflowStep = { name?: string; id?: string; run?: string; uses?: string; with?: Record<string, unknown>; if?: unknown; "continue-on-error"?: unknown; };
 
