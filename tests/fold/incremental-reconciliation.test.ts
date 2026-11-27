@@ -445,12 +445,12 @@ describe("incremental reconciliation", () => {
   });
 
   // Mutants: IGNORE_REDERIVE, NEVER_REPAIR_MISSED_WEBHOOK, KEEP_FULL_PASS_ABSENT_ISSUE.
-  it.each(["rederive", "six hours", "incompatible cache"])("performs full repair for %s and removes absent issues only then", async (reason) => {
+  it.each(["rederive", "six hours", "incompatible cache"])("performs full repair for %s and removes absent closed issues only then", async (reason) => {
     const f = await fixture();
     await f.run();
     f.issues = [f.issues[0]!];
     await f.runAt("2026-09-08T10:02:00Z");
-    expect((await f.store.getReconciliationEvidence(f.id))?.issues).toHaveLength(3);
+    expect((await f.store.getReconciliationEvidence(f.id))?.issues).toHaveLength(2);
     if (reason === "six hours") f.clock = new Date("2026-09-08T16:00:00Z");
     if (reason === "incompatible cache") await sql`update repository_reconciliation_evidence set format_version = 99 where repository_id = ${f.id}`;
     await f.run({ rederive: reason === "rederive" });
@@ -680,6 +680,7 @@ async function fixture() {
       if (f.measuredIssueCost !== null) recordGraphqlResponseCost({ cost: f.measuredIssueCost });
       return issues;
     },
+    listOpenIssueIds: async () => f.issues.filter(({ state }) => state === "OPEN").map(({ id }) => id),
     getIssue: async (_reference, subject) => {
       f.issueReads.push(subject.number);
       return structuredClone(f.issues.find(({ id }) => id === subject.id) ?? null);

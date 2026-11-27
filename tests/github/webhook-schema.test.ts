@@ -156,3 +156,10 @@ function parse(event: string, value: unknown) {
   const result = parseDetailed(event, value);
   return result.status === "ok" ? result.delivery : null;
 }
+
+describe("webhook issue removal actions", () => {
+  it.each(["deleted", "transferred"])("accepts an issues %s delivery as a dirty issue", (action) => {
+    expect(parseGitHubWebhookDeliveryDetailed("issues", "delivery", { action, repository: { id: 101, full_name: "octo/example" }, issue }))
+      .toMatchObject({ status: "ok", delivery: { action, subject: { kind: "ISSUE", id: 201, number: 11 } } });
+  });
+});

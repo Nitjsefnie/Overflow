@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
-import { listSubjectPage } from "@/lib/github/subject-listing";
+import { listOpenIssueIds, listSubjectPage } from "@/lib/github/subject-listing";
 import { SweepBudgetSpent, withSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 
 const repository = { owner: "octo", name: "overflow" };
@@ -104,5 +104,34 @@ describe("GitHub subject pages", () => {
       await expect(listSubjectPage(client, repository, { cursor: "?page=2" })).rejects.toBeInstanceOf(SweepBudgetSpent);
     });
     expect({ sent, spent }).toEqual({ sent: 2, spent: 3 });
+  });
+});
+
+describe("GitHub open issue IDs", () => {
+  const base = "https://api.github.com/repos/octo/overflow/issues";
+  it("collects every page of open issues and leaves pull requests out", async () => {
+    const requests: string[] = [];
+    const client = gateway(async (input) => {
+      requests.push(String(input));
+      if (requests.length === 1) return Response.json([
+        { id: 11, number: 1, updated_at: firstTime }, { id: 12, number: 2, updated_at: firstTime, pull_request: {} },
+      ], { headers: { link: `<${base}?state=open&page=2>; rel="next"` } });
+      return Response.json([{ id: 13, number: 3, updated_at: secondTime }]);
+    });
+    expect(await client.listOpenIssueIds(repository)).toEqual([11, 13]);
+    expect(requests).toEqual([`${base}?state=open&sort=updated&direction=asc&per_page=100`, `${base}?state=open&page=2`]);
+  });
+
+  it("fails on a repeated cursor", async () => {
+    const client = gateway(async () => Response.json([], { headers: { link: `<${base}?page=2>; rel="next"` } }));
+    await expect(listOpenIssueIds(client, repository)).rejects.toThrow("Open issue listing repeated a cursor.");
+  });
+
+  it("fails when a later page fails, so a partial list is never returned", async () => {
+    let calls = 0;
+    const client = gateway(async () => ++calls === 1
+      ? Response.json([{ id: 11, number: 1, updated_at: firstTime }], { headers: { link: `<${base}?page=2>; rel="next"` } })
+      : new Response("{}", { status: 502 }));
+    await expect(client.listOpenIssueIds(repository)).rejects.toMatchObject({ status: 502 });
   });
 });

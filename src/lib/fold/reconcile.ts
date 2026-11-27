@@ -1,3 +1,4 @@
+import { unlistedOpenIssues } from "@/lib/fold/unlisted-open-issues";
 import { discardInactivePassAfterRun, discardSweepPass, holdSweepPass, StagedPassDataUnreadable, type ReconciliationSweepControl, type SweepPass } from "@/lib/fold/sweep-pass";
 import type { ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
 import { readEnv } from "@/lib/env";
@@ -68,6 +69,7 @@ export type ReconciliationGateway = {
   getRepositoryById(githubRepositoryId: number): Promise<GitHubRepository | null>;
   listIssues(repository: GitHubRepositoryReference, options?: GitHubIssueListOptions): Promise<GitHubIssue[]>;
   getIssue(repository: GitHubRepositoryReference, subject: GitHubSubject): Promise<GitHubIssue | null>;
+  listOpenIssueIds?(repository: GitHubRepositoryReference): Promise<number[]>;
   getPullRequestClosingIssues(repository: GitHubRepositoryReference, subject: GitHubSubject): Promise<GitHubIssueReference[]>;
   getPullRequestReviews(
     repository: GitHubRepositoryReference,
@@ -180,6 +182,7 @@ function sanitizeReconciliationGateway(current: () => ReconciliationGateway): Re
     getRepositoryById: async (...args) => sanitizeForgeStrings(await current().getRepositoryById(...args)),
     listIssues: async (...args) => sanitizeForgeStrings(await current().listIssues(...args)),
     getIssue: async (...args) => sanitizeForgeStrings(await current().getIssue(...args)),
+    listOpenIssueIds: (...args) => current().listOpenIssueIds!(...args),
     getPullRequestClosingIssues: async (...args) => sanitizeForgeStrings(await current().getPullRequestClosingIssues(...args)),
     getPullRequestReviews: async (...args) => sanitizeForgeStrings(await current().getPullRequestReviews(...args)),
     getPullRequestDiff: async (...args) => sanitizeForgeStrings(await current().getPullRequestDiff(...args)),
@@ -439,6 +442,8 @@ async function reconcileRepositoryAfterRepositoryRead(
                   }
                 }
               }
+              for (const issue of await unlistedOpenIssues(dependencies.github, reference, retained)) affected.set(issue.id, issue);
+              const forgetOpen = (id: number) => { if (retained.get(id)?.state === "OPEN") retained.delete(id); };
               for (const subject of affected.values()) {
                 if (changed.has(subject.id)) continue;
                 let issue: GitHubIssue | null;
@@ -448,9 +453,11 @@ async function reconcileRepositoryAfterRepositoryRead(
                   if (!(await discardUnresolvableSubject(error, "ISSUE", subject, dirtyIssueSubjects.get(subject.id), issueDiscardReason))) {
                     throw error;
                   }
+                  if (issueDiscardReason(error) === "NOT_FOUND") forgetOpen(subject.id);
                   continue;
                 }
-                if (issue !== null) changed.set(issue.id, issue);
+                if (issue === null) forgetOpen(subject.id);
+                else changed.set(issue.id, issue);
               }
             }
             // A marked issue folds its cached shape when one exists.

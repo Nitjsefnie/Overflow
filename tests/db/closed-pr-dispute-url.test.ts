@@ -169,7 +169,7 @@ describe("closed PR URL filing", () => {
       return number === 41 ? reviews : [];
     });
     const gateway = {
-      getRepositoryById: verifiedRepositoryAt(f.ownerName), listIssues: async () => [issue],
+      getRepositoryById: verifiedRepositoryAt(f.ownerName), listIssues: async () => [issue], listOpenIssueIds: async () => [issue.id],
       getIssue: async () => null, getPullRequestClosingIssues: async () => [],
       getPullRequestReviews: readReviews, getPullRequestDiff: async (_repo: unknown, number: number) => {
         if (number === targetNumber && failing && leg === 'diff') fail();

@@ -46,7 +46,7 @@ async function fixture(factByteLimit?: number) {
   const reads: number[] = [];
   const gateway: ReconciliationGateway = {
     getRepositoryById: async (id) => { await checkSweepRequestBudget(); return verifiedRepositoryAt(repository.ownerName)(id); },
-    listIssues: vi.fn(async () => structuredClone(facts)),
+    listIssues: vi.fn(async () => structuredClone(facts)), listOpenIssueIds: async () => facts.map(({ id }) => id),
     getIssue: async (subject) => { void subject; throw new Error("Incremental issue read was unexpected"); },
     getPullRequestClosingIssues: async () => [], getPullRequestReviews: async () => [], getPullRequestDiff: async () => state.rawDiff,
     walkReconciliation: vi.fn(async (_reference, input) => walkReconciliation({ ...input,

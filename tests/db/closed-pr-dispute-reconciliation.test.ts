@@ -65,7 +65,7 @@ it.each([false, true])("reconciles closed evidence through materialization, fili
   const foldStore = new PostgresFoldStore(sql);
   vi.spyOn(foldStore, "getGitHubAccessToken").mockResolvedValue("test-auth");
   const gateway = {
-    getRepositoryById: verifiedRepositoryAt(ownerName), listIssues: async () => issues,
+    getRepositoryById: verifiedRepositoryAt(ownerName), listIssues: async () => issues, listOpenIssueIds: async () => issues.map(({ id }) => id),
     getIssue: async () => null, getPullRequestClosingIssues: async () => [],
     getPullRequestReviews: async () => [{ id: 123, state: "CHANGES_REQUESTED" as const, submittedAt: "2026-09-01T10:00:00Z", dismissal: null }],
     getPullRequestDiff: async (_repo: unknown, number: number) => `diff for PR ${number}`,

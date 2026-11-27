@@ -60,6 +60,7 @@ const failRemoteRead = async (): Promise<never> => { throw new Error("Unexpected
 const gateway: ReconciliationGateway = {
   getRepositoryById: async () => observedRepository,
   listIssues: async () => [issue],
+  listOpenIssueIds: async () => [issue.id],
   getIssue: failRemoteRead, getPullRequestClosingIssues: failRemoteRead,
   getPullRequestReviews: failRemoteRead, getPullRequestDiff: failRemoteRead,
 };

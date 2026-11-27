@@ -12,7 +12,7 @@ import { hasNextLink, lastLinkPage } from "@/lib/github/link-pagination";
 import { getCommitAuthor } from "@/lib/github/commit-author";
 import { z } from "zod";
 import { manifestCommentRows, manifestEventRows, perIssueEventRows } from "@/lib/github/manifest-rows";
-import { } from "@/lib/github/subject-listing";
+import { listOpenIssueIds } from "@/lib/github/subject-listing";
 import { checkSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import type { ClaimPathEvidence } from "@/lib/domain/claim-path";
 import { CollectionWalkBound } from "@/lib/github/collection-walk-bound";
@@ -109,6 +109,10 @@ export class GitHubGateway implements ForgeGateway {
       budget: options.budget,
       owner: options.owner,
     });
+  }
+
+  public listOpenIssueIds(repository: GitHubRepositoryReference): Promise<number[]> {
+    return listOpenIssueIds(this, repository);
   }
 
   public walkReconciliation(reference: GitHubRepositoryReference, input: ForgeWalkInput, options?: GitHubIssueListOptions) {

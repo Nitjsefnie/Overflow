@@ -200,3 +200,16 @@ describe("GitLab subject pages", () => {
     await expect(client.listSubjectsPage(repository, { collection: "issue", updatedAfter: null })).rejects.toThrow(/GitLab.*updated_at/);
   });
 });
+
+describe("GitLab open issue IDs", () => {
+  it("asks for opened issues only and returns their global IDs", async () => {
+    let request: URL | undefined;
+    const client = gateway(async (input) => {
+      request = new URL(String(input));
+      return Response.json([{ id: 41, iid: 1 }, { id: 57, iid: 2 }]);
+    });
+    expect(await client.listOpenIssueIds(repository)).toEqual([41, 57]);
+    expect(request?.pathname).toBe("/api/v4/projects/group%2Fsubgroup%2Fproject/issues");
+    expect(request?.searchParams.get("state")).toBe("opened");
+  });
+});
