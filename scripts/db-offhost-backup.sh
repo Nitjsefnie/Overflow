@@ -11,9 +11,9 @@
 # 2. A size guard: an encrypted file at or over OVERFLOW_BACKUP_MAX_BYTES is
 #    never posted and never split; the run fails so the unit's OnFailure
 #    alerts, and the local encrypted file stays as a good local copy.
-# 3. Posting as the overflow Discord identity to a dedicated backups channel
-#    through the mailbox CLI, with a connector the job brings up for itself
-#    and stops afterwards when none is running.
+# 3. Posting as the configured Discord identity to a dedicated backups
+#    channel through the mailbox CLI, with a connector the job brings up for
+#    itself and stops afterwards when none is running.
 # 4. Deleting the job's own posted messages older than 14 days from that
 #    channel, matching the privacy notice's backup-lifetime promise
 #    (src/app/account-data/page.tsx).
@@ -24,10 +24,15 @@
 #
 # DATABASE_URL                      required; without it the script refuses to
 #                                   guess which database to dump.
-# CREDENTIALS_DIRECTORY             set by the unit: a readable overflow_token
-#                                   under it is bridged to DISCORD_TOKEN
-#                                   before anything runs (the token is not an
-#                                   entry in backup.env).
+# OVERFLOW_BACKUP_DISCORD_IDENTITY  required mailbox identity the job posts,
+#                                   reads and deletes as; ^[a-z0-9_]+$.
+# OVERFLOW_BACKUP_DISCORD_TOKEN     that identity's bot token, or
+# OVERFLOW_BACKUP_DISCORD_TOKEN_FILE
+#                                   a file holding it (trailing newline
+#                                   stripped; unreadable or empty refused).
+#                                   Both set is refused; the value is exported
+#                                   as DISCORD_TOKEN. With neither, the mailbox
+#                                   CLI finds the token itself.
 # OVERFLOW_BACKUP_AGE_RECIPIENT     required age recipient public key. An
 #                                   unset or empty value is refused before
 #                                   anything runs: nothing is ever posted
@@ -114,16 +119,34 @@ case "$max_bytes" in
         ;;
 esac
 
-# The overflow identity's bot token reaches this script as a systemd credential
-# loaded from the canonical file (deploy/overflow-offhost-backup.service's
-# LoadCredential=): if the unit's CREDENTIALS_DIRECTORY carries a readable
-# overflow_token, bridge it into the environment the mailbox CLI already reads.
-# Command substitution into the export - never an argument, never echoed, never
-# logged: the token's only appearances are in the environment and inside the
-# command substitution. A trailing newline in the file is not part of the
-# token; command substitution strips it.
-if [ -n "${CREDENTIALS_DIRECTORY:-}" ] && [ -r "${CREDENTIALS_DIRECTORY}/overflow_token" ]; then
-    DISCORD_TOKEN=$(cat "${CREDENTIALS_DIRECTORY}/overflow_token")
+identity=${OVERFLOW_BACKUP_DISCORD_IDENTITY:-}
+if [ -z "$identity" ]; then
+    fail "OVERFLOW_BACKUP_DISCORD_IDENTITY is not set; refusing to guess which Discord identity to post as"
+fi
+
+# The class is spelled out: POSIX leaves a range like a-z to the locale.
+case "$identity" in
+    *[!abcdefghijklmnopqrstuvwxyz0123456789_]*)
+        fail "OVERFLOW_BACKUP_DISCORD_IDENTITY must match ^[a-z0-9_]+\$, got: $identity"
+        ;;
+esac
+
+# The token goes into the environment the mailbox CLI reads - never an
+# argument, never echoed, never logged. Command substitution strips the
+# file's trailing newline, which is not part of the token.
+token_file=${OVERFLOW_BACKUP_DISCORD_TOKEN_FILE:-}
+if [ -n "${OVERFLOW_BACKUP_DISCORD_TOKEN:-}" ] && [ -n "$token_file" ]; then
+    fail "both OVERFLOW_BACKUP_DISCORD_TOKEN and OVERFLOW_BACKUP_DISCORD_TOKEN_FILE are set; set one"
+elif [ -n "${OVERFLOW_BACKUP_DISCORD_TOKEN:-}" ]; then
+    DISCORD_TOKEN=$OVERFLOW_BACKUP_DISCORD_TOKEN
+    export DISCORD_TOKEN
+elif [ -n "$token_file" ]; then
+    if ! DISCORD_TOKEN=$(cat -- "$token_file"); then
+        fail "cannot read the Discord token file $token_file"
+    fi
+    if [ -z "$DISCORD_TOKEN" ]; then
+        fail "the Discord token file $token_file is empty"
+    fi
     export DISCORD_TOKEN
 fi
 
@@ -259,9 +282,8 @@ if [ -n "$old" ]; then
     find "$output_dir" -maxdepth 1 -type f -name 'overflow-reduced-*.sql.xz.age' -mtime +13 -delete
 fi
 
-# Discord, as the overflow identity, through the mailbox CLI. Only the dedicated
-# backups channel; NEVER a chat channel.
-identity=overflow
+# Discord, as the configured identity, through the mailbox CLI. Only the
+# dedicated backups channel; NEVER a chat channel.
 
 # Liveness: reuse a running connector; otherwise start one for this job and
 # stop it when the work is done. The probe is the cheapest authenticated
@@ -274,7 +296,7 @@ else
     # and the unit's journal with it: a bring-up death must name its cause
     # ("cannot establish connector lock root ...", the first manual run) in
     # the journal rather than leave it with the final failure line alone.
-    # That stderr carries identity names and connection ids only; the overflow
+    # That stderr carries identity names and connection ids only; the
     # token travels to the CLI through the environment and never through
     # stderr, so the redirect carries no secret.
     "$mb" connector "$identity" --claude-pid "$$" >/dev/null &
@@ -310,7 +332,7 @@ printf '%s\n' "$send_output"
 # Delete this job's own backup messages older than 14 days in that channel,
 # matching the privacy notice's backup-lifetime promise. One generous page;
 # a message older than the window that the first page misses is swept on a
-# later run. Only messages authored by overflow and older than the cutoff go, and
+# later run. Only messages authored by this identity and older than the cutoff go, and
 # an unparseable stamp is kept (deletion is destructive; missing the window
 # one night is safe and self-healing).
 cutoff=$(( $(date -u +%s) - 14 * 24 * 60 * 60 ))
@@ -325,12 +347,13 @@ import sys
 from datetime import datetime
 
 cutoff = float(sys.argv[1])
+identity = sys.argv[2]
 try:
     messages = json.load(sys.stdin)
 except ValueError:
     sys.exit(3)
 for message in messages:
-    if message.get("from") != "overflow":
+    if message.get("from") != identity:
         continue
     created = (message.get("created") or "").replace("Z", "+00:00")
     try:
@@ -340,7 +363,7 @@ for message in messages:
         continue
     if msg_id and epoch < cutoff:
         print(msg_id)
-' "$cutoff") || fail "the 14-day sweep could not read the channel listing"
+' "$cutoff" "$identity") || fail "the 14-day sweep could not read the channel listing"
 
 for stale_id in $stale_ids; do
     if ! "$mb" message "$identity" delete "$stale_id" \

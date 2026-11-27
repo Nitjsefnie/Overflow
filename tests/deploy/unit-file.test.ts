@@ -547,20 +547,13 @@ describe("Overflow off-host backup units", () => {
     expect(binds[0]!.value).toBe("/root/.agent-bundle/scripts/discord_mb.py");
   });
 
-  it("loads the overflow token from its canonical file as a credential", () => {
-    // The unit reads the token from the canonical file at every start, so a
-    // rotation needs no Overflow-side edit; a copy kept in
-    // /etc/overflow/backup.env would go stale on rotation. PID 1 opens the file before the
-    // sandbox is assembled and hands the content over through
-    // CREDENTIALS_DIRECTORY, which the script bridges to DISCORD_TOKEN.
-    const credentials = entries().filter((entry) => entry.key === "LoadCredential");
-
-    expect(credentials, "exactly one credential is loaded").toHaveLength(1);
-    expect(credentials[0]!.section).toBe("Service");
-    expect(credentials[0]!.value).toBe("overflow_token:/root/.agent-bundle/discord/overflow.token");
+  it("loads no credential: the identity and its token come from backup.env", () => {
+    // A credential directive names a token path in the unit itself, which is
+    // what the environment file's OVERFLOW_BACKUP_DISCORD_* variables replace.
+    expect(entries().filter((entry) => /Credential/.test(entry.key))).toEqual([]);
   });
 
-  it("keeps the rest of the full-backup sandbox, with /root touched only by the bind and the credential", () => {
+  it("keeps the rest of the full-backup sandbox, with /root touched only by the bind", () => {
     expect(only("Service", "ProtectSystem").value).toBe("strict");
     expect(only("Service", "PrivateTmp").value).toBe("yes");
     expect(only("Service", "ReadWritePaths").value).toBe("/var/backups/overflow");
@@ -568,18 +561,13 @@ describe("Overflow off-host backup units", () => {
     expect(TRUE_SPELLINGS).toContain(only("Service", "NoNewPrivileges").value.toLowerCase());
     expect(only("Service", "CapabilityBoundingSet").value).toBe("");
 
-    // tmpfs makes /root an empty mount; the bound CLI file and the
-    // credential's canonical source are the only /root paths any directive
-    // may name. The credential is read by PID 1 before the sandbox is
-    // assembled, so it is not a file the namespace reaches into.
+    // tmpfs makes /root an empty mount; the bound CLI file is the only /root
+    // path any directive may name.
     const rootTouching = entries()
       .filter((entry) => pathCandidates(entry).some(isUnderRoot))
       .map((entry) => entry.key);
 
-    expect(rootTouching, "/root appears only through the bound CLI and the credential").toEqual([
-      "BindReadOnlyPaths",
-      "LoadCredential",
-    ]);
+    expect(rootTouching, "/root appears only through the bound CLI").toEqual(["BindReadOnlyPaths"]);
     const environment = entries().filter(
       (entry) => entry.section === "Service" && entry.key === "Environment",
     );
@@ -596,8 +584,8 @@ describe("Overflow off-host backup units", () => {
     // empty READ-ONLY tmpfs, so the stock HOME=/root is where connectors go
     // to die ([Errno 30] Read-only file system, measured on the first manual
     // run). HOME=/tmp moves the lock root into the private /tmp the sandbox
-    // already provides; nothing under /root becomes writable, and the overflow
-    // token is not home-based, so no secret follows the move.
+    // already provides; nothing under /root becomes writable, and the token
+    // the job exports comes from the environment file, so no secret follows.
     const homes = entries()
       .filter((entry) => entry.section === "Service" && entry.key === "Environment")
       .flatMap((entry) => entry.words)

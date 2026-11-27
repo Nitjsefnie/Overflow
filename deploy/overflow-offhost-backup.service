@@ -4,9 +4,8 @@
 # full backup. Install as
 # /etc/systemd/system/overflow-offhost-backup.service. deploy/backup-restore.md
 # is the procedure: it stands up the least-privilege backup role, the
-# /etc/overflow/backup.env environment file this unit reads (the age recipient
-# and channel additions only; the overflow token is deliberately not in the file,
-# it travels as a credential loaded from the canonical path), the
+# /etc/overflow/backup.env environment file this unit reads (the age
+# recipient, channel, Discord identity and its token or token file), the
 # backup directory and the restore and drill steps.
 
 [Unit]
@@ -32,12 +31,10 @@ Type=oneshot
 # mailbox CLI: a python3 script under /root, reached through the single
 # BindReadOnlyPaths below (see the sandbox comment at the file for why
 # ProtectHome is spelled tmpfs and not yes). Nothing else under /root is
-# reachable; the overflow token reaches the mailbox CLI as a credential loaded
-# from the canonical file ~/.agent-bundle/discord/overflow.token: PID 1 reads it
-# before the sandbox is assembled and hands it over through
-# CREDENTIALS_DIRECTORY, which the script bridges to DISCORD_TOKEN, so the
-# environment file carries no token and no second copy of it exists to go
-# stale.
+# reachable. The Discord identity and its token come from backup.env
+# (OVERFLOW_BACKUP_DISCORD_TOKEN, or OVERFLOW_BACKUP_DISCORD_TOKEN_FILE), which
+# the script exports as DISCORD_TOKEN; a token file must be outside /root,
+# which the sandbox hides.
 EnvironmentFile=/etc/overflow/backup.env
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 
@@ -47,8 +44,8 @@ Environment=PATH=/usr/local/bin:/usr/bin:/bin
 # with "cannot establish connector lock root /root/.discord-mailbox-log-locks:
 # [Errno 30] Read-only file system". HOME=/tmp moves that lock root into the
 # private /tmp the unit already owns; nothing under /root becomes writable,
-# and the token is not home-based (see LoadCredential below), so no secret
-# follows the move.
+# and the token the job exports comes from the environment file, not from
+# home, so no secret follows the move.
 Environment=HOME=/tmp
 
 ExecStart=/bin/sh /srv/overflow/scripts/db-offhost-backup.sh
@@ -81,13 +78,6 @@ RestrictNamespaces=yes
 ProtectSystem=strict
 ProtectHome=tmpfs
 BindReadOnlyPaths=/root/.agent-bundle/scripts/discord_mb.py
-
-# The overflow identity's bot token, loaded from its canonical file at every
-# start: systemd reads it before the sandbox is assembled and hands the
-# script the path $CREDENTIALS_DIRECTORY/overflow_token, which the script bridges
-# to DISCORD_TOKEN. A token rotation edits only the canonical file; no
-# Overflow-side copy exists to go stale.
-LoadCredential=overflow_token:/root/.agent-bundle/discord/overflow.token
 PrivateTmp=yes
 PrivateDevices=yes
 ReadWritePaths=/var/backups/overflow
