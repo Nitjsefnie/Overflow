@@ -1834,7 +1834,8 @@
       ],
       "tests/ci/advisory-tracking.test.ts": [
         8.04,
-        5.77
+        5.77,
+        12.55
       ],
       "tests/ci/audit-acceptance.test.ts": [
         0.0
@@ -2243,7 +2244,8 @@
       ],
       "tests/db/migrate-default-branch-guard.test.ts": [
         6.04,
-        2.96
+        2.96,
+        8.79
       ],
       "tests/db/migration-checksum.test.ts": [
         7.5,
@@ -2472,7 +2474,8 @@
         7.73
       ],
       "tests/deploy/deploy-revision-startup-sweep.test.ts": [
-        40.09
+        40.09,
+        29.68
       ],
       "tests/deploy/deploy-revision.test.ts": [
         40.85,
@@ -2506,7 +2509,8 @@
         0.52
       ],
       "tests/deploy/release-build.test.ts": [
-        169.85
+        169.85,
+        93.27
       ],
       "tests/deploy/release-check.test.ts": [
         9.46,
@@ -2514,7 +2518,8 @@
       ],
       "tests/deploy/release-prepare.test.ts": [
         5.91,
-        4.0
+        4.0,
+        2.9
       ],
       "tests/deploy/release-script.test.ts": [
         13.11
@@ -2526,7 +2531,8 @@
         0.11
       ],
       "tests/deploy/webhook-upgrade-cli.test.ts": [
-        4.94
+        4.94,
+        3.63
       ],
       "tests/deploy/webhook-upgrade-order.test.ts": [
         0.35
@@ -2874,7 +2880,8 @@
         0.02
       ],
       "tests/lib/dispute-http-surface.test.ts": [
-        7.48
+        7.48,
+        5.31
       ],
       "tests/lib/drain-summary-logger.test.ts": [
         0.01
@@ -2923,7 +2930,8 @@
         56.16
       ],
       "tests/lib/http/error-response.test.ts": [
-        5.44
+        5.44,
+        3.72
       ],
       "tests/lib/journal-levels.test.ts": [
         0.71
@@ -2957,7 +2965,8 @@
       ],
       "tests/lib/snapshot-updater-cli.test.ts": [
         513.24,
-        262.82
+        262.82,
+        178.26
       ],
       "tests/lib/strip-name-prefix.test.ts": [
         0.0
@@ -3045,7 +3054,8 @@
         0.09
       ],
       "tests/repositories/webhook-upgrade-postgres.test.ts": [
-        2.93
+        2.93,
+        1.79
       ],
       "tests/scripts/await-pr-suite.test.ts": [
         1.96
@@ -3153,7 +3163,8 @@
         11.51
       ],
       "tests/scripts/ratchets.test.ts": [
-        6.49
+        6.49,
+        4.49
       ],
       "tests/scripts/resolve-suite-pull-request.test.ts": [
         37.76
