@@ -573,7 +573,7 @@ describe("scripts/secret-scan.sh", () => {
     'while [ "$#" -gt 0 ]; do',
     '  a="$1"',
     '  case "$a" in',
-    "    --redact|--no-banner) ;;",
+    "    --redact|--no-banner|--ignore-gitleaks-allow) ;;",
     "    --report-format|--report-path|--baseline-path)",
     '      [ "$#" -ge 2 ] || { echo "stub gitleaks: $a was given no value" >&2; exit 3; }',
     '      case "$a" in',
@@ -706,10 +706,8 @@ describe("scripts/secret-scan.sh", () => {
   it("passes the repository's committed baseline, --redact, and a JSON report path", async () => {
     const { argv, output } = await runScript();
     expect(output, `the stub accepted the argv the script passed: ${output}`).not.toContain("stub gitleaks:");
-    expect(
-      valueAfter(argv, "--baseline-path"),
-      "the baseline path must resolve to this repository's committed .github/gitleaks-baseline.json",
-    ).toBe(baselinePath);
+    expect(valueAfter(argv, "--baseline-path"), "use the committed scan baseline").toBe(baselinePath);
+    expect(argv, "inline allow comments must not exempt a line from the scan").toContain("--ignore-gitleaks-allow");
     expect(argv, "--redact is what keeps the report free of secret material").toContain("--redact");
     expect(
       argv,

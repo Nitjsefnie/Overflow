@@ -71,7 +71,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.17.0"
+          node-version: "24.22.3"
 
       # Bind the pull request by owner:branch and the exact repository/SHA.
       # Read the triggering run from the API and re-read the selected PR so a
@@ -804,7 +804,7 @@ jobs:
         uses: Nitjsefnie-Actions/test-ratchet/report@96562a47e9b7fe74b55cc70a4636d1b5d7b542e2 # v2.4.2
         with:
           github-token: ${{ github.token }}
-          cell: ubuntu-latest-node24.17.0
+          cell: ubuntu-latest-node24.22.3
           times: .github/test-times.json
           run-id: ${{ steps.suite.outputs.run_id }}
           workflow-run-gate: 'true'
@@ -812,27 +812,15 @@ jobs:
           precision: '2'
           gate-raised-floors: 'true'
 
-      # Static gates judge the current PR base, but the suite may have tested
-      # an older base. Freshness begins at the head/current-base merge-base:
-      # on main's linear history it is no newer than the suite's tested base,
-      # so the advance checked includes every potentially untested advance.
-      # Branch protection keeps strict
-      # up-to-date checking disabled, so a run that went green against an older
-      # main stays green after main advances: the tree GitHub actually lands
-      # (its rebase onto current main) was never tested by a required check
-      # (issue 441). LAST step, deliberately: the freshness certificate is
-      # issued as late as the workflow can issue it, because an earlier step
-      # re-opens the whole run duration as the stale-base window. The step runs
-      # the base checkout's scripts/ci-base-freshness.sh, which certifies when
-      # the base is unchanged OR advanced only disjointly from the files this
-      # pull request changes — an advance that touched none of them carried
-      # its own required checks, and only cross-file interaction goes
-      # unverified — and refuses on everything else: an overlapping advance, a
-      # failed or empty API response, an unrepresentative compare (issue 510;
-      # the first version demanded main frozen for the whole run, which no run
-      # could satisfy at the repository's merge cadence). The push and
-      # workflow_dispatch runs that test main itself are in ci.yml and never
-      # reach this gate; this file's only trigger is workflow_run.
+      # The relay runs the current base's integrity gates against the merge tree.
+      # The suite can have tested an older base. Starting at the head/main
+      # merge-base on main's linear history covers the whole untested advance.
+      # Allow disjoint advances: requiring every gate-defining commit on the head
+      # would invalidate unrelated work even after the new gate ran on the merge tree.
+      # Overlapping files, failed API reads or incomplete comparisons refuse
+      # certification (issues 441 and 510). Keep this step last to minimize the
+      # time between checking main and publishing verify. Push runs test main
+      # directly in ci.yml.
       - name: Base freshness
         if: ${{ steps.pr.outputs.superseded != 'true' }}
         env:
@@ -873,7 +861,7 @@ jobs:
       - uses: Nitjsefnie-Actions/test-ratchet/report@96562a47e9b7fe74b55cc70a4636d1b5d7b542e2 # v2.4.2
         with:
           github-token: ${{ github.token }}
-          cell: ubuntu-latest-node24.17.0
+          cell: ubuntu-latest-node24.22.3
           times: .github/test-times.json
           run-id: ${{ github.event.workflow_run.id }}
           precision: '2'

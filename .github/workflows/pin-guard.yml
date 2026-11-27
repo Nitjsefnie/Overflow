@@ -7,6 +7,7 @@ permissions:
   pull-requests: write
 concurrency:
   group: pin-guard-${{ github.event.pull_request.number }}
+  # Avoid interrupting a review post.
   cancel-in-progress: false
 jobs:
   pin-guard:

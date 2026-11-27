@@ -1393,7 +1393,7 @@ exit 1
         "fail-fast": false,
         matrix: { language: ["javascript-typescript", "actions"] },
       },
-      "timeout-minutes": 30,
+      "timeout-minutes": 15,
       steps: [
         {},
         {},

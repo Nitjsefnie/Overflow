@@ -52,10 +52,10 @@ jobs:
       # Keep the repository, version and checksum identical in both
       # actionlint jobs: actionlint.yml and pr-gates.yml.
       OVERFLOW_ACTIONLINT_REPO: Nitjsefnie-OSC/actionlint
-      OVERFLOW_ACTIONLINT_VERSION: 1.7.12-queue.1
-      # sha256 of actionlint_1.7.12-queue.1_linux_amd64.tar.gz from the fork's
+      OVERFLOW_ACTIONLINT_VERSION: 1.7.12-queue.3
+      # sha256 of actionlint_1.7.12-queue.3_linux_amd64.tar.gz from the fork's
       # checksums file. Bump the repository, version and checksum together.
-      OVERFLOW_ACTIONLINT_SHA256: dcc2c42a7caaa197dfe63584a3851f62ef260f80b2cf221baaf05479661e1521
+      OVERFLOW_ACTIONLINT_SHA256: 56693f8e7182360d8ecb67cbfc39cc674cde5d1b510507fff562b158bb4fc7bc
 
     steps:
       # The default checkout: on push it is the pushed commit and on dispatch

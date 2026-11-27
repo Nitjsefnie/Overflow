@@ -23,7 +23,7 @@ Containing and scoping an incident, preserving evidence and recording the mainta
 Screening the contributor scoring for data-protection impact — the activities, the human-review routes and the dated conclusion — [dpia-screening.md](dpia-screening.md).
 
 Values used throughout: deployment tree `/srv/overflow`, service account
-`overflow:overflow`, Node 24.17.0 at `/usr/local/lib/nodejs/node-v24.17.0`,
+`overflow:overflow`, Node 24.22.3 at `/usr/local/lib/nodejs/node-v24.22.3`,
 secrets in `/etc/overflow/overflow.env`, listener `127.0.0.1:3000` behind nginx.
 
 The unit assumes the database is local. It carries `Requires=postgresql.service`
@@ -72,17 +72,17 @@ pinned version system-wide and symlink the binary the unit names.
 
 ```bash
 cd /tmp
-curl -fsSLO https://nodejs.org/dist/v24.17.0/node-v24.17.0-linux-x64.tar.xz
-curl -fsSLO https://nodejs.org/dist/v24.17.0/SHASUMS256.txt
-grep node-v24.17.0-linux-x64.tar.xz SHASUMS256.txt | sha256sum --check
+curl -fsSLO https://nodejs.org/dist/v24.22.3/node-v24.22.3-linux-x64.tar.xz
+curl -fsSLO https://nodejs.org/dist/v24.22.3/SHASUMS256.txt
+grep node-v24.22.3-linux-x64.tar.xz SHASUMS256.txt | sha256sum --check
 mkdir -p /usr/local/lib/nodejs
-tar -xJf node-v24.17.0-linux-x64.tar.xz -C /usr/local/lib/nodejs
-mv /usr/local/lib/nodejs/node-v24.17.0-linux-x64 /usr/local/lib/nodejs/node-v24.17.0
-ln -sfn /usr/local/lib/nodejs/node-v24.17.0/bin/node /usr/local/bin/node
+tar -xJf node-v24.22.3-linux-x64.tar.xz -C /usr/local/lib/nodejs
+mv /usr/local/lib/nodejs/node-v24.22.3-linux-x64 /usr/local/lib/nodejs/node-v24.22.3
+ln -sfn /usr/local/lib/nodejs/node-v24.22.3/bin/node /usr/local/bin/node
 /usr/local/bin/node --version
 ```
 
-The last command must print `v24.17.0`.
+The last command must print `v24.22.3`.
 
 The package manager is needed for installs, migrations and builds, all of which
 run as root. The service never runs it, so the corepack shims go in
@@ -90,7 +90,7 @@ run as root. The service never runs it, so the corepack shims go in
 not reach and root's default `PATH` does.
 
 ```bash
-ln -sfn /usr/local/lib/nodejs/node-v24.17.0/bin/corepack /usr/local/sbin/corepack
+ln -sfn /usr/local/lib/nodejs/node-v24.22.3/bin/corepack /usr/local/sbin/corepack
 corepack enable --install-directory /usr/local/sbin
 corepack prepare pnpm@10.33.0 --activate
 pnpm --version

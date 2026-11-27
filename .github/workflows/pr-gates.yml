@@ -44,10 +44,10 @@ jobs:
       # that one schema key. Keep these three in step with actionlint.yml, which
       # installs the same gate on the push and dispatch legs.
       OVERFLOW_ACTIONLINT_REPO: Nitjsefnie-OSC/actionlint
-      OVERFLOW_ACTIONLINT_VERSION: 1.7.12-queue.1
-      # sha256 of actionlint_1.7.12-queue.1_linux_amd64.tar.gz from the fork's
+      OVERFLOW_ACTIONLINT_VERSION: 1.7.12-queue.3
+      # sha256 of actionlint_1.7.12-queue.3_linux_amd64.tar.gz from the fork's
       # checksums file. Bump the repository, version and checksum together.
-      OVERFLOW_ACTIONLINT_SHA256: dcc2c42a7caaa197dfe63584a3851f62ef260f80b2cf221baaf05479661e1521
+      OVERFLOW_ACTIONLINT_SHA256: 56693f8e7182360d8ecb67cbfc39cc674cde5d1b510507fff562b158bb4fc7bc
 
     steps:
       # No ref input at all: GitHub points GITHUB_REF at the default branch and
@@ -165,7 +165,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.17.0"
+          node-version: "24.22.3"
 
       # Head content enters only as git objects in refs/remotes/pr/head.
       # Values from the event reach the shell through env:, never through
@@ -379,7 +379,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.17.0"
+          node-version: "24.22.3"
 
       - name: Enable the pinned package manager
         run: |

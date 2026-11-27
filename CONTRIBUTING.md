@@ -65,10 +65,14 @@ its own PostgreSQL database, and nothing in this codebase moves balances,
 settlements or calibration between deployments, so a local instance starts empty
 and stays private to itself.
 
-Node and pnpm are pinned in `package.json`. `engines` names Node `24.17.0` and
+Node and pnpm are pinned in `package.json`. `engines` names Node `24.22.3` and
 pnpm `10.33.0`, and `packageManager` names `pnpm@10.33.0`, which is what CI
 installs through corepack. Use those versions; the lockfile is installed frozen,
 so a different pnpm is the first thing that will argue with you.
+
+TypeScript 7 supplies the `tsc` used by `pnpm typecheck`. ESLint and the
+repository's source-analysis tests import the TypeScript 6 compiler API through
+Microsoft's compatibility package.
 
 Copy `.env.example` to `.env` and set or adjust the following variables as
 needed. Replace angle-bracket placeholders with local values; optional values
