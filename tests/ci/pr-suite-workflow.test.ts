@@ -320,12 +320,16 @@ describe("the shell parser the hash-binding case reads", () => {
 describe("the pull request suite workflow", () => {
   it("is named `pr suite`, the name ci-pr.yml keys on", async () => {
     expect(workflow.name).toBe("pr suite");
-    const verify = parse(await readFile(resolve(".github/workflows/ci-pr.yml"), "utf8")) as { on: { workflow_run: { workflows: string[] } } };
+    const verify = parse(
+      await readFile(resolve(".github/workflows/ci-pr.yml"), "utf8"),
+    ) as { on: { workflow_run: { workflows: string[] } } };
     expect(verify.on.workflow_run.workflows).toEqual([workflow.name]);
   });
 
   it("declares only the pull_request trigger, for main, on the three code-changing actions", () => {
-    expect(workflow.on).toEqual({ pull_request: { branches: ["main"], types: ["opened", "synchronize", "reopened"] } });
+    expect(workflow.on).toEqual({
+      pull_request: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
+    });
   });
 
   it("holds a read-only token and no secret, environment or write permission anywhere", () => {
@@ -344,9 +348,19 @@ describe("the pull request suite workflow", () => {
   it("names no job after a required context", async () => {
     // A pin may name several files, so the value type is the accurate one: a
     // `Record<string, string>` annotation would misstate that.
-    const requiredChecks: Record<string, string | string[]> = JSON.parse(await readFile(resolve(".github/required-checks.json"), "utf8"));
+    const requiredChecks: Record<string, string | string[]> = JSON.parse(
+      await readFile(resolve(".github/required-checks.json"), "utf8"),
+    );
     const required = Object.keys(requiredChecks);
-    expect(required.sort()).toEqual(["actionlint", "comment-share", "dependency-audit", "ratchet-guard", "secret-scan", "size-baseline", "verify"]);
+    expect(required.sort()).toEqual([
+      "actionlint",
+      "comment-share",
+      "dependency-audit",
+      "ratchet-guard",
+      "secret-scan",
+      "size-baseline",
+      "verify",
+    ]);
     for (const [id, job] of Object.entries(workflow.jobs)) {
       expect(required).not.toContain(id);
       expect(required).not.toContain(job.name ?? id);
@@ -355,7 +369,10 @@ describe("the pull request suite workflow", () => {
   });
 
   it("is superseded only by the same pull request's newer push", () => {
-    expect(workflow.concurrency).toEqual({ group: "pr-suite-${{ github.event.pull_request.number }}", "cancel-in-progress": true });
+    expect(workflow.concurrency).toEqual({
+      group: "pr-suite-${{ github.event.pull_request.number }}",
+      "cancel-in-progress": true,
+    });
   });
 
   it("checks out exactly once", () => {
@@ -400,8 +417,17 @@ describe("the pull request suite workflow", () => {
   });
 
   it("runs every code check verify ran for a pull request, in order", () => {
-    const order = ["corepack install --global pnpm@", "pnpm install --frozen-lockfile", "pnpm db:migrate", "pnpm lint", "pnpm typecheck", "pnpm build",
-      "node scripts/check-prerendered-routes.ts", "node scripts/check-page-geometry.mjs", "node scripts/check-perf-budget.ts"];
+    const order = [
+      "corepack install --global pnpm@",
+      "pnpm install --frozen-lockfile",
+      "pnpm db:migrate",
+      "pnpm lint",
+      "pnpm typecheck",
+      "pnpm build",
+      "node scripts/check-prerendered-routes.ts",
+      "node scripts/check-page-geometry.mjs",
+      "node scripts/check-perf-budget.ts",
+    ];
     const indices = order.map((command) => suite.steps.indexOf(stepRunning(command)));
     expect(indices).toEqual([...indices].sort((a, b) => a - b));
     expect(suite.env).toEqual(expect.objectContaining({
@@ -512,7 +538,10 @@ describe("the pull request suite workflow", () => {
         "inert, add it to the allow-list with its reason, and if it is not, the check " +
         "no longer gates and the merge is unblocked with it inert",
     ).toEqual([]);
-    expect((step as { "continue-on-error"?: unknown })["continue-on-error"], "continue-on-error turns a hash mismatch into a green run").toBeUndefined();
+    expect(
+      (step as { "continue-on-error"?: unknown })["continue-on-error"],
+      "continue-on-error turns a hash mismatch into a green run",
+    ).toBeUndefined();
     expect(
       (step as { "working-directory"?: unknown })["working-directory"],
       "the -r path is relative, so working-directory chooses which requirements " +
@@ -571,7 +600,10 @@ describe("the pull request suite workflow", () => {
         "continuation flags. A second command (a leading `set +e`, a trailing `exit 0`, a " +
         "`| tee`) can report success whatever pip returned.",
     ).toHaveLength(1);
-    expect(segments[0], "the one command must be the pip download itself").toMatch(/^pip download\b/);
+    expect(
+      segments[0],
+      "the one command must be the pip download itself",
+    ).toMatch(/^pip download\b/);
     // ...and its CONTENT, structurally, by the same standard. "One command" is
     // a claim about how many commands run; it says nothing about WHICH, and a
     // structural assertion constrains only the axes it measures.
@@ -605,7 +637,16 @@ describe("the pull request suite workflow", () => {
         "no extra argument of any kind, on any line. `--hash=` would forgive a stale " +
         "manifest outright, a second `-r` or a `-c` re-points what is checked, and a " +
         "`$(…)` runs before pip does. Add an argument only here, with its reason.",
-    ).toEqual(["pip", "download", "--no-deps", "--require-hashes", "--dest", "${RUNNER_TEMP}/zizmor-hash-check", "-r", ".github/requirements-zizmor.txt"]);
+    ).toEqual([
+      "pip",
+      "download",
+      "--no-deps",
+      "--require-hashes",
+      "--dest",
+      "${RUNNER_TEMP}/zizmor-hash-check",
+      "-r",
+      ".github/requirements-zizmor.txt",
+    ]);
     // After the checkout, so it reads the request's tree rather than an empty
     // workspace: this is the whole property actionlint.yml lacks.
     const checkout = suite.steps.findIndex((s) => (s.uses ?? "").startsWith("actions/checkout@"));
@@ -640,7 +681,11 @@ describe("the pull request suite workflow", () => {
         "pip's resolver (`pip config set`, `>> $GITHUB_ENV`) or rewrite the manifest itself, " +
         "and then the check reports success whatever PyPI's record says. Add a step here " +
         "deliberately, with its reason.",
-    ).toEqual(["actions/checkout@", "actions/setup-node@", "actions/setup-python@"]);
+    ).toEqual([
+      "actions/checkout@",
+      "actions/setup-node@",
+      "actions/setup-python@",
+    ]);
     // No secret and no environment: `pip download` against PyPI needs neither,
     // and this workflow's read-only-token, no-secret property is what makes
     // running the request's own bytes here acceptable at all.
