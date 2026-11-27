@@ -76,7 +76,6 @@ describe("pr-gates.yml's shape", () => {
   });
 
   it("triggers on pull_request_target alone, with no paths filter", () => {
-
     expect(Object.keys(workflow.on ?? {})).toEqual(["pull_request_target"]);
     expect(workflow.on).toEqual({ pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] } });
   });
@@ -146,10 +145,7 @@ describe("pr-gates.yml's shape", () => {
   it("fetches by SHA, builds the merge locally, and materializes with the ls-tree discipline", () => {
     const run = auditStep.run ?? "";
 
-    const code = run
-      .split("\n")
-      .filter((line) => !line.trim().startsWith("#"))
-      .join("\n");
+    const code = run.split("\n").filter((line) => !line.trim().startsWith("#")).join("\n");
     expect(code).toContain('git fetch --quiet --no-tags origin "${OVERFLOW_HEAD_SHA:?}"');
     expect(code).toContain('git fetch --quiet --no-tags origin "${OVERFLOW_BASE_SHA:?}"');
     expect(code).not.toContain("refs/pull");
