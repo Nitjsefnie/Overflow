@@ -230,7 +230,7 @@ print(json.dumps(answer))
   });
 });
 
-// Job-level routing through the same evaluator, as the runner selects a job. A job one of whose listed needs did not succeed
+// Job-level routing through the same evaluator, as the runner selects a job. A job one of whose ancestors did not succeed
 // runs only if its `if:` calls a status function; a cancelled run is the only other status.
 describe("main push workflow routing", () => {
   type Needs = { needs: Record<string, { result: string; outputs?: Record<string, string> }> };
@@ -238,11 +238,7 @@ describe("main push workflow routing", () => {
     "postgres-image": { result: image, outputs: records === null ? {} : { "records-only": records } },
     "record-source": { result: source, outputs: runId === undefined ? {} : { "run-id": runId } },
     ...Object.fromEntries(Object.entries(rest).map(([job, result]) => [job, { result }])) } });
-  function runs(job: Job, context: Needs, cancelled = false) {
-    const results = [job.needs ?? []].flat().map(need => context.needs[need]?.result);
-    expect(results, "a row must give every listed need a result").not.toContain(undefined);
-    return isSelected({ if: job.if }, context, jobStatus(results, cancelled));
-  }
+  const runs = (job: Job, context: Needs, cancelled = false) => isSelected({ if: job.if }, context, jobStatus(job, ci, context.needs, cancelled));
   const check = (job: Job, rows: readonly (readonly [Needs, boolean, boolean?])[]) => {
     for (const [context, held, cancelled] of rows) expect(runs(job, context, cancelled), JSON.stringify([context, cancelled])).toBe(held);
   };
@@ -274,7 +270,7 @@ describe("main push workflow routing", () => {
 
   it("runs report after the record source has succeeded on a record-only push", () => {
     expect(ci.report!.needs).toEqual(["postgres-image", "test", "record-source"]);
-    const test = (records: string, source: string, result: string, runId?: string) => needs(records, source, runId, "success", { test: result });
+    const test = (records: string, source: string, result: string, runId?: string) => needs(records, source, runId, "success", { test: result, plan: result === "skipped" ? "skipped" : "success" });
     check(ci.report!, [[test("false", "skipped", "success"), true], [test("false", "skipped", "failure"), true], [test("true", "success", "skipped", "12"), true],
       [test("true", "success", "success", ""), true], [test("true", "failure", "skipped"), false], [test("true", "skipped", "skipped"), false],
       [test("false", "skipped", "success"), false, true]]);
@@ -303,7 +299,7 @@ describe("main push workflow routing", () => {
       expect(Object.keys(push.on.push)).toEqual(["branches"]);
       if (context !== "verify") expect(push.jobs[context].if).toBeUndefined();
       else for (const [result, cancelled] of [["success", false], ["failure", false], ["skipped", false], ["success", true]] as const)
-        expect(runs(push.jobs.verify, { needs: Object.fromEntries([push.jobs.verify.needs].flat().map(need => [need, { result }])) }, cancelled)).toBe(true);
+        expect(runs(push.jobs.verify, { needs: Object.fromEntries(Object.keys(push.jobs).map(need => [need, { result }])) }, cancelled)).toBe(true);
     }
     const step = ci.verify!.steps[0]!;
     for (const [records, test, source, report, status] of [
