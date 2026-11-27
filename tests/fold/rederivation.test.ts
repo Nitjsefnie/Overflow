@@ -46,7 +46,7 @@ describe("repository re-derivation", () => {
     const { worker, store } = fixture(request);
     expect(await runNextReconciliationJob(worker)).toBe("RECONCILED");
     expect(worker.reconcile).toHaveBeenCalledExactlyOnceWith("repo-1", { rederive: request !== null, reason: "SWEEP" });
-    expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", request === null ? 0 : 1, null);
+    expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", request === null ? 0 : 1, null, 1);
     expect(store.beginRun).toHaveBeenCalledExactlyOnceWith("repo-1", { rederivation: request !== null });
   });
 
@@ -100,7 +100,7 @@ describe("repository re-derivation", () => {
     await drainThroughWorkerWiring(store, { open: async () => { throw new Error("Inactive reconciliation must not open a pass."); }, discardByRepository: discardPass });
     expect(discardPass).toHaveBeenCalledExactlyOnceWith("repo-1");
     expect(store.beginRun).toHaveBeenCalledExactlyOnceWith("repo-1", { rederivation: true });
-    expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1, null);
+    expect(store.completeReconciliationJob).toHaveBeenCalledExactlyOnceWith("job-1", "lease-1", 1, null, 1);
   });
 
   it("settles an inactive repository's pass through the production wiring when the run fails", async () => {
