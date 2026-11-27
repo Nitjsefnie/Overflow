@@ -640,17 +640,19 @@ jobs:
             let opening = true;
             let importers = false;
             let root = false;
+            let rooted = false;
             let read = !/[\u0085\u2028\u2029]/.test(text);
             for (const line of text.split(/\r\n|\r|\n/)) {
               if (/^ *(#.*)?$/.test(line)) continue;
               if (line.startsWith(" ")) {
                 if (opening) return false;
                 if (!importers) continue;
-                if (/^  \.:( \{\})?$/.test(line)) root = true;
-                else read &&= root && ENTRY.test(line);
+                if (/^  \.:( \{\})?$/.test(line)) root = rooted = true;
+                else read &&= rooted && ENTRY.test(line);
               } else {
                 read &&= /^(---|(?!importers:.)[A-Za-z]+:( .*)?)$/.test(line);
                 importers = line === "importers:";
+                rooted = false;
               }
               opening = line === "---";
             }
