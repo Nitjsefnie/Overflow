@@ -213,15 +213,15 @@ shards, a `test` matrix job runs each shard with coverage measured against
 PostgreSQL 17 with migrations applied, and a `report` job merges the shards'
 coverage and gates it against the floor in `.github/ci-thresholds.json`.
 On a push changing only `.github/{size-baseline,comment-share,ci-thresholds,test-times}.json`,
-CI skips the matrix and gives `report` the newest code push's run that tested the same code,
-walking past earlier pushes that have no ci run, and records-only runs whose `record-source`
-ran, and retrying a failed GitHub API call up to four times. A records-only push cancelled
-before its `record-source` started counts as a code push, so a later records-only push behind it
-runs its own matrix. The run is borrowed as soon as its `plan`, every `test` shard and their
+CI skips the matrix and gives `report` the newest code push's run that tested the same code. The
+search walks past earlier pushes that have no ci run and records-only runs whose `record-source`
+ran. A failed GitHub API call is retried up to four times. A records-only push cancelled before
+its `record-source` started counts as a code push, so a later records-only push behind it runs
+its own matrix. The run is borrowed as soon as its `plan`, every `test` shard and their
 artifacts have succeeded, without waiting for its own `report` and `verify`: the tip's `report`
 re-gates those artifacts and its `verify` runs the remaining checks. When that run's `plan` or a
-shard did not succeed, or the run ended without a full shard and artifact set, the push runs its
-own matrix instead; a run still testing is waited for.
+shard did not succeed in its current attempt, or the run ended without a full shard and artifact
+set, the push runs its own matrix instead; a run still testing is waited for.
 The report checks the pushed tip against its own previous thresholds and can commit records
 deferred when main moved during the original run. CodeQL skips these pushes. The required
 dependency-audit job already succeeds without auditing when neither manifest changed.
