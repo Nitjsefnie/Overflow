@@ -122,8 +122,6 @@ print(json.dumps(answer))
 
   // Rerun all jobs lists attempt 1's jobs until attempt 2 creates its own; a failed-jobs rerun relists attempt 1's
   // successes as attempt 2 beside the failed job's attempt 1 (runs 38989734393 and 43498119958).
-  // Rerun all jobs lists attempt 1's jobs until attempt 2 creates its own; a failed-jobs rerun relists attempt 1's
-  // successes as attempt 2 beside the failed job's attempt 1 (runs 38989734393 and 43498119958).
   const [a1, a2] = [(name: string, conclusion: string) => job(name, conclusion), (name: string, conclusion: string) => ({ ...job(name, conclusion), run_attempt: 2 })];
   it.each([["full rerun", () => [a1("plan", "success"), a1("test (1/1)", "failure")]], ["failed-jobs rerun", () => [a2("plan", "success"), a1("test (1/1)", "failure")]]] as const)(
     "waits through a %s whose new attempt has not yet replaced an older attempt's failed shard", (_, first) => {
