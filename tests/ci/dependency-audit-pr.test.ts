@@ -78,9 +78,7 @@ describe("pr-gates.yml's shape", () => {
   it("triggers on pull_request_target alone, with no paths filter", () => {
 
     expect(Object.keys(workflow.on ?? {})).toEqual(["pull_request_target"]);
-    expect(workflow.on).toEqual({
-      pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] },
-    });
+    expect(workflow.on).toEqual({ pull_request_target: { branches: ["main"], types: ["opened", "synchronize", "reopened"] } });
   });
 
   it("scopes permissions to contents: read", () => {
@@ -88,10 +86,7 @@ describe("pr-gates.yml's shape", () => {
   });
 
   it("cancels only superseded runs of the same pull request", () => {
-    expect(workflow.concurrency).toEqual({
-      group: "pr-gates-${{ github.event.pull_request.number }}",
-      "cancel-in-progress": true,
-    });
+    expect(workflow.concurrency).toEqual({ group: "pr-gates-${{ github.event.pull_request.number }}", "cancel-in-progress": true });
   });
 
   it("bounds the producing job's runtime", () => {
@@ -135,9 +130,7 @@ describe("pr-gates.yml's shape", () => {
 
   it("carries exactly the four steps, in the established order", () => {
     expect(steps).toHaveLength(4);
-    expect(steps.filter((step) => step.name).map((step) => step.name)).toEqual([
-      "Enable the pinned package manager", AUDIT_STEP_NAME,
-    ]);
+    expect(steps.filter((step) => step.name).map((step) => step.name)).toEqual(["Enable the pinned package manager", AUDIT_STEP_NAME]);
   });
 
   it("receives the event through env:, never through shell interpolation", () => {
@@ -147,11 +140,7 @@ describe("pr-gates.yml's shape", () => {
     for (const step of steps) {
       expect(step.run ?? "", `step ${step.name ?? step.uses}`).not.toContain("${{");
     }
-    expect(auditStep.env).toEqual({
-      OVERFLOW_HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
-      OVERFLOW_BASE_SHA: "${{ github.event.pull_request.base.sha }}",
-      GIT_LFS_SKIP_SMUDGE: "1",
-    });
+    expect(auditStep.env).toEqual({ OVERFLOW_HEAD_SHA: "${{ github.event.pull_request.head.sha }}", OVERFLOW_BASE_SHA: "${{ github.event.pull_request.base.sha }}", GIT_LFS_SKIP_SMUDGE: "1" });
   });
 
   it("fetches by SHA, builds the merge locally, and materializes with the ls-tree discipline", () => {
@@ -480,8 +469,7 @@ describe.skipIf(!LINUX_ONLY)("the audit step, run over git fixtures", () => {
   const locked = (...lines: string[]): string => `${BASE_LOCKFILE}${lines.map((line) => `${line}\n`).join("")}`;
   // pnpm why places paths from the root project alone, so a side with findings must lock the root importer and no other, spelled as pnpm writes it.
   const BOTH = audit([G1, X, "packages__x>x"]).map((outcome) => ({ ...outcome, stdout: outcome.stdout.replace('"packages__x>x"', '"packages__x>x",".>x"') }));
-  const OTHERS: Array<[string, string, Outcome[]?]> = [["a second importer sharing the root's finding", locked("  packages/x: {}"), BOTH], ["an importer whose id starts with a dot", locked("  .foo: {}"), audit([G1, X, ".foo>x"])],
-    ["an importer whose paths read as the root's", locked("  .>evil: {}"), audit([G1, X, ".>evil>x"])], ["a quoted importer", locked("  'sub': {}")], ["an explicit importer key", locked("  ? sub", "  : {}")], ["a quoted importers key", locked('"importers":', "  sub: {}")],
+  const OTHERS: Array<[string, string, Outcome[]?]> = [["a second importer sharing the root's finding", locked("  packages/x: {}"), BOTH], ["an importer whose id starts with a dot", locked("  .foo: {}"), audit([G1, X, ".foo>x"])], ["an importer whose paths read as the root's", locked("  .>evil: {}"), audit([G1, X, ".>evil>x"])], ["a quoted importer", locked("  'sub': {}")], ["an explicit importer key", locked("  ? sub", "  : {}")], ["a quoted importers key", locked('"importers":', "  sub: {}")],
     ["a flow value left open over a column-zero line", locked("    a: {", "b: 1}", "  sub: {}")], ["a quoted value left open", locked('    a: "', '  sub: {}"')], ["an importer behind a lone carriage return", locked("    a: 1\r  sub: {}")], ["an importer behind a line separator", locked("    a: 1\u2028  sub: {}")],
     ["an indented second document", locked("---", "  importers:", "    sub: {}")], ["a second document naming another importer", locked("---", "importers:", "", "  sub: {}")], ["no importers at all", "lockfileVersion: '9.0'\n"], ["importers written inline", "importers: {.: {}, sub: {}}\n"]];
   it.each(OTHERS)("refuses findings in a merge tree whose lockfile holds %s", async (_name, lockfile, headAudit = audit([G1, X])) => {
