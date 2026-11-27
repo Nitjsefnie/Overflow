@@ -1415,12 +1415,7 @@ export function untrustedExecutions(run: string): string[] {
       reasons.push(`runs inline code through \`${interpreter}${options}\``);
       continue;
     }
-    if (!BASE_SCRIPT.test(unquoted(target))) {
-      reasons.push(
-        `runs \`${interpreter} ${target}\`, which does not resolve into the base checkout ` +
-          `($GITHUB_WORKSPACE)`,
-      );
-    }
+    if (!BASE_SCRIPT.test(unquoted(target))) reasons.push(`runs \`${interpreter} ${target}\`, which does not resolve into the base checkout ($GITHUB_WORKSPACE)`);
   }
   // A script named by a repository-relative path resolves against whatever
   // the working directory is, and under this event that may be the pull
@@ -1449,9 +1444,7 @@ export function untrustedWrites(run: string): string[] {
     const target = redirect[1] ?? "";
     if (target !== '"$GITHUB_OUTPUT"' && target !== "&2") reasons.push(`redirects output into ${target}`);
   }
-  for (const command of run.matchAll(/(?<![\w./-])(cp|mv|tee|touch|ln|install|rm|rsync|tar|unzip)(?![\w.-])/g)) {
-    reasons.push(`runs \`${command[1]}\``);
-  }
+  for (const command of run.matchAll(/(?<![\w./-])(cp|mv|tee|touch|ln|install|rm|rsync|tar|unzip)(?![\w.-])/g)) reasons.push(`runs \`${command[1]}\``);
   for (const made of run.matchAll(/(?<![\w./-])mkdir\s+(?:-\S+\s+)*"?\$\{?(\w+)\}?"?/g)) {
     if (!tempVariables.has(made[1]!)) reasons.push(`creates a directory from ${made[1]}`);
   }
