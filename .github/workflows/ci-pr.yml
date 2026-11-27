@@ -812,15 +812,12 @@ jobs:
           precision: '2'
           gate-raised-floors: 'true'
 
-      # The relay runs the current base's integrity gates against the merge tree.
-      # The suite can have tested an older base. Starting at the head/main
-      # merge-base on main's linear history covers the whole untested advance.
-      # Allow disjoint advances: requiring every gate-defining commit on the head
-      # would invalidate unrelated work even after the new gate ran on the merge tree.
-      # Overlapping files, failed API reads or incomplete comparisons refuse
-      # certification (issues 441 and 510). Keep this step last to minimize the
-      # time between checking main and publishing verify. Push runs test main
-      # directly in ci.yml.
+      # Strict up-to-date checking is disabled in branch protection and the suite
+      # can have tested an older base, so certify the advance from the head/main
+      # merge-base. Disjoint advances pass; this misses a gate main adds to the
+      # pull-request-defined pr-suite.yml. Overlapping files, failed API reads or
+      # incomplete comparisons refuse (issues 441, 510). Keep this step last,
+      # next to publishing verify. Push runs test main in ci.yml.
       - name: Base freshness
         if: ${{ steps.pr.outputs.superseded != 'true' }}
         env:
