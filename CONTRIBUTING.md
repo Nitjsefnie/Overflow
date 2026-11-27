@@ -213,11 +213,15 @@ shards, a `test` matrix job runs each shard with coverage measured against
 PostgreSQL 17 with migrations applied, and a `report` job merges the shards'
 coverage and gates it against the floor in `.github/ci-thresholds.json`.
 On a push changing only `.github/{size-baseline,comment-share,ci-thresholds,test-times}.json`,
-CI skips the matrix and gives `report` the successful main push run that tested the same code.
+CI skips the matrix and gives `report` the successful main push run that tested the same code,
+walking past earlier pushes that have no ci run and retrying a failed GitHub API call up to four
+times. When the newest main push run over the same code failed, was cancelled or left an
+incomplete shard or artifact set, the push runs its own matrix instead.
 The report checks the pushed tip against its own previous thresholds and can commit records
 deferred when main moved during the original run. CodeQL skips these pushes. The required
 dependency-audit job already succeeds without auditing when neither manifest changed.
-`verify` requires a successful matrix or validated artifact source and a successful report.
+`verify` requires a successful report and either a successful matrix of the push's own or a
+validated artifact source.
 It then installs the pinned toolchain, applies migrations, and runs lint,
 typecheck, build and page-geometry checks. `ci-pr.yml` is the pull-request leg: its only trigger is
 `workflow_run` completion of `pr suite`, so no runner polls for the suite.

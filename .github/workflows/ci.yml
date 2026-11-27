@@ -96,8 +96,8 @@ jobs:
   # Splits the test files into shards balanced by the run times recorded in
   # .github/test-times.json. It reads only the repository and the times file.
   # A records-only push runs it only when record-source found no usable run (an
-  # empty run id); a status function keeps record-source's skip on a code push
-  # from skipping it.
+  # empty run id); `!cancelled()` keeps record-source's skip on a code push from
+  # skipping it.
   plan:
     needs: [postgres-image, record-source]
     if: ${{ !cancelled() && needs.postgres-image.result == 'success' && (needs.postgres-image.outputs.records-only != 'true' || (needs.record-source.result == 'success' && needs.record-source.outputs.run-id == '')) }}
@@ -201,8 +201,8 @@ jobs:
           javascript: src/**
 
   # Keep all repository code and API polling outside the job holding the deploy key.
-  # It waits for the code push it borrows, whose longest needs chain of timeouts
-  # is 115 minutes, plus queueing and retry sleeps.
+  # It retries failed API calls and waits for the code push it borrows: 150 minutes
+  # cover that run's 115-minute needs chain of timeouts, queueing and retry sleeps.
   record-source:
     needs: postgres-image
     if: needs.postgres-image.outputs.records-only == 'true'
@@ -292,10 +292,7 @@ jobs:
       OVERFLOW_APP_URL: https://overflow.invalid
       OVERFLOW_GITHUB_WEBHOOK_URL: https://overflow.invalid/api/github/webhooks
       OVERFLOW_MODERATOR_GITHUB_USER_IDS: "1"
-      # Actions `env:` is step-scoped. A pin on only the install step leaves
-      # later `pnpm` steps resolving the checkout's `packageManager`. At job
-      # scope every `pnpm` step inherits both pins, so there is no step left
-      # on which to forget them.
+      # At job scope so every `pnpm` step inherits both pins.
       COREPACK_ENABLE_PROJECT_SPEC: "0"
       npm_config_registry: "https://registry.npmjs.org/"
 

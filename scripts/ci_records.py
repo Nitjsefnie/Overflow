@@ -31,7 +31,7 @@ def records_only(before):
 
 def api(endpoint):
     command = ["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/{endpoint}"]
-    # A transient 5xx or rate-limit answer must not decide the push; the last attempt's error propagates.
+    # Ride out a transient 5xx or rate limit.
     for delay in (5, 10, 20, 40):
         try:
             return json.loads(subprocess.check_output(command))
@@ -69,7 +69,7 @@ def measured_run(run):
             if name not in jobs or job["run_attempt"] > jobs[name]["run_attempt"]:
                 jobs[name] = job
         results = {name: job["conclusion"] for name, job in jobs.items()}
-        # Only a records-only push starts record-source; a queued one has not decided yet.
+        # Only a records-only push starts record-source.
         source = jobs.get("record-source", {"status": "completed", "conclusion": "skipped"})
         if source["status"] == "in_progress" or source["status"] == "completed" and source["conclusion"] != "skipped":
             return None
@@ -96,7 +96,7 @@ def source_run(before):
     for sha in subprocess.check_output(["git", "rev-list", "--first-parent", before], text=True).splitlines():
         endpoint = f"workflows/ci.yml/runs?branch=main&event=push&head_sha={sha}"
         runs = api(endpoint)["workflow_runs"]
-        if sha == before:  # its run can lag the push, and a [skip ci] push never gets one
+        if sha == before:  # a [skip ci] push never gets a run
             for delay in (5, 10, 20):
                 if runs:
                     break
