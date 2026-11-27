@@ -2293,41 +2293,18 @@ function createFakeStore(
 ) {
   const calls: { method: string; args: unknown[] }[] = [];
   const pending = [...(options.jobs ?? [])];
-  const record = (method: string, args: unknown[]) => {
-    calls.push({ method, args });
-  };
+  const record = (method: string, args: unknown[]) => { calls.push({ method, args }); };
 
   const store: ReconciliationWorkerStore = {
-    claimNextReconciliationJob: async () => {
-      record("claim", []);
-      return pending.shift() ?? null;
-    },
+    claimNextReconciliationJob: async () => { record("claim", []); return pending.shift() ?? null; },
     // Interaction recorder only: PostgreSQL tests prove ownership/state guards;
     // this fake deliberately does not model lease ownership or row lifecycle.
-    renewReconciliationJobLease: async (jobId, leaseToken) => {
-      record("renew", [jobId, leaseToken]);
-      return true;
-    },
-    completeReconciliationJob: async (jobId, leaseToken, rederivationGeneration) => {
-      record("complete", [jobId, leaseToken, rederivationGeneration]);
-      return true;
-    },
-    deferReconciliationJob: async (jobId, leaseToken, runAfter) => {
-      record("defer", [jobId, leaseToken, runAfter]);
-      return true;
-    },
-    retryReconciliationJob: async (jobId, leaseToken, runAfter) => {
-      record("retry", [jobId, leaseToken, runAfter]);
-      return true;
-    },
-    failReconciliationJob: async (jobId, leaseToken) => {
-      record("fail", [jobId, leaseToken]);
-      return true;
-    },
-    getReconciliationCooldown: async (repositoryId) => {
-      record("cooldown", [repositoryId]);
-      return options.cooldown ?? null;
-    },
+    renewReconciliationJobLease: async (jobId, leaseToken) => { record("renew", [jobId, leaseToken]); return true; },
+    completeReconciliationJob: async (jobId, leaseToken, rederivationGeneration) => { record("complete", [jobId, leaseToken, rederivationGeneration]); return true; },
+    deferReconciliationJob: async (jobId, leaseToken, runAfter) => { record("defer", [jobId, leaseToken, runAfter]); return true; },
+    retryReconciliationJob: async (jobId, leaseToken, runAfter) => { record("retry", [jobId, leaseToken, runAfter]); return true; },
+    failReconciliationJob: async (jobId, leaseToken) => { record("fail", [jobId, leaseToken]); return true; },
+    getReconciliationCooldown: async (repositoryId) => { record("cooldown", [repositoryId]); return options.cooldown ?? null; },
   };
 
   return { store, calls };

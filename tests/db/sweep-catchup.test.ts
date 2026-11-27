@@ -44,11 +44,8 @@ beforeAll(async () => {
   await runMigrations();
 });
 beforeEach(async () => {
-  await sql`delete from repository_reconciliation_jobs`;
-  await sql`delete from reconciliation_sweep_catchups`;
-  await sql`delete from repository_reconciliation_sizes`;
-  await sql`delete from registered_repositories`;
-  await sql`delete from users`;
+  await sql`delete from repository_reconciliation_jobs`; await sql`delete from reconciliation_sweep_catchups`; await sql`delete from repository_reconciliation_sizes`;
+  await sql`delete from registered_repositories`; await sql`delete from users`;
 });
 afterAll(async () => {
   await closeSql(); await container?.stop();
@@ -74,13 +71,9 @@ async function insertRepository(sponsorId: string, repositoryId?: string): Promi
   return row.id;
 }
 
-function catchupStates(repositoryId: string) {
-  return sql`select state from reconciliation_sweep_catchups where repository_id = ${repositoryId}`;
-}
+function catchupStates(repositoryId: string) { return sql`select state from reconciliation_sweep_catchups where repository_id = ${repositoryId}`; }
 
-async function storeSize(repositoryId: string, totalCount: number): Promise<void> {
-  await new PostgresRepositorySizeStore(sql).store(repositoryId, totalCount, at);
-}
+async function storeSize(repositoryId: string, totalCount: number): Promise<void> { await new PostgresRepositorySizeStore(sql).store(repositoryId, totalCount, at); }
 
 function safeEvidence(overrides?: Partial<ReconciliationEvidence>): ReconciliationEvidence {
   return {
@@ -131,10 +124,8 @@ function productionEnqueue(record: string[]) {
 describe("reconciliation sweep catch-ups", () => {
   it("creates pending rows the first tick a sponsor is over the threshold and none while under it", async () => {
     const sponsorId = await insertSponsor();
-    const small = await insertRepository(sponsorId);
-    const large = await insertRepository(sponsorId);
-    await storeSize(small, 5);
-    await storeSize(large, 5);
+    const small = await insertRepository(sponsorId); const large = await insertRepository(sponsorId);
+    await storeSize(small, 5); await storeSize(large, 5);
     const { deps } = harness();
 
     await sweepReconciliationCatchups(deps);
@@ -153,12 +144,8 @@ describe("reconciliation sweep catch-ups", () => {
   it("runs one sponsor's catch-ups in ascending size order (ties by repository id), one at a time", async () => {
     const sponsorId = await insertSponsor();
     const [smallerTieId, largerTieId] = [randomUUID(), randomUUID()].sort();
-    const tieLow = await insertRepository(sponsorId, smallerTieId);
-    const tieHigh = await insertRepository(sponsorId, largerTieId);
-    const smallest = await insertRepository(sponsorId);
-    await storeSize(tieLow, 5);
-    await storeSize(tieHigh, 5);
-    await storeSize(smallest, 3);
+    const tieLow = await insertRepository(sponsorId, smallerTieId); const tieHigh = await insertRepository(sponsorId, largerTieId); const smallest = await insertRepository(sponsorId);
+    await storeSize(tieLow, 5); await storeSize(tieHigh, 5); await storeSize(smallest, 3);
     const h = harness();
     h.deps.enqueue = productionEnqueue(h.offered);
 
@@ -185,10 +172,8 @@ describe("reconciliation sweep catch-ups", () => {
 
   it("never re-enqueues a completed or failed catch-up across a window rollover or a later measurement", async () => {
     const sponsorId = await insertSponsor();
-    const done = await insertRepository(sponsorId);
-    const failing = await insertRepository(sponsorId);
-    await storeSize(done, 3);
-    await storeSize(failing, 9);
+    const done = await insertRepository(sponsorId); const failing = await insertRepository(sponsorId);
+    await storeSize(done, 3); await storeSize(failing, 9);
     const h = harness();
 
     // The first catch-up completes (the recorder enqueue leaves no job row,
@@ -208,8 +193,7 @@ describe("reconciliation sweep catch-ups", () => {
 
     // Rollovers and re-measurements never re-enqueue either terminal state.
     h.now.value = new Date(at.getTime() + 6 * 60 * 60_000 + 1);
-    await storeSize(done, 1);
-    await storeSize(failing, 1);
+    await storeSize(done, 1); await storeSize(failing, 1);
     await sweepReconciliationCatchups(h.deps);
     h.now.value = new Date(at.getTime() + 30 * 24 * 60 * 60_000);
     await sweepReconciliationCatchups(h.deps);
@@ -269,10 +253,8 @@ describe("reconciliation sweep catch-ups", () => {
   it("a restart over the same database resumes the in-flight repository's own job and enqueues no other first", async () => {
     const sponsorId = await insertSponsor();
     const [smallerTieId, largerTieId] = [randomUUID(), randomUUID()].sort();
-    const first = await insertRepository(sponsorId, smallerTieId);
-    const second = await insertRepository(sponsorId, largerTieId);
-    await storeSize(first, 6);
-    await storeSize(second, 6);
+    const first = await insertRepository(sponsorId, smallerTieId); const second = await insertRepository(sponsorId, largerTieId);
+    await storeSize(first, 6); await storeSize(second, 6);
     const h = harness();
     h.deps.enqueue = productionEnqueue(h.offered);
 
@@ -373,10 +355,8 @@ describe("reconciliation sweep catch-ups", () => {
 
   it("ends an in-flight catch-up whose job was re-queued as a follow-up, and waits while the job is running or queued", async () => {
     const sponsorId = await insertSponsor();
-    const first = await insertRepository(sponsorId);
-    const second = await insertRepository(sponsorId);
-    await storeSize(first, 3);
-    await storeSize(second, 9);
+    const first = await insertRepository(sponsorId); const second = await insertRepository(sponsorId);
+    await storeSize(first, 3); await storeSize(second, 9);
     const h = harness();
 
     await sweepReconciliationCatchups(h.deps);
@@ -408,8 +388,7 @@ describe("reconciliation sweep catch-ups", () => {
   it.each([false, true])("ends a catch-up whose fold outlived the lease renewal cap unless a newer sweep arrived mid-fold (newer sweep: %s)", async (newerSweep) => {
     const sponsorId = await insertSponsor();
     const [first, second] = [await insertRepository(sponsorId), await insertRepository(sponsorId)];
-    await storeSize(first, 5);
-    await storeSize(second, 6);
+    await storeSize(first, 5); await storeSize(second, 6);
     const h = harness();
     h.deps.enqueue = productionEnqueue(h.offered);
     await sweepReconciliationCatchups(h.deps);
@@ -444,10 +423,8 @@ describe("reconciliation sweep catch-ups", () => {
   it("serializes two concurrent advances per sponsor: the second blocks on the sponsor's own row", async () => {
     const sponsorId = await insertSponsor();
     const [lowerId, higherId] = [randomUUID(), randomUUID()].sort();
-    const first = await insertRepository(sponsorId, lowerId);
-    const second = await insertRepository(sponsorId, higherId);
-    await storeSize(first, 6);
-    await storeSize(second, 6);
+    const first = await insertRepository(sponsorId, lowerId); const second = await insertRepository(sponsorId, higherId);
+    await storeSize(first, 6); await storeSize(second, 6);
     const store = new PostgresSweepCatchupStore(sql);
     const enqueued: string[] = [];
     let release!: () => void;
