@@ -248,9 +248,7 @@ function parseExpression(source: string): Node {
         }
         take();
         if (!Object.hasOwn(STATUS_FUNCTIONS, token.text)) {
-          throw new Error(
-            `${token.text}() is not implemented here — the subset is success(), always(), failure() and cancelled()`,
-          );
+          throw new Error(`${token.text}() is not implemented here — the subset is success(), always(), failure() and cancelled()`);
         }
         return { kind: "status", name: token.text };
       }
@@ -425,10 +423,7 @@ function evaluate(node: Node, context: ActionsContext, status: JobStatus): Expre
       return toBoolean(left) ? left : evaluate(node.right, context, status);
     }
     case "compare": {
-      const equal = looseEquals(
-        evaluate(node.left, context, status),
-        evaluate(node.right, context, status),
-      );
+      const equal = looseEquals(evaluate(node.left, context, status), evaluate(node.right, context, status));
       return node.operator === "==" ? equal : !equal;
     }
     default:
@@ -675,9 +670,7 @@ describe("the workflow files this suite simulates", () => {
     // so asserting over the union would let a trigger land in the wrong file
     // unnoticed.
     for (const leg of LEGS) {
-      const covered = [
-        ...new Set(SCENARIOS.filter((scenario) => scenario.file === leg).map((scenario) => scenario.event)),
-      ].sort();
+      const covered = [...new Set(SCENARIOS.filter((scenario) => scenario.file === leg).map((scenario) => scenario.event))].sort();
       expect(
         covered,
         `the scenarios above must cover exactly the events .github/workflows/${leg} declares, one ` +
@@ -720,22 +713,12 @@ describe("the step selector", () => {
     // Selection is about EXECUTION. A tolerated step still runs; whether it
     // gates the merge is asserted separately over the same list, and folding
     // the two together would make this suite unable to report the difference.
-    const steps: WorkflowStep[] = [
-      {
-        name: "tolerated",
-        "continue-on-error": true,
-        if: "${{ success() }}",
-      },
-    ];
+    const steps: WorkflowStep[] = [{ name: "tolerated", "continue-on-error": true, if: "${{ success() }}" }];
     expect(selectSteps(steps, context).map(label)).toEqual(["tolerated"]);
   });
 
   it("returns the selected steps in file order", () => {
-    const steps: WorkflowStep[] = [
-      { name: "first" },
-      { name: "second", if: "${{ false }}" },
-      { name: "third" },
-    ];
+    const steps: WorkflowStep[] = [{ name: "first" }, { name: "second", if: "${{ false }}" }, { name: "third" }];
     expect(selectSteps(steps, context).map(label)).toEqual(["first", "third"]);
   });
 
@@ -831,9 +814,7 @@ describe("the expression evaluator", () => {
     expect(evaluateExpression("failure()", pullRequest, "failure")).toBe(true);
     expect(evaluateExpression("failure()", pullRequest, "success")).toBe(false);
     expect(evaluateExpression("cancelled()", pullRequest, "cancelled")).toBe(true);
-    expect(evaluateExpression("success() && steps.detect-docs.outputs.docs_only != 'true'", pullRequest)).toBe(
-      true,
-    );
+    expect(evaluateExpression("success() && steps.detect-docs.outputs.docs_only != 'true'", pullRequest)).toBe(true);
   });
 
   it("compares strings case-insensitively and casts across types", () => {
@@ -884,9 +865,7 @@ describe("the expression evaluator", () => {
       // The `.not.toBe("")` is load-bearing rather than belt-and-braces: for
       // the empty expression `toContain("")` would hold for any string at all,
       // including the "" a non-throwing evaluation returns here.
-      expect(thrown, `evaluateExpression(${JSON.stringify(bad)}) must throw, never answer false`).not.toBe(
-        "",
-      );
+      expect(thrown, `evaluateExpression(${JSON.stringify(bad)}) must throw, never answer false`).not.toBe("");
       expect(thrown, `the failure must name the expression ${JSON.stringify(bad)}`).toContain(bad);
     }
   });
@@ -1482,9 +1461,7 @@ export function untrustedExecutions(run: string): string[] {
  */
 export function untrustedWrites(run: string): string[] {
   const reasons: string[] = [];
-  const tempVariables = new Set(
-    [...run.matchAll(/^\s*(\w+)="\$\{RUNNER_TEMP\}\/[\w-]+"$/gm)].map((match) => match[1]),
-  );
+  const tempVariables = new Set([...run.matchAll(/^\s*(\w+)="\$\{RUNNER_TEMP\}\/[\w-]+"$/gm)].map((match) => match[1]));
   // Single-quoted text is literal (a regular expression, say), never a
   // redirection, so it is blanked before the scan.
   const unquotedRun = run.replace(/'[^']*'/g, "''");
@@ -1646,10 +1623,7 @@ for (const scenario of PRT_SCENARIOS) {
         { gate: "base freshness", needle: "/scripts/ci-base-freshness.sh" },
       ];
       for (const { gate, needle } of gates) {
-        expect(
-          runsContaining(steps, needle).map(label),
-          `${gate} must be judged by exactly one step under workflow_run`,
-        ).toHaveLength(1);
+        expect(runsContaining(steps, needle).map(label), `${gate} must be judged by exactly one step under workflow_run`).toHaveLength(1);
       }
       expect(
         label(steps.at(-1)!),
@@ -1686,9 +1660,7 @@ for (const scenario of PRT_SCENARIOS) {
       expect(step.run).toContain('git merge-tree --write-tree "${OVERFLOW_BASE_SHA:?}" "${OVERFLOW_HEAD_SHA:?}"');
       expect(step.run).toContain('[ "${second_parent}" != "${OVERFLOW_HEAD_SHA}" ]');
       // Materialised before any gate reads it.
-      expect(steps.indexOf(step)).toBeLessThan(
-        steps.indexOf(runsContaining(steps, "git grep -nI")[0]!),
-      );
+      expect(steps.indexOf(step)).toBeLessThan(steps.indexOf(runsContaining(steps, "git grep -nI")[0]!));
     });
 
     it("refuses success unless the awaited run's id is a positive integer", () => {
