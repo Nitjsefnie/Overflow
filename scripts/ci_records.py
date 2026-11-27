@@ -89,13 +89,13 @@ def source_run(before):
     for sha in subprocess.check_output(["git", "rev-list", "--first-parent", before], text=True).splitlines():
         endpoint = f"workflows/ci.yml/runs?branch=main&event=push&head_sha={sha}"
         runs = api(endpoint)["workflow_runs"]
-        if sha == before:
+        if sha == before:  # its run can lag the push, and a [skip ci] push never gets one
             for delay in (5, 10, 20):
                 if runs:
                     break
                 time.sleep(delay)
                 runs = api(endpoint)["workflow_runs"]
-        elif not runs:
+        if not runs:
             continue
         if len(runs) != 1:
             raise ValueError(f"expected one main ci push run at {sha}, found {len(runs)}")
