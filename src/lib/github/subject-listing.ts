@@ -6,10 +6,10 @@ import type { GitHubRepositoryReference } from "@/lib/github/types";
 export async function listSubjectPage(
   deps: Pick<GitHubGateway, "request">,
   reference: GitHubRepositoryReference,
-  options: { since?: string; cursor: string | null },
+  options: { since?: string; cursor: string | null; state?: "open" },
 ): Promise<{ subjects: WalkSubject[]; nextCursor: string | null }> {
   const path = `/repos/${encodeURIComponent(reference.owner)}/${encodeURIComponent(reference.name)}/issues`;
-  const query = new URLSearchParams({ state: "all", sort: "updated", direction: "asc", per_page: "100" });
+  const query = new URLSearchParams({ state: options.state ?? "all", sort: "updated", direction: "asc", per_page: "100" });
   if (options.since !== undefined) query.set("since", options.since);
   const response = await deps.request(`${path}${options.cursor ?? `?${query}`}`);
   const rows: Array<{ id: number; number: number; updated_at?: string; pull_request?: unknown }> = JSON.parse(response.body);
@@ -25,4 +25,21 @@ export async function listSubjectPage(
   // Only the query travels back to the transport, which owns its API base URL.
   const nextCursor = target === undefined ? null : new URL(target, "https://api.github.com").search;
   return { subjects, nextCursor };
+}
+
+export async function listOpenIssueIds(
+  deps: Pick<GitHubGateway, "request">,
+  reference: GitHubRepositoryReference,
+): Promise<number[]> {
+  const ids: number[] = [];
+  const seen = new Set<string>();
+  let cursor: string | null = null;
+  do {
+    const page: Awaited<ReturnType<typeof listSubjectPage>> = await listSubjectPage(deps, reference, { state: "open", cursor });
+    for (const subject of page.subjects) if (subject.kind === "issue") ids.push(subject.id);
+    cursor = page.nextCursor;
+    if (cursor !== null && seen.has(cursor)) throw new Error("Open issue listing repeated a cursor.");
+    if (cursor !== null) seen.add(cursor);
+  } while (cursor !== null);
+  return ids;
 }

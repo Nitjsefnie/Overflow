@@ -138,6 +138,11 @@ export class GitLabGateway {
     return listGitLabSubjectsPage({ request: (path) => this.request(path) }, reference, options);
   }
 
+  public async listOpenIssueIds(repository: GitHubRepositoryReference): Promise<number[]> {
+    const path = `/projects/${segment(`${repository.owner}/${repository.name}`)}/issues?state=opened`;
+    return (await this.listAllPages<GitLabIssueObject>(path, "keyset")).map(({ id }) => id);
+  }
+
   public walkReconciliation(reference: GitHubRepositoryReference, input: ForgeWalkInput) {
     return walkGitLabReconciliation(this, reference, input);
   }

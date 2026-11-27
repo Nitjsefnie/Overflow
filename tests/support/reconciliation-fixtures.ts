@@ -27,6 +27,7 @@ export function reconciliationDependencies(
 } {
   const github = {
     getIssue: vi.fn().mockResolvedValue(null),
+    listOpenIssueIds: vi.fn().mockResolvedValue([]),
     getPullRequestClosingIssues: vi.fn().mockResolvedValue([]),
     listIssues: vi.fn().mockResolvedValue([
       {

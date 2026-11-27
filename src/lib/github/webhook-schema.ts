@@ -72,7 +72,7 @@ const payloadSchema = z
   .passthrough();
 
 const supportedActions = {
-  issues: new Set(["opened", "edited", "closed", "reopened", "labeled", "unlabeled", "assigned", "unassigned", "status_changed"]),
+  issues: new Set(["opened", "edited", "closed", "reopened", "labeled", "unlabeled", "assigned", "unassigned", "status_changed", "deleted", "transferred"]),
   pull_request: new Set(["opened", "edited", "closed", "reopened", "labeled", "unlabeled", "synchronize"]),
   pull_request_review: new Set(["submitted", "edited", "dismissed"]),
   issue_comment: new Set(["created", "edited", "deleted"]),

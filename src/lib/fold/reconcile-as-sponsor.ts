@@ -152,6 +152,7 @@ export function sponsorGateway(
     getRepositoryById: async (githubRepositoryId) => (await gateway()).getRepositoryById(githubRepositoryId),
     listIssues: async (repository, options) => (await gateway()).listIssues(repository, options),
     getIssue: async (repository, subject) => (await gateway()).getIssue(repository, subject),
+    listOpenIssueIds: async (repository) => (await gateway()).listOpenIssueIds!(repository),
     getPullRequestClosingIssues: async (repository, subject) => (await gateway()).getPullRequestClosingIssues(repository, subject),
     getPullRequestReviews: async (repository, pullRequestNumber) =>
       (await gateway()).getPullRequestReviews(repository, pullRequestNumber),
@@ -205,6 +206,7 @@ function guardGitLabCredential(
     getRepositoryById: (githubRepositoryId) => guarded(() => gateway.getRepositoryById(githubRepositoryId)),
     listIssues: (repository, options) => guarded(() => gateway.listIssues(repository, options)),
     getIssue: (repository, subject) => guarded(() => gateway.getIssue(repository, subject)),
+    listOpenIssueIds: (repository) => guarded(() => gateway.listOpenIssueIds!(repository)),
     getPullRequestClosingIssues: (repository, subject) =>
       guarded(() => gateway.getPullRequestClosingIssues(repository, subject)),
     getPullRequestReviews: (repository, pullRequestNumber) =>
