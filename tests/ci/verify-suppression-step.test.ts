@@ -283,11 +283,9 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     expect(step.run, "the manifest is read from the base side").toContain('install_pyyaml "${OVERFLOW_BASE_SHA:?}"');
     expect(step.run, "no pip download — the hash-gated install is the only channel").not.toContain("pip download");
     expect(step.run, "the step must not run a package manager").not.toMatch(/\b(pnpm|npm|npx|yarn|corepack)\s+(audit|install|ci|i|add|update|remove|run|exec|dlx|config)\b/);
-    // The workspace and .npmrc files are the two channels beyond package.json
-    // proven to carry audit settings: pnpm 10.33.0 reads auditConfig, auditLevel
-    // and the registries mapping from pnpm-workspace.yaml, and audit-level,
-    // registry, strict-ssl, cafile, proxy and https-proxy from .npmrc. The step
-    // must name both files and project both projections' settings.
+    // The guard compares workspace and .npmrc settings alongside package.json.
+    // Pin both projections, including the guard's .npmrc audit-level entry.
+    // pnpm uses workspace auditLevel or pnpm_config_audit_level for severity.
     expect(step.run, "the step must read the workspace file's audit-affecting settings").toContain(
       "pnpm-workspace.yaml",
     );
@@ -504,14 +502,11 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
   });
 
   // ---------------------------------------------------------------------------
-  // The workspace and .npmrc comparisons. pnpm 10.33.0 reads audit-affecting
-  // settings from pnpm-workspace.yaml
-  // (auditConfig, auditLevel and the registries mapping — all measured with a
-  // real advisory carrying github_advisory_id) and from .npmrc (audit-level,
-  // registry, strict-ssl, cafile, proxy, https-proxy). Absence of a file is
-  // legitimate: absent compares equal to a file carrying none of the audited
-  // keys. Every refusal below is one of the fixed constants, and no case's
-  // planted marker may reach the step's output.
+  // pnpm 12.23.0 reads auditConfig and auditLevel from pnpm-workspace.yaml.
+  // The job's pnpm_config_registry takes precedence over workspace registries
+  // and .npmrc registry. The guard compares its projections of both files.
+  // A missing file compares equal to a file with none of the guarded keys.
+  // Each refusal uses a fixed message that keeps planted markers out of output.
   // ---------------------------------------------------------------------------
 
   it("passes when pnpm-workspace.yaml is byte-identical on both sides", async () => {

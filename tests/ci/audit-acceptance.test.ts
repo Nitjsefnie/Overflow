@@ -11,7 +11,7 @@ it("records exactly the accepted advisory ids, scoped to the audited picomatch",
   expect([ids, new Set(lock.match(/picomatch@\d+\.\d+\.\d+/g))]).toStrictEqual([["GHSA-fc5q-39xc-vjpf"], new Set(["picomatch@4.0.7"])]);
 });
 
-/** Why each `pnpm.auditConfig.ignoreGhsas` id is accepted: the recorded disposition advisory-tracking.yml's listing stops naming it for. */
+/** Records why each `auditConfig.ignoreGhsas` entry in `pnpm-workspace.yaml` is accepted. */
 const REASONS: Record<string, string> = {
   "GHSA-fc5q-39xc-vjpf": "unpatched (4.0.7 is picomatch's newest release), and every copy is reached only through the dev-only vite, vitest and tinyglobby",
 };
