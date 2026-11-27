@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { globSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -649,8 +650,21 @@ cp .github/workflows/*.yml .github/workflows-pr/
           if (step.uses?.startsWith("actions/setup-node@")) {
             expect(step.with?.["node-version"], location).toBe(version);
           }
-          if (step.uses?.startsWith("Nitjsefnie-Actions/test-ratchet/")) {
-            expect(step.with?.cell, `${location} ${step.uses}`).toBe(`ubuntu-latest-node${version}`);
+          const cell = `ubuntu-latest-node${version}`;
+          if (step.uses?.startsWith("Nitjsefnie-Actions/test-ratchet/plan@")) {
+            // plan reads `cell` as newline-separated names and plans one shard when no named cell
+            // records a file its `tests:` globs match (split.has_records), so a cell rename keeps
+            // a recorded cell named beside the new one or seeds the new cell's records.
+            const lines = (text: unknown) => String(text).split("\n").map((line) => line.trim()).filter(Boolean);
+            const names = lines(step.with?.cell);
+            expect(names, `${location} ${step.uses}`).toContain(cell);
+            const { cells } = JSON.parse(await readFile(resolve(String(step.with?.times)), "utf8")) as { cells: Record<string, object> };
+            const files = globSync(lines(step.with?.tests));
+            expect(names.some((name) => files.some((file) => Object.hasOwn(cells[name] ?? {}, file))),
+              `${location}: no cell named in plan's cell: records a file its tests: globs match, so the plan collapses to one`
+              + ` shard; name a recorded cell beside ${cell} in cell:, or seed ${cell}'s records in ${String(step.with?.times)}`).toBe(true);
+          } else if (step.uses?.startsWith("Nitjsefnie-Actions/test-ratchet/")) {
+            expect(step.with?.cell, `${location} ${step.uses}`).toBe(cell);
           }
         }
       }
