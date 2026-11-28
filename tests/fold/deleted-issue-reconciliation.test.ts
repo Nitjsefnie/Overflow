@@ -103,8 +103,7 @@ describe("an issue the forge no longer has", () => {
     const f = await fixture();
     await f.fold();
     for (const elapsed of [120_000, 120_000, RECONCILIATION_FULL_REPAIR_MS - 240_001, 1, 120_000, RECONCILIATION_FULL_REPAIR_MS - 120_000]) await f.fold("WEBHOOK", elapsed);
-    const fullPassAt = Date.parse("2026-09-08T10:02:00Z");
-    expect(f.listings).toEqual([1, 2].map((intervals) => new Date(fullPassAt + intervals * RECONCILIATION_FULL_REPAIR_MS)));
+    expect(f.listings).toEqual([1, 2].map((intervals) => new Date(Date.parse("2026-09-08T10:02:00Z") + intervals * RECONCILIATION_FULL_REPAIR_MS)));
   });
 
   it("lists on the next fold when the stored listing time is absent, as on a row an earlier release wrote", async () => {
@@ -151,14 +150,10 @@ async function fixture() {
         actorGitHubUserId: sponsorGitHubId, createdAt: "2026-09-01T08:00:00Z", label: "M" }],
       comments: [], closingPullRequests: [] };
   };
-  const cheapest = issue(1);
-  const next = issue(2);
+  const cheapest = issue(1), next = issue(2);
   let upstream = [cheapest, next];
-  const unlisted = new Set<number>();
-  const answers = new Map<number, () => Promise<GitHubIssue | null>>();
-  const scans: Array<string | undefined> = [];
-  const issueReads: number[] = [];
-  const listings: Date[] = [];
+  const unlisted = new Set<number>(), answers = new Map<number, () => Promise<GitHubIssue | null>>();
+  const scans: Array<string | undefined> = [], issueReads: number[] = [], listings: Date[] = [];
   const store = new PostgresFoldStore(sql, encryptionKey);
   let clock = new Date("2026-09-08T10:00:00Z");
 

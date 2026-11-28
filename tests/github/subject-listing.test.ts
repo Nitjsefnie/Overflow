@@ -18,16 +18,10 @@ describe("GitHub subject pages", () => {
     let request: Request | undefined;
     const client = gateway(async (input, init) => {
       request = new Request(input, init);
-      return Response.json([
-        { id: 701, number: 12, updated_at: firstTime },
-        { id: 405, number: 19, updated_at: secondTime, pull_request: {} },
-      ]);
+      return Response.json([{ id: 701, number: 12, updated_at: firstTime }, { id: 405, number: 19, updated_at: secondTime, pull_request: {} }]);
     });
     expect(await listSubjectPage(client, repository, { cursor: null })).toEqual({
-      subjects: [
-        { id: 701, number: 12, kind: "issue", updatedAt: new Date(firstTime) },
-        { id: 405, number: 19, kind: "pull_request", updatedAt: new Date(secondTime) },
-      ],
+      subjects: [{ id: 701, number: 12, kind: "issue", updatedAt: new Date(firstTime) }, { id: 405, number: 19, kind: "pull_request", updatedAt: new Date(secondTime) }],
       nextCursor: null,
     });
     expect(request?.method).toBe("GET");
@@ -35,9 +29,7 @@ describe("GitHub subject pages", () => {
   });
 
   it("classifies a pull request by key presence even when the key's value is null", async () => {
-    const client = gateway(async () => Response.json([
-      { id: 901, number: 5, updated_at: firstTime, pull_request: null },
-    ]));
+    const client = gateway(async () => Response.json([{ id: 901, number: 5, updated_at: firstTime, pull_request: null }]));
     expect((await listSubjectPage(client, repository, { cursor: null })).subjects[0]?.kind).toBe("pull_request");
   });
 
@@ -66,11 +58,7 @@ describe("GitHub subject pages", () => {
     const third = await listSubjectPage(client, repository, { cursor: second.nextCursor });
     expect([...first.subjects, ...second.subjects, ...third.subjects].map((subject) => subject.id)).toEqual([801, 802, 803]);
     expect(third.nextCursor).toBeNull();
-    expect(requests).toEqual([
-      "?state=all&sort=updated&direction=asc&per_page=100",
-      "?after=opaque%2Bcursor&per_page=100",
-      "?page=3&per_page=100",
-    ]);
+    expect(requests).toEqual(["?state=all&sort=updated&direction=asc&per_page=100", "?after=opaque%2Bcursor&per_page=100", "?page=3&per_page=100"]);
   });
 
   it("adds since only when given and encodes repository segments", async () => {
@@ -83,9 +71,7 @@ describe("GitHub subject pages", () => {
   });
 
   it("exhausts when a Link relation only starts with next", async () => {
-    const client = gateway(async () => Response.json([], {
-      headers: { link: '<https://api.github.com/repos/octo/overflow/issues?page=2>; rel="next-sibling"' },
-    }));
+    const client = gateway(async () => Response.json([], { headers: { link: '<https://api.github.com/repos/octo/overflow/issues?page=2>; rel="next-sibling"' } }));
     expect((await listSubjectPage(client, repository, { cursor: null })).nextCursor).toBeNull();
   });
 
@@ -95,8 +81,7 @@ describe("GitHub subject pages", () => {
   });
 
   it("spends the sweep budget once per request and holds before sending when it is spent", async () => {
-    let sent = 0;
-    let spent = 0;
+    let sent = 0, spent = 0;
     const client = gateway(async () => Response.json([{ id: ++sent, number: 6, updated_at: firstTime }]));
     const resetAt = new Date(secondTime);
     await withSweepRequestBudget(async () => ++spent <= 2 ? null : resetAt, async () => {
