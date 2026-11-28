@@ -514,10 +514,7 @@ async function reconcileRepositoryAfterRepositoryRead(
         // GitLab authors resolve through linked identities on this repository's
         // provider and instance, not through the users table's GitHub ids.
         const forgeIdentities = repository.provider === "gitlab"
-          ? await dependencies.store.findForgeIdentitiesByForgeUserIds?.(
-              repositoryId,
-              authorGitHubUserIds,
-            )
+          ? await dependencies.store.findForgeIdentitiesByForgeUserIds?.(repositoryId, authorGitHubUserIds)
           : undefined;
         const users = repository.provider === "gitlab"
           ? []
