@@ -648,7 +648,7 @@ function gateway(): ReconciliationGateway {
   return {
     getRepositoryById: verifiedRepositoryAt(repositoryOwnerName),
     getIssue: async () => null,
-    getPullRequestClosingIssues: async () => [],
+    getPullRequestClosingIssues: async () => [], listOpenIssueIds: async () => issues.filter(({ state }) => state === "OPEN").map(({ id }) => id),
     listIssues: async () => issues.map((issue) => ({
       ...issue, closingPullRequests: pullRequests.get(issue.number) ?? [],
     })),
@@ -750,7 +750,7 @@ function selfWorkGateway(): ReconciliationGateway {
   return {
     getRepositoryById: verifiedRepositoryAt(selfWorkOwnerName),
     getIssue: async () => null,
-    getPullRequestClosingIssues: async () => [],
+    getPullRequestClosingIssues: async () => [], listOpenIssueIds: async () => issues.filter(({ state }) => state === "OPEN").map(({ id }) => id),
     listIssues: async () => issues.map((issue) => ({
       ...issue, closingPullRequests: pullRequests.get(issue.number) ?? [],
     })),
@@ -778,7 +778,7 @@ function queueConvergenceGateway(): ReconciliationGateway {
   return {
     getRepositoryById: verifiedRepositoryAt(queueConvergenceOwnerName),
     getIssue: async () => null,
-    getPullRequestClosingIssues: async () => [],
+    getPullRequestClosingIssues: async () => [], listOpenIssueIds: async () => [],
     listIssues: async () => [
       unsettledIssue({ id: queueConvergenceIssueId, number: 1, ...participants }),
     ].map((issue) => ({
@@ -809,7 +809,7 @@ function queueConvergenceSelfWorkGateway(): ReconciliationGateway {
   return {
     getRepositoryById: verifiedRepositoryAt(queueConvergenceSelfWorkOwnerName),
     getIssue: async () => null,
-    getPullRequestClosingIssues: async () => [],
+    getPullRequestClosingIssues: async () => [], listOpenIssueIds: async () => [],
     listIssues: async () => [
       unsettledIssue({ id: queueConvergenceSelfWorkIssueId, number: 1, ...participants }),
     ].map((issue) => ({

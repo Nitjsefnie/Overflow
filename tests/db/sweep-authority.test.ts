@@ -39,7 +39,7 @@ async function fixture() {
   const verify = verifiedRepositoryAt(repository.ownerName);
   const github: ReconciliationGateway = {
     getRepositoryById: async (id) => { await state.onVerify(); return verify(id); },
-    listIssues: async (_repository, options) => { walks.push(options?.since); return []; },
+    listIssues: async (_repository, options) => { walks.push(options?.since); return []; }, listOpenIssueIds: async () => [],
     getIssue: async () => null, getPullRequestClosingIssues: async () => [],
     getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",
   };

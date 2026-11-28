@@ -815,7 +815,7 @@ describe("PostgreSQL reconciliation job queue", () => {
       visibility: "PUBLIC", ownerType: "USER", canAdminister: true, url: `https://github.com/example/repository-${id}`,
     }));
     const github: ReconciliationGateway = { getRepositoryById,
-      listIssues: async () => { recordGraphqlResponseCost({ cost: 1 }); return []; },
+      listIssues: async () => { recordGraphqlResponseCost({ cost: 1 }); return []; }, listOpenIssueIds: async () => [],
       getIssue: async () => null, getPullRequestClosingIssues: async () => [],
       getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",
     };

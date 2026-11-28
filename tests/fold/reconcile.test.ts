@@ -797,7 +797,7 @@ describe("reconcileRepository", () => {
         getRepositoryById: async () => verifiedRepository(),
         getIssue: async () => null,
         getPullRequestClosingIssues: async () => [],
-        listIssues: () => record("issues", issues),
+        listIssues: () => record("issues", issues), listOpenIssueIds: async () => [],
         getPullRequestReviews: (_repository, number) => record("reviews", [], number),
         getPullRequestDiff: (_repository, number) => record("diff", `diff ${number}`, number),
       },
@@ -2206,7 +2206,7 @@ describe("reconcileRepository", () => {
       // gateway's methods explicitly so the real gateway serves the fold.
       const gatewayBindings: ReconciliationDependencies["github"] = {
         getRepositoryById: (githubRepositoryId) => gateway.getRepositoryById(githubRepositoryId),
-        listIssues: (repository, options) => gateway.listIssues(repository, options),
+        listIssues: (repository, options) => gateway.listIssues(repository, options), listOpenIssueIds: (repository) => gateway.listOpenIssueIds(repository),
         getIssue: (repository, subject) => gateway.getIssue(repository, subject),
         getPullRequestClosingIssues: (repository, subject) => gateway.getPullRequestClosingIssues(repository, subject),
         getPullRequestReviews: (repository, pullRequestNumber) => gateway.getPullRequestReviews(repository, pullRequestNumber),

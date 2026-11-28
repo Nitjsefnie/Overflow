@@ -40,7 +40,7 @@ it.each([["the maximum bigint", "9223372036854775806", false], ["2 ** 53 - 1, st
     // First run: hold for the sweep request budget, which keeps the pass.
     walkReconciliation: async () => { await state.pass!.write("first", { text: "paused page" }); throw new SweepBudgetSpent(new Date("2030-01-01T06:00:00Z")); },
     getRepositoryById: verifiedRepositoryAt(repository.ownerName),
-    listIssues: async () => [], getIssue: async () => null, getPullRequestClosingIssues: async () => [],
+    listIssues: async () => [], listOpenIssueIds: async () => [], getIssue: async () => null, getPullRequestClosingIssues: async () => [],
     getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",
   };
   const dependencies = { store: f.store, github, now: () => new Date("2030-01-01T00:00:00Z"), onBudgetChange: () => {}, sweep: {

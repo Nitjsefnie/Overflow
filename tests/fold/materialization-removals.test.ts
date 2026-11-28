@@ -638,7 +638,7 @@ function gateway(ownerName: string, issuesNow: () => readonly GitHubIssue[]): Re
     getIssue: async () => null,
     getPullRequestClosingIssues: async () => [],
     getRepositoryById: verifiedRepositoryAt(ownerName),
-    listIssues: async () => issuesNow().map((issue) => ({ ...issue })),
+    listIssues: async () => issuesNow().map((issue) => ({ ...issue })), listOpenIssueIds: async () => issuesNow().filter(({ state }) => state === "OPEN").map(({ id }) => id),
     getPullRequestReviews: async () => [],
     getPullRequestDiff: async (_repository, pullRequestNumber) => `removal diff ${pullRequestNumber}`,
   };

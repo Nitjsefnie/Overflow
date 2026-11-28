@@ -58,7 +58,7 @@ describe("GraphQL successful-response body failures", () => {
     });
     const gateway: ReconciliationGateway = {
       getRepositoryById: async () => null,
-      listIssues: async () => [],
+      listIssues: async () => [], listOpenIssueIds: async () => [],
       getIssue: async () => null,
       getPullRequestClosingIssues: async () => [],
       getPullRequestReviews: async () => [],

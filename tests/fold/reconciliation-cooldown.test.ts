@@ -221,7 +221,7 @@ async function cooledRepository() {
       calls.push("identity");
       return verifyIdentity(githubRepositoryId);
     },
-    listIssues: async () => { calls.push("issues"); return []; },
+    listIssues: async () => { calls.push("issues"); return []; }, listOpenIssueIds: async () => { calls.push("open issue ids"); return []; },
     getPullRequestReviews: async () => { calls.push("reviews"); return []; },
     getPullRequestDiff: async () => { calls.push("diff"); return ""; },
   };

@@ -69,7 +69,7 @@ export type ReconciliationGateway = {
   getRepositoryById(githubRepositoryId: number): Promise<GitHubRepository | null>;
   listIssues(repository: GitHubRepositoryReference, options?: GitHubIssueListOptions): Promise<GitHubIssue[]>;
   getIssue(repository: GitHubRepositoryReference, subject: GitHubSubject): Promise<GitHubIssue | null>;
-  listOpenIssueIds?(repository: GitHubRepositoryReference): Promise<number[]>;
+  listOpenIssueIds(repository: GitHubRepositoryReference): Promise<number[]>;
   getPullRequestClosingIssues(repository: GitHubRepositoryReference, subject: GitHubSubject): Promise<GitHubIssueReference[]>;
   getPullRequestReviews(
     repository: GitHubRepositoryReference,
@@ -182,7 +182,7 @@ function sanitizeReconciliationGateway(current: () => ReconciliationGateway): Re
     getRepositoryById: async (...args) => sanitizeForgeStrings(await current().getRepositoryById(...args)),
     listIssues: async (...args) => sanitizeForgeStrings(await current().listIssues(...args)),
     getIssue: async (...args) => sanitizeForgeStrings(await current().getIssue(...args)),
-    listOpenIssueIds: (...args) => current().listOpenIssueIds!(...args),
+    listOpenIssueIds: (...args) => current().listOpenIssueIds(...args),
     getPullRequestClosingIssues: async (...args) => sanitizeForgeStrings(await current().getPullRequestClosingIssues(...args)),
     getPullRequestReviews: async (...args) => sanitizeForgeStrings(await current().getPullRequestReviews(...args)),
     getPullRequestDiff: async (...args) => sanitizeForgeStrings(await current().getPullRequestDiff(...args)),

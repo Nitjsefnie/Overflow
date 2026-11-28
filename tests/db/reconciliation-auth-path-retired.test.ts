@@ -86,7 +86,7 @@ describe("repositories carrying a stored reconciliation auth path fold on the sp
       built.push({ token, owner });
       return {
         getRepositoryById: async () => null,
-        listIssues: async () => [],
+        listIssues: async () => [], listOpenIssueIds: async () => [],
         getIssue: async () => null,
         getPullRequestClosingIssues: async () => [],
         getPullRequestReviews: async () => [],
@@ -114,7 +114,7 @@ describe("repositories carrying a stored reconciliation auth path fold on the sp
       built.push({ token, owner });
       return {
         getRepositoryById: async () => null,
-        listIssues: async () => [],
+        listIssues: async () => [], listOpenIssueIds: async () => [],
         getIssue: async () => null,
         getPullRequestClosingIssues: async () => [],
         getPullRequestReviews: async () => [],

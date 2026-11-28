@@ -2674,7 +2674,7 @@ describe("initial PostgreSQL materialization", () => {
     let snapshotIndex = 0;
     const github: ReconciliationGateway = {
       getRepositoryById: verifiedRepositoryAt(repository.owner_name),
-      getIssue: async () => null,
+      getIssue: async () => null, listOpenIssueIds: async () => snapshots[snapshotIndex - 1]!.issues.filter(({ state }) => state === "OPEN").map(({ id }) => id),
       getPullRequestClosingIssues: async () => [],
       listIssues: async () => {
         const snapshot = snapshots[snapshotIndex];
@@ -4918,7 +4918,7 @@ function gatewayForSnapshot(snapshot: RepositoryFoldSnapshot): ReconciliationGat
     getRepositoryById: verifiedRepositoryAt(snapshot.repository.ownerName),
     getIssue: async () => null,
     getPullRequestClosingIssues: async () => [],
-    listIssues: async () => issues,
+    listIssues: async () => issues, listOpenIssueIds: async () => issues.filter(({ state }) => state === "OPEN").map(({ id }) => id),
     getPullRequestReviews: async (_repository, pullRequestNumber) => (
       evidenceByPullRequest.get(pullRequestNumber)?.reviews ?? []
     ),

@@ -494,7 +494,7 @@ describe("durable sweep walk subjects", () => {
           throw new SweepBudgetSpent(new Date("2030-01-01T06:00:00Z"));
         },
         getRepositoryById: verifiedRepositoryAt(repository.ownerName),
-        listIssues: async () => [], getIssue: async () => null, getPullRequestClosingIssues: async () => [],
+        listIssues: async () => [], listOpenIssueIds: async () => [], getIssue: async () => null, getPullRequestClosingIssues: async () => [],
         getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",
       };
       const sweep = { spend: async () => null, openPass: async (input: Parameters<PostgresSweepPassStore["open"]>[0]) => (pass = await passes.open(input)),
@@ -778,7 +778,7 @@ async function pausedFixture() {
       await state.pass!.write("first", { text: "paused page" });
       throw new SweepBudgetSpent(new Date("2030-01-01T06:00:00Z"));
     },
-    getIssue: async () => null, getPullRequestClosingIssues: async () => [],
+    getIssue: async () => null, listOpenIssueIds: async () => [], getPullRequestClosingIssues: async () => [],
     getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",
   };
   const dependencies = { store: f.store, github, now: () => at, onBudgetChange: () => {}, sweep: {

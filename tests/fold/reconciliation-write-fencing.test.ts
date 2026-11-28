@@ -593,7 +593,7 @@ function gateway(ownerName: string): ReconciliationGateway {
     getRepositoryById: verifiedRepositoryAt(ownerName),
     getIssue: async () => null,
     getPullRequestClosingIssues: async () => [],
-    listIssues: async () => [],
+    listIssues: async () => [], listOpenIssueIds: async () => [],
     getPullRequestReviews: async () => [],
     getPullRequestDiff: async () => "",
   };
