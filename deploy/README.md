@@ -745,9 +745,11 @@ commit's `package.json`, and before the install, it therefore refuses unless
 `node --version` prints `v` followed by that commit's `engines.node`. The
 refusal names the expected version, the version found and the path `command -v node`
 resolved; it also refuses, with its own message, when `node` is not on `PATH`,
-fails to print a version, or the commit has no `engines.node`. Put
+`node --version` exits nonzero, or the commit has no `engines.node`. Either put
 `/usr/local/bin` (section 3's runtime) ahead of the other `node` directories on
-`PATH`, check with `command -v node`, and re-run.
+`PATH` and check with `command -v node`, or, when `/usr/local/bin/node` is itself
+not that version, [move the host](#moving-an-existing-host-to-a-revisions-node-and-pnpm);
+then re-run.
 
 The procedure runs as one committed script. As root, from the tree root, run
 `bash scripts/deploy-revision.sh`; it applies the source-tree guards described
@@ -1509,9 +1511,10 @@ from, which is what the last paragraph of section 9 is about.
 
 Node does not follow on its own. The unit starts whatever `/usr/local/bin/node`
 points at, and `scripts/deploy-revision.sh` compares only the `node` on the
-shell's `PATH` with `engines.node`, not the unit's. On an older Node a bare
-install prints an `Unsupported engine` warning and exits 0, so nothing but this
-step stops the service from restarting on the Node the host already has.
+shell's `PATH` with `engines.node`, not the unit's. That `node` is normally
+`/usr/local/bin/node`, so the script refuses a host still on an older Node; this
+step is what moves the runtime, and the unit follows the same link on its next
+start.
 
 pnpm follows only inside the tree. There corepack by default runs the pnpm
 that the tree's `package.json` names, downloading a version it has not fetched
