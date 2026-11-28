@@ -3133,7 +3133,8 @@
         1.18
       ],
       "tests/scripts/db-migrate-env-file.test.ts": [
-        2.25
+        2.25,
+        3.27
       ],
       "tests/scripts/db-offhost-backup.test.ts": [
         7.44,
