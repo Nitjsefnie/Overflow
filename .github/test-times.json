@@ -2405,7 +2405,8 @@
       ],
       "tests/db/sweep-pass-store.test.ts": [
         3.31,
-        1.43
+        1.43,
+        4.52
       ],
       "tests/db/sweep-repository-share.test.ts": [
         11.84,
