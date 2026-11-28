@@ -1806,9 +1806,9 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
   // Each row names what its own refusal prints and what a neighbouring branch's would print instead.
   it.each<NodeRefusal>([
     ["a different Node", async (_f, found) => ({ env: { NODE_SHIM_VERSION: `v${found}` } }), (f, found) => [f.nodeVersion, found, nodeBin(f)], ["--version"]],
-    ["a Node whose --version fails", async () => ({ env: { NODE_SHIM_VERSION_RC: "1" } }), (f) => [nodeBin(f), "--version"], []],
+    ["a Node whose --version fails", async () => ({ env: { NODE_SHIM_VERSION_RC: "1" } }), (f) => [nodeBin(f), "--version"], ["engines.node"]],
     ["no engines.node", async (f) => { await writeFile(path.join(f.tree, "package.json"), "{}"); return {}; }, () => ["package.json"], ["--version"]],
-    ["no Node on PATH", async (f) => ({ env: { PATH: await pathWithoutNode(f) }, omitShims: ["node"] }), () => ["PATH"], ["--version"]],
+    ["no Node on PATH", async (f) => ({ env: { PATH: await pathWithoutNode(f) }, omitShims: ["node"] }), () => ["PATH"], ["--version", "engines.node"]],
   ])("refuses before the install when the shell resolves %s, running nothing after the guard", async (_name, setup, mentions, absent) => {
     const fixture = await makeFixture();
     const found = fixture.nodeVersion.replace(/\d+$/, (patch) => String(Number(patch) + 1));

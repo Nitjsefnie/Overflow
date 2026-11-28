@@ -645,7 +645,7 @@ fi
 # The unit runs /usr/local/bin/node, but the install, migrate and build below
 # run whatever node the caller's PATH resolves first (pnpm runs on it too), so
 # the guard refuses any Node but the deployed commit's engines.node.
-node_fix='Put the system runtime first on PATH, or move the host to the revision'"'"'s Node (deploy/README.md section 10, "Moving an existing host").'
+node_fix='Put the system runtime (/usr/local/bin) first on PATH, or move the host to the revision'"'"'s Node (deploy/README.md section 10, "Moving an existing host").'
 expected_node=$(jq -r '.engines.node // empty' "$tree/package.json") || expected_node=
 if [ -z "$expected_node" ]; then
   printf 'Could not read engines.node from %s/package.json; refusing to deploy on an unverified Node.\n' "$tree" >&2
