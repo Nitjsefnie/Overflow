@@ -168,6 +168,9 @@ jobs:
     timeout-minutes: 5
     permissions:
       issues: write
+    env:
+      # Every job naming audit pins this; no step here runs pnpm.
+      pnpm_config_ignore_pnpmfile: "true"
     steps:
       # The previous listing is the latest comment github-actions[bot] wrote
       # carrying the marker, as in coverage-comment.yml; a body equal to it,
