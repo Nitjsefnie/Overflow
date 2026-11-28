@@ -7,7 +7,7 @@
 # `git log --all`, so it never even produces a record equal to one — it misleads
 # every reader who consults the ignore list to decide what was deliberately
 # allowed, and it will never be found by the scan it belongs to. An entry is a
-# gitleaks fingerprint, `commit:file:rule:line`; `#` lines are comments.
+# gitleaks fingerprint, `[commit:]file:rule:line`; `#` marks a comment.
 #
 # Full-depth workflow checkouts can prove ancestry; a shallow checkout
 # cannot distinguish an orphan from a commit it never fetched. On a PR run,

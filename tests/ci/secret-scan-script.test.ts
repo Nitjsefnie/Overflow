@@ -15,10 +15,10 @@ const ENTRIES = readFileSync(resolve(".gitleaksignore"), "utf8")
   .map((line) => line.trim())
   .filter((line) => line !== "" && !line.startsWith("#"));
 
-const FINGERPRINT = /^([0-9a-f]{40}):(.+):([a-z0-9-]+):([1-9][0-9]*)$/;
+const FINGERPRINT = /^(?:([0-9a-f]{40}):)?(.+):([a-z0-9-]+):([1-9][0-9]*)$/;
 
 describe(".gitleaksignore", () => {
-  it("lists findings, each as the commit:file:rule:line fingerprint gitleaks emits", () => {
+  it("lists findings, each as a fingerprint gitleaks emits, with or without its commit", () => {
     expect(ENTRIES.length, "an empty ignore list is a deleted file, not an empty one").toBeGreaterThan(0);
     for (const entry of ENTRIES) expect(entry, entry).toMatch(FINGERPRINT);
   });
@@ -31,11 +31,11 @@ describe(".gitleaksignore", () => {
     for (const entry of ENTRIES) expect(FINGERPRINT.exec(entry)?.[2] ?? "", entry).toMatch(/^tests\//);
   });
 
-  it.skipIf(isShallowCheckout())("names a line that exists in the file at the commit each entry records", () => {
+  it.skipIf(isShallowCheckout())("names a line that exists in the file at its commit, or at HEAD", () => {
     for (const entry of ENTRIES) {
       const [, commit, file, , line] = FINGERPRINT.exec(entry) ?? [];
-      const lines = showFileLines(commit, file);
-      expect(lines.length, `${entry} names line ${line}, past the end of ${file} at ${commit}`).toBeGreaterThanOrEqual(Number(line));
+      const lines = showFileLines(commit ?? "HEAD", file);
+      expect(lines.length, `${entry} names line ${line}, past the end of ${file} at ${commit ?? "HEAD"}`).toBeGreaterThanOrEqual(Number(line));
     }
   });
 });
