@@ -1921,7 +1921,8 @@
       ],
       "tests/ci/verify-suppression-step.test.ts": [
         41.85,
-        30.58
+        30.58,
+        57.51
       ],
       "tests/ci/verify-workflow.test.ts": [
         0.06
