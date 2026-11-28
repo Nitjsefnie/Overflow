@@ -108,8 +108,8 @@ jobs:
           ws_file=pnpm-workspace.yaml
           npmrc_file=.npmrc
           
-          # Measured on the pinned pnpm: workspace auditConfig and auditLevel bind;
-          # pnpm_config_registry outranks .npmrc registry= and workspace registries.
+          # Each workspace key but the four exempt below is compared;
+          # pnpm_config_registry outranks .npmrc registry= and the workspace registry.
           # .npmrc strict-ssl=false or cafile= reaches a TLS server;
           # pnpm_config_strict_ssl=true beats only the first, pnpm_config_cafile neither.
           # .npmrc proxy and https-proxy are read, audit-level is not. Both files are
