@@ -511,17 +511,12 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
   it("passes when pnpm-workspace.yaml is byte-identical on both sides", async () => {
     const config = { auditConfig: { ignoreGhsas: ["GHSA-vfj7-8cjw-p6xm"] } };
     const ws = "auditConfig:\n  ignoreGhsas:\n    - GHSA-vfj7-8cjw-p6xm\npackages:\n  - \"x\"\n";
-    const fx = await fixture(BASE_PACKAGE_JSON(config), BASE_PACKAGE_JSON(config), {
-      base: { "pnpm-workspace.yaml": ws },
-      merge: { "pnpm-workspace.yaml": ws },
-    });
+    const fx = await fixture(BASE_PACKAGE_JSON(config), BASE_PACKAGE_JSON(config), { base: { "pnpm-workspace.yaml": ws }, merge: { "pnpm-workspace.yaml": ws } });
     await expectPasses(fx);
   });
 
   it("passes when the merge adds pnpm-workspace.yaml carrying no audit-affecting setting", async () => {
-    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
-      merge: { "pnpm-workspace.yaml": "packages:\n  - \"a\"\n  - \"b\"\n" },
-    });
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), { merge: { "pnpm-workspace.yaml": "packages:\n  - \"a\"\n  - \"b\"\n" } });
     await expectPasses(fx);
   });
 
@@ -544,10 +539,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     ],
     ["overrides and allowBuilds edited", "overrides:\n  a: 1.0.0\nallowBuilds:\n  b: false\n", "overrides:\n  a: 1.0.1\nallowBuilds:\n  b: true\n"],
   ])("passes a benign pnpm-workspace.yaml change: %s", async (_label, base, merge) => {
-    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
-      base: { "pnpm-workspace.yaml": base },
-      merge: { "pnpm-workspace.yaml": merge },
-    });
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), { base: { "pnpm-workspace.yaml": base }, merge: { "pnpm-workspace.yaml": merge } });
     await expectPasses(fx);
   });
 
@@ -561,9 +553,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
   });
 
   it("refuses an auditLevel moved into pnpm-workspace.yaml", async () => {
-    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
-      merge: { "pnpm-workspace.yaml": "auditLevel: critical\n" },
-    });
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), { merge: { "pnpm-workspace.yaml": "auditLevel: critical\n" } });
     await expectRefuses(fx, REFUSALS.wsDivergence);
   });
 
@@ -611,9 +601,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
   });
 
   it("refuses pnpm-workspace.yaml committed as a symlink, and never prints the target", async () => {
-    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
-      merge: {},
-    });
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), { merge: {} });
     // Swap the merge-side workspace entry for a 120000 symlink leaf via the
     // same index surgery the fixture uses for package.json.
     const id = await blobFile(fx.repo, `../../evil-workspace.yaml ${MARKER}`);
@@ -653,24 +641,17 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
 
   it("passes when .npmrc is byte-identical on both sides", async () => {
     const npmrc = "registry=http://127.0.0.1:4873/\nsave-exact=true\n";
-    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
-      base: { ".npmrc": npmrc },
-      merge: { ".npmrc": npmrc },
-    });
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), { base: { ".npmrc": npmrc }, merge: { ".npmrc": npmrc } });
     await expectPasses(fx);
   });
 
   it("passes when the merge adds .npmrc carrying none of the audited keys", async () => {
-    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
-      merge: { ".npmrc": "save-exact=true\nfund=false\n# a comment\n" },
-    });
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), { merge: { ".npmrc": "save-exact=true\nfund=false\n# a comment\n" } });
     await expectPasses(fx);
   });
 
   it("refuses an audit-level bar added in .npmrc", async () => {
-    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
-      merge: { ".npmrc": `audit-level=critical ${MARKER}\n` },
-    });
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), { merge: { ".npmrc": `audit-level=critical ${MARKER}\n` } });
     await expectRefuses(fx, REFUSALS.npmrcDivergence);
   });
 
@@ -684,9 +665,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
 
   it("refuses strict-ssl, cafile or a proxy added in .npmrc", async () => {
     for (const line of ["strict-ssl=false", "cafile=/etc/attacker.pem", "https-proxy=http://127.0.0.1:1", "save-exact=true\rca=x"]) {
-      const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
-        merge: { ".npmrc": `${line}\n` },
-      });
+      const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), { merge: { ".npmrc": `${line}\n` } });
       await expectRefuses(fx, REFUSALS.npmrcDivergence);
     }
   });
@@ -707,17 +686,12 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
   });
 
   it("refuses an unparseable .npmrc whose bytes differ from the base", async () => {
-    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
-      base: { ".npmrc": "save-exact=true\n" },
-      merge: { ".npmrc": "save-exact=true\n[attacker]\nregistry=x\n" },
-    });
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), { base: { ".npmrc": "save-exact=true\n" }, merge: { ".npmrc": "save-exact=true\n[attacker]\nregistry=x\n" } });
     await expectRefuses(fx, REFUSALS.npmrcParse);
   });
 
   it("refuses .npmrc committed as a symlink", async () => {
-    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
-      merge: {},
-    });
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), { merge: {} });
     const id = await blobFile(fx.repo, `../../evil-npmrc ${MARKER}`);
     git(fx.repo, "update-index", "--add", "--cacheinfo", `120000,${id},.npmrc`);
     const tree = git(fx.repo, "write-tree");
@@ -726,9 +700,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
   });
 
   it("matches .npmrc keys case-insensitively", async () => {
-    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
-      merge: { ".npmrc": "Audit-Level=critical\n" },
-    });
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), { merge: { ".npmrc": "Audit-Level=critical\n" } });
     await expectRefuses(fx, REFUSALS.npmrcDivergence);
   });
 
@@ -777,18 +749,12 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
   ])("refuses %s in the PyYAML manifest by the pin grammar", async (_label, pinLine) => {
     // The fixture's base manifest is the committed pin; the extra.base entry
     // overrides it with the broken content the grammar gate must refuse.
-    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
-      base: { ".github/requirements-pyyaml.txt": pinLine },
-      merge: { "pnpm-workspace.yaml": "packages:\n  - \"b\"\n" },
-    });
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), { base: { ".github/requirements-pyyaml.txt": pinLine }, merge: { "pnpm-workspace.yaml": "packages:\n  - \"b\"\n" } });
     await expectRefuses(fx, pinLine.includes("\n") ? REFUSALS.manifestSecondLine : REFUSALS.manifestGrammar);
   });
 
   it("fails closed when the hash-pinned install itself fails", async () => {
-    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
-      base: { "pnpm-workspace.yaml": "packages:\n  - \"a\"\n" },
-      merge: { "pnpm-workspace.yaml": "packages:\n  - \"b\"\n" },
-    });
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), { base: { "pnpm-workspace.yaml": "packages:\n  - \"a\"\n" }, merge: { "pnpm-workspace.yaml": "packages:\n  - \"b\"\n" } });
     const result = await runStep(fx, { failPip: true });
     expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
   });
