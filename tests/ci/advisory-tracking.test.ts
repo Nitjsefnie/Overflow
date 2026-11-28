@@ -30,7 +30,7 @@ it("runs daily at a minute no other cron fires on: a read-only job audits main, 
   // The push leg's five pins, setup and pnpm on the audit job; the body handed over as an output; the token only where it posts.
   expect([audit!.env, audit!.steps.slice(1, 3), audit!.steps.length, audit!.steps[0]!.with, listing.env, audit!.outputs]).toEqual([read("dependency-audit.yml").jobs["dependency-audit"]!.env,
     pushSteps.slice(2, 4), 4, { ref: "main", "persist-credentials": false }, undefined, { body: "${{ steps.listing.outputs.body }}" }]);
-  expect([comment!.env, comment!.steps, /\b(pnpm|npm|npx|node|corepack)\b/.test(posting.run!)]).toEqual([undefined, [posting], false]);
+  expect([comment!.env, comment!.steps, /\b(pnpm|npm|npx|node|corepack)\b/.test(posting.run!)]).toEqual([{ pnpm_config_ignore_pnpmfile: "true" }, [posting], false]);
   expect(posting.env).toEqual({ GH_TOKEN: "${{ github.token }}", OVERFLOW_ADVISORY_TRACKING_ISSUE: "1714", OVERFLOW_ADVISORY_BODY: "${{ needs.advisory-audit.outputs.body }}" });
   for (const step of [...audit!.steps, posting]) expect([step.run?.includes("${{"), step.if, step["continue-on-error"]]).toEqual([step.run === undefined ? undefined : false, undefined, undefined]);
   expect(Object.values(JSON.parse(readFileSync(resolve(".github/required-checks.json"), "utf8")) as string[][]).flat()).not.toContain(".github/workflows/advisory-tracking.yml");
