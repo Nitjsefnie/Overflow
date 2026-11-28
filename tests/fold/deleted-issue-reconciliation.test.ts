@@ -9,6 +9,7 @@ import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { RECONCILIATION_FULL_REPAIR_MS } from "@/lib/fold/full-repair-interval";
 import { unlistedOpenIssues } from "@/lib/fold/unlisted-open-issues";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
+import { GitHubGateway } from "@/lib/github/client";
 import { GitHubGraphqlInvalidResponseError } from "@/lib/github/errors";
 import { GitHubResponseTooLargeError, MAX_SUCCESS_BODY_BYTES } from "@/lib/github/response-text";
 import type { GitHubIssue } from "@/lib/github/types";
@@ -113,6 +114,19 @@ describe("an issue the forge no longer has", () => {
     for (const reason of ["WEBHOOK", "WEBHOOK"] as const) await f.fold(reason);
     expect(f.listings).toEqual([new Date("2026-09-08T10:04:00Z")]);
   });
+
+  it("charges every page of the open listing to the fold's recorded cost", async () => {
+    const f = await fixture();
+    await f.fold();
+    const pages = [[f.cheapest], [f.next]];
+    const forge = new GitHubGateway({ accessToken: "test-token", fetch: async () => Response.json(pages.shift()!.map(({ id, number, updatedAt }) => ({ id, number, updated_at: updatedAt })),
+      { headers: pages.length > 0 ? { link: '<https://api.github.com/repos/octo/repo/issues?page=2>; rel="next"' } : {} }) });
+    f.github.listOpenIssueIds = (reference) => forge.listOpenIssueIds(reference);
+    const { runId } = await f.fold("WEBHOOK", RECONCILIATION_FULL_REPAIR_MS);
+    expect(await sql`select graphql_cost, graphql_observed_responses, graphql_unmeasured_responses from reconciliation_runs where id = ${runId}`)
+      .toEqual([{ graphql_cost: null, graphql_observed_responses: 0, graphql_unmeasured_responses: 2 }]);
+    expect(pages).toEqual([]);
+  });
 });
 
 async function fixture() {
@@ -165,7 +179,7 @@ async function fixture() {
   };
 
   return {
-    id: String(repository.id), store, cheapest, next, scans, issueReads, listings,
+    id: String(repository.id), store, github, cheapest, next, scans, issueReads, listings,
     fold(reason?: "WEBHOOK", elapsed = 120_000) {
       clock = new Date(clock.getTime() + elapsed);
       return reconcileRepository({ store, github, now: () => clock, onBudgetChange: () => {} }, String(repository.id), { reason });

@@ -25,6 +25,7 @@ import {
 } from "@/lib/gitlab/map";
 import { checkSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
 import { gitlabApiFetch } from "@/lib/security/gitlab-api-fetch";
+import { recordGraphqlResponseCost } from "@/lib/github/graphql-cost";
 import { logField } from "@/lib/webhooks/log-field";
 import { listGitLabSubjectsPage, type GitLabSubjectsPageOptions } from "@/lib/gitlab/subject-listing";
 
@@ -140,7 +141,7 @@ export class GitLabGateway {
 
   public async listOpenIssueIds(repository: GitHubRepositoryReference): Promise<number[]> {
     const path = `/projects/${segment(`${repository.owner}/${repository.name}`)}/issues?state=opened`;
-    return (await this.listAllPages<GitLabIssueObject>(path, "keyset")).map(({ id }) => id);
+    return (await this.listAllPages<GitLabIssueObject>(path, "keyset", () => recordGraphqlResponseCost(null))).map(({ id }) => id);
   }
 
   public walkReconciliation(reference: GitHubRepositoryReference, input: ForgeWalkInput) {
@@ -624,7 +625,7 @@ export class GitLabGateway {
     return { status, headers, body };
   }
 
-  private async listAllPages<T>(path: string, mode: "keyset" | "offset"): Promise<T[]> {
+  private async listAllPages<T>(path: string, mode: "keyset" | "offset", onPage?: () => void): Promise<T[]> {
     // Pagination controls are endpoint-specific. A server Link is authoritative;
     // header fallbacks update the current query without losing opaque parameters.
     const items = new CollectionWalkBound<T>(path);
@@ -649,6 +650,7 @@ export class GitLabGateway {
         cursors.add(cursor);
       }
       const response = await this.request(`${target.pathname.slice(api.pathname.length - 1)}${target.search}`);
+      onPage?.();
       items.add(await responseJsonArray<T>(response, path));
       const link = nextLink(response.headers.get("link"));
       if (link !== null) {
