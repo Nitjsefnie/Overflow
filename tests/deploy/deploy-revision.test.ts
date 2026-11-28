@@ -1808,7 +1808,8 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     ["a different Node", async (_f, found) => ({ env: { NODE_SHIM_VERSION: `v${found}` } }), (f, found) => [f.nodeVersion, found, nodeBin(f)], ["--version"]],
     ["a Node whose --version fails", async () => ({ env: { NODE_SHIM_VERSION_RC: "1" } }), (f) => [nodeBin(f), "--version"], ["engines.node"]],
     ["no engines.node", async (f) => { await writeFile(path.join(f.tree, "package.json"), "{}"); return {}; }, () => ["package.json"], ["--version"]],
-    ["no Node on PATH", async (f) => ({ env: { PATH: await pathWithoutNode(f) }, omitShims: ["node"] }), () => ["PATH"], ["--version", "engines.node"]],
+    ["no Node on PATH", async (f) => ({ env: { PATH: await pathWithoutNode(f) }, omitShims: ["node"] }), () => ["not on PATH"], ["--version", "engines.node"]],
+    ["a Node whose version only starts with engines.node", async (f) => ({ env: { NODE_SHIM_VERSION: `v${f.nodeVersion}0` } }), (f) => [`v${f.nodeVersion}0`], ["--version"]],
   ])("refuses before the install when the shell resolves %s, running nothing after the guard", async (_name, setup, mentions, absent) => {
     const fixture = await makeFixture();
     const found = fixture.nodeVersion.replace(/\d+$/, (patch) => String(Number(patch) + 1));
