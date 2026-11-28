@@ -292,15 +292,9 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
       "pnpm-workspace.yaml",
     );
     expect(step.run, "the step must read .npmrc's audit-affecting keys").toContain(".npmrc");
-    expect(step.run, "the projection must name the measured workspace settings").toMatch(
-      /"auditConfig", "auditLevel", "registries", "httpsProxy", "proxy", "noProxy", "strictSsl", "cafile", "ca", "registry"/,
-    );
     expect(step.run, "the projection must name the measured .npmrc keys").toMatch(
       /"audit-level", "registry", "strict-ssl", "cafile", "ca", "proxy", "https-proxy"/,
     );
-    for (const key of ["auditConfig", "auditLevel", "registries", "httpsProxy", "proxy", "noProxy", "strictSsl", "cafile", "ca", "registry", "audit-level", "strict-ssl", "https-proxy"]) {
-      expect(step.run, key).toContain(`"${key}"`);
-    }
   });
 
   it("prints only the fixed refusal constants — no interpolated, pull-request-controlled bytes", () => {
@@ -543,6 +537,12 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
       "packages:\n  - \"x\"\n",
       "# where the packages live\npackages:\n    - \"x\"\n",
     ],
+    [
+      "audit, pnpmfile and include settings reformatted",
+      "audit:\n  ignore: [GHSA-vfj7-8cjw-p6xm]\npnpmfile: ./hooks.cjs\ninclude:\n  ./more.yaml: [registries]\n",
+      "# unchanged settings\naudit:\n  ignore:\n    - GHSA-vfj7-8cjw-p6xm\npnpmfile: './hooks.cjs'\ninclude:\n  ./more.yaml:\n    - registries\n",
+    ],
+    ["overrides and allowBuilds edited", "overrides:\n  a: 1.0.0\nallowBuilds:\n  b: false\n", "overrides:\n  a: 1.0.1\nallowBuilds:\n  b: true\n"],
   ])("passes a benign pnpm-workspace.yaml change: %s", async (_label, base, merge) => {
     const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
       base: { "pnpm-workspace.yaml": base },
@@ -582,6 +582,24 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
       },
     });
     await expectRefuses(fx, REFUSALS.wsDivergence);
+  });
+
+  // Each setting below was measured on pnpm 12.23.0 to reach main's audit while the old key list
+  // passed, except the last two rows: a key nobody classified, and a key that is not a string.
+  const WS_BASE = "packages:\n  - \"x\"\nauditConfig:\n  ignoreGhsas:\n    - GHSA-vfj7-8cjw-p6xm\n";
+  it.each([
+    ["an audit section", `${WS_BASE}audit:\n  ignore:\n    - ${MARKER}\n`],
+    ["a pnpmfile", `${WS_BASE}pnpmfile: ./hooks.cjs\n`],
+    ["a globalPnpmfile", `${WS_BASE}globalPnpmfile: ./hooks.cjs\n`],
+    ["an include", `${WS_BASE}include:\n  ./more.yaml:\n    - pnpmfile\n`],
+    ["a pnpmfile beside a shrunk ignoreGhsas", "packages:\n  - \"x\"\nauditConfig:\n  ignoreGhsas: []\npnpmfile: ./hooks.cjs\n"],
+    ["a configDependencies", `${WS_BASE}configDependencies:\n  pnpm-plugin-x: 1.0.0\n`],
+    ["an ignorePnpmfile", `${WS_BASE}ignorePnpmfile: false\n`],
+    ["a key nobody classified", `${WS_BASE}futureSetting: ${MARKER}\n`],
+    ["a key that is not a string", `${WS_BASE}true: ${MARKER}\n`, REFUSALS.wsParse],
+  ])("refuses %s added to pnpm-workspace.yaml", async (_label, merge, refusal = REFUSALS.wsDivergence) => {
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), { base: { "pnpm-workspace.yaml": WS_BASE }, merge: { "pnpm-workspace.yaml": merge } });
+    await expectRefuses(fx, refusal);
   });
 
   it("refuses an unparseable pnpm-workspace.yaml whose bytes differ from the base", async () => {
