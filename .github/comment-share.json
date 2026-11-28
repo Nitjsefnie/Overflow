@@ -436,8 +436,8 @@
     10949
   ],
   "scripts/secret-scan-baseline.sh": [
-    2368,
-    5067
+    2367,
+    5119
   ],
   "scripts/seed-board-benchmark.ts": [
     5646,
