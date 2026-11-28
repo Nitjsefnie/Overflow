@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -209,6 +209,23 @@ describe("the dependency audit workflow's audit step", () => {
         ).toBe(value);
       }
     }
+  });
+
+  it("runs every pnpm audit in the workflows with pnpmfile hooks disabled", async () => {
+    // A pnpmfile runs inside `pnpm audit` and can rewrite its config, so no audit may load one.
+    type Doc = { env?: Record<string, string>; jobs?: Record<string, { env?: Record<string, string>; steps?: Step[] }> };
+    const audits: string[] = [];
+    for (const file of (await readdir(resolve(".github/workflows"))).filter((name) => /\.ya?ml$/.test(name))) {
+      const doc = parse(await readFile(resolve(".github/workflows", file), "utf8")) as Doc;
+      for (const [id, job] of Object.entries(doc.jobs ?? {})) {
+        for (const step of (job.steps ?? []).filter((entry) => /\bpnpm\s+audit\b/.test(entry.run ?? ""))) {
+          audits.push(`${file}:${id}`);
+          expect({ ...doc.env, ...job.env, ...step.env }.pnpm_config_ignore_pnpmfile, `${file} ${id} "${step.name}" runs pnpm audit`).toBe("true");
+        }
+      }
+    }
+    expect(audits, "main's audit legs and its advisory listing are in the sweep").toEqual(
+      expect.arrayContaining(["dependency-audit.yml:dependency-audit", "advisory-tracking.yml:advisory-audit"]));
   });
 
   it("signals every process it kills with SIGKILL", () => {

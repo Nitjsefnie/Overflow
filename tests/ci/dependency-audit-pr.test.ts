@@ -38,6 +38,7 @@ const ENV_PINS: Record<string, string> = {
   pnpm_config_strict_ssl: "true",
   pnpm_config_audit_level: "low",
   pnpm_config_pm_on_fail: "ignore",
+  pnpm_config_ignore_pnpmfile: "true",
 };
 
 /** Every fixed refusal the step's prologue can print; content-free constants. */
