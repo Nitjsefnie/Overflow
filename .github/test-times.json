@@ -1843,7 +1843,8 @@
       "tests/ci/audit-suppression-step.test.ts": [
         21.71,
         13.57,
-        27.76
+        27.76,
+        35.25
       ],
       "tests/ci/base-freshness.test.ts": [
         1.2
@@ -2106,7 +2107,8 @@
       ],
       "tests/dashboard/queries-postgres.test.ts": [
         3.18,
-        1.67
+        1.67,
+        4.49
       ],
       "tests/dashboard/queries.test.ts": [
         9.59,
@@ -2189,7 +2191,8 @@
       ],
       "tests/db/closed-pr-dispute-store.test.ts": [
         4.22,
-        2.24
+        2.24,
+        6.25
       ],
       "tests/db/closed-pr-dispute-url.test.ts": [
         4.02,
