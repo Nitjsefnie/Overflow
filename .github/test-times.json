@@ -3195,7 +3195,8 @@
         0.3
       ],
       "tests/scripts/overflow-alert.test.ts": [
-        13.06
+        13.06,
+        9.41
       ],
       "tests/scripts/overflow-bounce.test.ts": [
         1.05
@@ -3248,7 +3249,8 @@
       ],
       "tests/security/credential-reencryption-postgres.test.ts": [
         5.16,
-        2.55
+        2.55,
+        1.52
       ],
       "tests/security/github-authorization-url.test.ts": [
         0.27
