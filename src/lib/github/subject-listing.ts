@@ -34,11 +34,18 @@ export async function listOpenIssueIds(
 ): Promise<number[]> {
   const ids: number[] = [];
   const seen = new Set<string>();
-  // A REST page carries no point cost: the fold counts it unmeasured, once it arrives.
-  const counted = { request: async (path: string) => { const response = await deps.request(path); recordGraphqlResponseCost(null); return response; } };
+  // A REST page carries no point cost: the fold counts it unmeasured once its response is received, before it is parsed.
+  const counted: Pick<GitHubGateway, "request"> = {
+    request: async (...args) => {
+      const response = await deps.request(...args);
+      recordGraphqlResponseCost(null);
+      return response;
+    },
+  };
   let cursor: string | null = null;
   do {
-    const page: Awaited<ReturnType<typeof listSubjectPage>> = await listSubjectPage(counted, reference, { state: "open", cursor });
+    const page: Awaited<ReturnType<typeof listSubjectPage>> =
+      await listSubjectPage(counted, reference, { state: "open", cursor });
     for (const subject of page.subjects) if (subject.kind === "issue") ids.push(subject.id);
     cursor = page.nextCursor;
     if (cursor !== null && seen.has(cursor)) throw new Error("Open issue listing repeated a cursor.");

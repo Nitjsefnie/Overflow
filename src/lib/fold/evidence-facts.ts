@@ -257,7 +257,7 @@ export async function synchronizeReconciliationEvidence(
     (repository_id, version, format_version, checkpoint, last_full_pass_at, last_open_listing_at, omitted_oversized_facts)
     values (${repositoryId}, ${(current?.version ?? 0) + 1}, ${RECONCILIATION_EVIDENCE_FORMAT},
       ${synchronization.scanStartedAt}, ${synchronization.full ? synchronization.scanStartedAt : current?.last_full_pass_at ?? null},
-      ${synchronization.full || synchronization.openListed === true ? synchronization.scanStartedAt : current?.last_open_listing_at ?? null},
+      ${synchronization.full || synchronization.openListed ? synchronization.scanStartedAt : current?.last_open_listing_at ?? null},
       ${oversized.length})
     on conflict (repository_id) do update set version = excluded.version, format_version = excluded.format_version,
       checkpoint = excluded.checkpoint, last_full_pass_at = excluded.last_full_pass_at, last_open_listing_at = excluded.last_open_listing_at,
