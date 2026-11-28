@@ -1,4 +1,4 @@
-import { unlistedOpenIssues } from "@/lib/fold/unlisted-open-issues";
+import { openListingDue, unlistedOpenIssues } from "@/lib/fold/unlisted-open-issues";
 import { discardInactivePassAfterRun, discardSweepPass, holdSweepPass, StagedPassDataUnreadable, type ReconciliationSweepControl, type SweepPass } from "@/lib/fold/sweep-pass";
 import type { ReconciliationJobReason } from "@/lib/fold/reconciliation-jobs";
 import { readEnv } from "@/lib/env";
@@ -345,6 +345,7 @@ async function reconcileRepositoryAfterRepositoryRead(
 
         const full = allowsFull && (options?.reason === "SWEEP" || unsafeCache || rederive
           || scanStartedAt.getTime() - cached!.lastFullPassAt.getTime() >= RECONCILIATION_FULL_REPAIR_MS);
+        const openListed = !full && openListingDue(cached!, scanStartedAt);
 
         pass = full && budgetBound && dependencies.sweep !== undefined
           ? await dependencies.sweep.openPass({ repositoryId,
@@ -442,7 +443,7 @@ async function reconcileRepositoryAfterRepositoryRead(
                   }
                 }
               }
-              for (const issue of await unlistedOpenIssues(dependencies.github, reference, retained)) affected.set(issue.id, issue);
+              for (const issue of openListed ? await unlistedOpenIssues(dependencies.github, reference, retained) : []) affected.set(issue.id, issue);
               const forgetOpen = (id: number) => { if (retained.get(id)?.state === "OPEN") retained.delete(id); };
               for (const subject of affected.values()) {
                 if (changed.has(subject.id)) continue;
@@ -549,7 +550,7 @@ async function reconcileRepositoryAfterRepositoryRead(
         const expectedVersion = pass === undefined ? cached?.version ?? null
           : (await dependencies.store.getReconciliationEvidence(repositoryId))?.version ?? null;
         const deltas = await dependencies.store.materialize({ repositoryId, runId, fold, cost, synchronization: {
-          expectedVersion, scanStartedAt, full, issues: githubIssues,
+          expectedVersion, scanStartedAt, full, openListed, issues: githubIssues,
           keptIssueGitHubIds: githubIssues.filter((issue) => issue.openingEvidenceUnreadable === true).map((issue) => issue.id),
           pullRequests: [...pullRequestEvidence].map(([id, evidence]) => ({ id, ...evidence })), dirtySubjects,
         } });

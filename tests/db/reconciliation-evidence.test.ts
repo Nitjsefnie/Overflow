@@ -92,7 +92,7 @@ describe("durable reconciliation evidence", () => {
     const restarted = new PostgresFoldStore(sql);
     const cached = await restarted.getReconciliationEvidence(repositoryId);
     expect(cached).toEqual({
-      version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, checkpoint: first, lastFullPassAt: first, omittedOversizedFacts: 0,
+      version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, checkpoint: first, lastFullPassAt: first, lastOpenListingAt: first, omittedOversizedFacts: 0,
       issues: [{ ...rawIssue(), body: undefined }], pullRequests: [{ id: 201, reviews: [], rawDiff: "retained diff" }],
     });
     expect(cached!.issues[0]).not.toHaveProperty("body");
@@ -109,7 +109,7 @@ describe("durable reconciliation evidence", () => {
         issues: [{ ...rawIssue(), body: "edited" }], pullRequests: [] } }));
     const replaced = await store.getReconciliationEvidence(repositoryId);
     expect(replaced).toMatchObject({
-      version: 2, checkpoint: second, lastFullPassAt: first, pullRequests: [],
+      version: 2, checkpoint: second, lastFullPassAt: first, lastOpenListingAt: first, pullRequests: [],
     });
     // The writer narrows whatever it is handed: the wide body above must not
     // reach the jsonb.
@@ -118,7 +118,7 @@ describe("durable reconciliation evidence", () => {
     await store.withRepositoryReconciliation(repositoryId, async () => store.materialize({ repositoryId, runId: await store.beginRun(repositoryId), fold,
       synchronization: { ...synchronization(), expectedVersion: 2, scanStartedAt: second, issues: [], pullRequests: [] } }));
     expect(await store.getReconciliationEvidence(repositoryId)).toMatchObject({
-      version: 3, checkpoint: second, lastFullPassAt: second, issues: [], pullRequests: [],
+      version: 3, checkpoint: second, lastFullPassAt: second, lastOpenListingAt: second, issues: [], pullRequests: [],
     });
   });
 
@@ -212,7 +212,7 @@ describe("durable reconciliation evidence", () => {
     });
     const document = await readReconciliationEvidence(countingSql, repositoryId);
     expect(document).toEqual({
-      version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, checkpoint: first, lastFullPassAt: first, omittedOversizedFacts: 0,
+      version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, checkpoint: first, lastFullPassAt: first, lastOpenListingAt: first, omittedOversizedFacts: 0,
       issues: [{ ...rawIssue(), body: undefined }], pullRequests: [{ id: 201, reviews: [], rawDiff: "retained diff" }],
     });
     expect(statements).toBe(1);

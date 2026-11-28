@@ -6,6 +6,7 @@ import { listEligibleIssues } from "@/lib/dashboard/eligible-issues";
 import type { DashboardSql } from "@/lib/dashboard/queries";
 import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
+import { RECONCILIATION_FULL_REPAIR_MS } from "@/lib/fold/full-repair-interval";
 import { unlistedOpenIssues } from "@/lib/fold/unlisted-open-issues";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
 import { GitHubGraphqlInvalidResponseError } from "@/lib/github/errors";
@@ -43,13 +44,15 @@ async function quietly<T>(run: () => Promise<T>) {
 describe("an issue the forge no longer has", () => {
   const notFound = async () => { throw new Error("GitHub GraphQL request failed. NOT_FOUND: Could not resolve to an Issue with the number of 7."); };
 
-  it.each([["answered as not found", notFound], ["answered as null", async () => null]])("leaves the board on an incremental fold when %s, and the exception moves on", async (_name, answer) => {
+  it.each([["answered as not found", notFound], ["answered as null", async () => null]])("leaves the board on the incremental fold the interval allows when %s, and the exception moves on", async (_name, answer) => {
     const f = await fixture();
     await f.fold();
     expect(await f.board()).toEqual([f.cheapest.number]);
 
     f.forget(f.cheapest, answer);
-    expect(await quietly(() => f.fold("WEBHOOK"))).toMatchObject({ skipped: false, removed: 1 });
+    expect(await quietly(() => f.fold("WEBHOOK"))).toMatchObject({ skipped: false, removed: 0 });
+    expect(await f.board()).toEqual([f.cheapest.number]);
+    expect(await quietly(() => f.fold("WEBHOOK", RECONCILIATION_FULL_REPAIR_MS))).toMatchObject({ skipped: false, removed: 1 });
 
     expect(f.scans.at(-1)).toBeDefined();
     expect(await f.board()).toEqual([f.next.number]);
@@ -63,7 +66,7 @@ describe("an issue the forge no longer has", () => {
     expect(f.issueReads).toEqual([]);
     f.unlist(f.cheapest);
 
-    expect(await f.fold("WEBHOOK")).toMatchObject({ skipped: false, removed: 0 });
+    expect(await f.fold("WEBHOOK", RECONCILIATION_FULL_REPAIR_MS)).toMatchObject({ skipped: false, removed: 0 });
     expect(await f.board()).toEqual([f.cheapest.number]);
     expect(f.issueReads).toEqual([f.cheapest.number]);
   });
@@ -74,7 +77,8 @@ describe("an issue the forge no longer has", () => {
     const f = await fixture();
     await f.fold();
     f.forget(f.cheapest, async () => { throw error; });
-    expect(await quietly(() => f.fold("WEBHOOK"))).toMatchObject({ skipped: false, removed: 0 });
+    expect(await quietly(() => f.fold("WEBHOOK", RECONCILIATION_FULL_REPAIR_MS))).toMatchObject({ skipped: false, removed: 0 });
+    expect(f.issueReads).toEqual([f.cheapest.number]);
     expect(await f.board()).toEqual([f.cheapest.number]);
   });
 
@@ -85,12 +89,29 @@ describe("an issue the forge no longer has", () => {
     expect(listOpenIssueIds).not.toHaveBeenCalled();
   });
 
-  it("fails the run and keeps the issue when its read fails transiently", async () => {
+  it("fails the run and keeps the issue when its read fails transiently, and the next fold lists again", async () => {
     const f = await fixture();
     await f.fold();
     f.forget(f.cheapest, async () => { throw new Error("GitHub issue read broke."); });
+    await expect(quietly(() => f.fold("WEBHOOK", RECONCILIATION_FULL_REPAIR_MS))).rejects.toThrow("Unable to reconcile repository.");
     await expect(quietly(() => f.fold("WEBHOOK"))).rejects.toThrow("Unable to reconcile repository.");
     expect(await f.board()).toEqual([f.cheapest.number]);
+  });
+
+  it("lists the open issues at most once per interval of incremental folds, a full pass counting as one", async () => {
+    const f = await fixture();
+    await f.fold();
+    for (const elapsed of [120_000, 120_000, RECONCILIATION_FULL_REPAIR_MS - 240_001, 1, 120_000, RECONCILIATION_FULL_REPAIR_MS - 120_000]) await f.fold("WEBHOOK", elapsed);
+    const fullPassAt = Date.parse("2026-09-08T10:02:00Z");
+    expect(f.listings).toEqual([1, 2].map((intervals) => new Date(fullPassAt + intervals * RECONCILIATION_FULL_REPAIR_MS)));
+  });
+
+  it("lists on the next fold when the stored listing time is absent, as on a row an earlier release wrote", async () => {
+    const f = await fixture();
+    await f.fold();
+    await sql`update repository_reconciliation_evidence set last_open_listing_at = null where repository_id = ${f.id}`;
+    for (const reason of ["WEBHOOK", "WEBHOOK"] as const) await f.fold(reason);
+    expect(f.listings).toEqual([new Date("2026-09-08T10:04:00Z")]);
   });
 });
 
@@ -123,6 +144,7 @@ async function fixture() {
   const answers = new Map<number, () => Promise<GitHubIssue | null>>();
   const scans: Array<string | undefined> = [];
   const issueReads: number[] = [];
+  const listings: Date[] = [];
   const store = new PostgresFoldStore(sql, encryptionKey);
   let clock = new Date("2026-09-08T10:00:00Z");
 
@@ -133,7 +155,7 @@ async function fixture() {
       scans.push(options?.since);
       return structuredClone(upstream.filter((row) => options?.since === undefined || Date.parse(row.updatedAt) >= Date.parse(options.since)));
     },
-    listOpenIssueIds: async () => upstream.filter((row) => row.state === "OPEN" && !unlisted.has(row.id)).map(({ id }) => id),
+    listOpenIssueIds: async () => (listings.push(clock), upstream).filter((row) => row.state === "OPEN" && !unlisted.has(row.id)).map(({ id }) => id),
     getIssue: async (_reference, subject) => {
       issueReads.push(subject.number);
       const answer = answers.get(subject.id);
@@ -143,9 +165,9 @@ async function fixture() {
   };
 
   return {
-    id: String(repository.id), store, cheapest, next, scans, issueReads,
-    fold(reason?: "WEBHOOK") {
-      clock = new Date(clock.getTime() + 120_000);
+    id: String(repository.id), store, cheapest, next, scans, issueReads, listings,
+    fold(reason?: "WEBHOOK", elapsed = 120_000) {
+      clock = new Date(clock.getTime() + elapsed);
       return reconcileRepository({ store, github, now: () => clock, onBudgetChange: () => {} }, String(repository.id), { reason });
     },
     forget(gone: GitHubIssue, answer: () => Promise<GitHubIssue | null>) {

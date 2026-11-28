@@ -106,6 +106,7 @@ export type ReconciliationEvidence = {
   formatVersion: number;
   checkpoint: Date;
   lastFullPassAt: Date;
+  lastOpenListingAt?: Date | null;
   /**
    * How many facts the most recent write omitted from this cache as oversized.
    * While it is above zero the cache has holes, so a partial pass could read
@@ -122,6 +123,7 @@ export type ReconciliationSynchronization = {
   expectedVersion: number | null;
   scanStartedAt: Date;
   full: boolean;
+  openListed?: boolean;
   /** Fresh upstream reads still carry their body; retained cached issues do not. */
   issues: Array<GitHubIssue | NarrowedCachedIssue>;
   keptIssueGitHubIds?: number[];
