@@ -619,24 +619,35 @@ cp .github/workflows/*.yml .github/workflows-pr/
   });
 
   it("uses the package Node version for setup and coverage, and labels each PR matrix leg with its runtime", async () => {
-    const { engines }: { engines: { node: string } } = JSON.parse(await readFile(resolve("package.json"), "utf8"));
-    expect(engines.node).toMatch(/^\d+\.\d+\.\d+$/);
+    const pkg: { engines: { node: string } } = JSON.parse(await readFile(resolve("package.json"), "utf8"));
+    // GitHub reads `${{ matrix.node }}` and `${{matrix.node}}` alike; no compared expression holds a quoted string.
+    const expression = (value: unknown) => String(value).replace(/\$\{\{(.*?)\}\}/gs, (_, inner: string) => "${{" + inner.replace(/\s/g, "") + "}}");
     for (const file of await workflowFiles()) {
-      for (const [jobName, job] of Object.entries((await readWorkflow(file)).jobs)) {
+      const workflow = await readWorkflow(file);
+      for (const [jobName, job] of Object.entries(workflow.jobs)) {
         const location = `${file} jobs.${jobName}`;
-        let version = engines.node;
-        // On an upgrade this job also measures the base runtime for the relay on main.
+        let version = pkg.engines.node;
+        // On an upgrade this job also measures the base runtime for the relay on main. The runtime axis is read from a
+        // declared output of a job it needs, not followed to the step that writes it.
         if (file === "pr-suite.yml" && jobName === "test") {
-          const runtimeAxes = Object.entries(job.strategy!.matrix).filter(([, source]) =>
-            source === "${{ fromJSON(needs.plan.outputs.nodes) }}");
+          const runtimeAxes = Object.entries(job.strategy!.matrix).filter(([, source]) => {
+            const [, need = "", output = ""] = /^\$\{\{fromJSON\(needs\.([\w-]+)\.outputs\.([\w-]+)\)\}\}$/.exec(expression(source)) ?? [];
+            return [job.needs ?? []].flat().includes(need) && Object.hasOwn(workflow.jobs[need]?.outputs ?? {}, output);
+          });
           expect(runtimeAxes, location).toHaveLength(1);
           version = "${{ matrix." + runtimeAxes[0]![0] + " }}";
           expect(job.steps.filter((s) => s.uses?.startsWith("actions/setup-node@")), location).toHaveLength(1);
           expect(job.steps.filter((s) => s.uses?.startsWith("Nitjsefnie-Actions/test-ratchet/run@")), location).toHaveLength(1);
         }
-        for (const step of job.steps) {
+        for (const [index, step] of job.steps.entries()) {
           if (step.uses?.startsWith("actions/setup-node@")) {
-            expect(step.with?.["node-version"], location).toBe(version);
+            // setup-node reads engines.node from the workspace's package.json when it has no volta or devEngines entry;
+            // a checkout setting ref, repository or path would hand it another revision's file, or none.
+            const checkouts = job.steps.slice(0, index).filter((s) => s.uses?.startsWith("actions/checkout@"));
+            const readsPackage = step.with?.["node-version-file"] === "package.json" && step.with["node-version"] === undefined
+              && checkouts.length > 0 && checkouts.every((s) => !["ref", "repository", "path"].some((key) => Object.hasOwn(s.with ?? {}, key)))
+              && !Object.hasOwn(pkg, "volta") && !Object.hasOwn(pkg, "devEngines");
+            expect(readsPackage ? pkg.engines.node : expression(step.with?.["node-version"]), location).toBe(expression(version));
           }
           const cell = `ubuntu-latest-node${version}`;
           if (step.uses?.startsWith("Nitjsefnie-Actions/test-ratchet/plan@")) {
@@ -645,14 +656,14 @@ cp .github/workflows/*.yml .github/workflows-pr/
             // a recorded cell named beside the new one or seeds the new cell's records.
             const lines = (text: unknown) => String(text).split("\n").map((line) => line.trim()).filter(Boolean);
             const names = lines(step.with?.cell);
-            expect(names, `${location} ${step.uses}`).toContain(cell);
+            expect(names.map(expression), `${location} ${step.uses}`).toContain(expression(cell));
             const { cells } = JSON.parse(await readFile(resolve(String(step.with?.times)), "utf8")) as { cells: Record<string, object> };
             const files = globSync(lines(step.with?.tests));
             expect(names.some((name) => files.some((file) => Object.hasOwn(cells[name] ?? {}, file))),
               `${location}: no cell named in plan's cell: records a file its tests: globs match, so the plan collapses to one`
               + ` shard; name a recorded cell beside ${cell} in cell:, or seed ${cell}'s records in ${String(step.with?.times)}`).toBe(true);
           } else if (step.uses?.startsWith("Nitjsefnie-Actions/test-ratchet/")) {
-            expect(step.with?.cell, `${location} ${step.uses}`).toBe(cell);
+            expect(expression(step.with?.cell), `${location} ${step.uses}`).toBe(expression(cell));
           }
         }
       }
