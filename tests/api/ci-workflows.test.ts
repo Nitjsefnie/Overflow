@@ -101,7 +101,7 @@ describe("GitHub Actions release gates", () => {
     expect(workflow.concurrency).toEqual({ group: "pr-gate-${{ github.event.pull_request.number }}", "cancel-in-progress": false });
     expect(gateBehavior(workflow.jobs)).toEqual({
       gate: {
-        if: "github.event.pull_request.user.type != 'Bot' && github.event.pull_request.draft == false",
+        if: "github.event.pull_request.user.type != 'Bot'",
         "timeout-minutes": 5,
         steps: [{}],
       },
