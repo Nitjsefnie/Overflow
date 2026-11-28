@@ -3,7 +3,7 @@
 // command shims and their log, the gate-state writers, and the deploy runner.
 // Extracted so each measured test module stays under the tests/ size ceiling
 // (.github/workflows/size-baseline.yml).
-import { chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +17,7 @@ export const script = fileURLToPath(new URL("../../scripts/deploy-revision.sh", 
 // Copy the parser alongside the deploy script so their pinned formats travel together.
 export const parser = fileURLToPath(new URL("../../scripts/required-checks-parse.jq", import.meta.url));
 export const envReader = fileURLToPath(new URL("../../scripts/systemd-env-file.sh", import.meta.url));
+const manifest = fileURLToPath(new URL("../../package.json", import.meta.url));
 // Substitute the fixture lock in the procedure’s exact refusal.
 export const REFUSAL_TEMPLATE =
   "Could not acquire the deploy lock on %LOCK%; refusing to deploy. Consult the deploy procedure's serialization notes before re-running.";
@@ -62,6 +63,8 @@ export interface Fixture {
   protectionJson: string;
   requiredChecks: string;
   gateSuccess: string;
+  /** The repository's engines.node, which the tree's package.json carries and the node shim reports. */
+  nodeVersion: string;
 }
 
 let liveFixture: Fixture | undefined;
@@ -315,6 +318,9 @@ export async function makeFixture(options: {
   await writeFile(path.join(tree, "scripts", "deploy-revision.sh"), await readFile(script, "utf8"));
   await writeFile(path.join(tree, "scripts", "required-checks-parse.jq"), await readFile(parser, "utf8"));
   await writeFile(path.join(tree, "scripts", "systemd-env-file.sh"), await readFile(envReader, "utf8"));
+  // The deploy's Node guard reads the deployed tree's engines.node.
+  const manifestText = await readFile(manifest, "utf8");
+  await writeFile(path.join(tree, "package.json"), manifestText);
   const envFile = path.join(dir, "overflow.env");
   await writeFile(envFile, "OVERFLOW_FIXTURE_ENV_MARKER=loaded\n");
   const logDir = path.join(dir, "logs");
@@ -348,6 +354,7 @@ export async function makeFixture(options: {
     protectionJson,
     requiredChecks,
     gateSuccess,
+    nodeVersion: (JSON.parse(manifestText) as { engines: { node: string } }).engines.node,
   };
   liveFixture = fixture;
   return fixture;
@@ -515,6 +522,10 @@ esac
   node: {
     envKeys: ["OVERFLOW_FIXTURE_ENV_MARKER"],
     dispatch: `
+if [ "$1" = "--version" ]; then
+  printf '%s\\n' "\${NODE_SHIM_VERSION:?}"
+  exit "\${NODE_SHIM_VERSION_RC:-0}"
+fi
 if [ "$1" = "scripts/deploy-migration-status.ts" ]; then
   printf '%s' "\${OVERFLOW_DEPLOY_MIGRATION_STATUS_TEST_OUTPUT:-}"
   exit "\${OVERFLOW_DEPLOY_MIGRATION_STATUS_TEST_EXIT:-0}"
@@ -619,6 +630,7 @@ export async function runDeploy(
   return runBoundedScript(argv, fixture.dir, {
     ...process.env,
     SHIM_LOG: fixture.shimLog,
+    NODE_SHIM_VERSION: `v${fixture.nodeVersion}`,
     GIT_SHIM_HASH: FIXTURE_HASH,
     GIT_SHIM_TREE: fixture.tree,
     GIT_SHIM_REMOTE_URL: FIXTURE_REMOTE_URL,
@@ -634,6 +646,20 @@ export async function runDeploy(
     PATH: `${fixture.bins}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
     ...extraEnv,
   }, options.timeoutMs ?? 60_000);
+}
+
+/** The shim PATH with every system directory's node entry hidden behind a mirror directory. */
+export async function pathWithoutNode(fixture: Fixture): Promise<string> {
+  const kept = [fixture.bins];
+  for (const [at, dir] of ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"].entries()) {
+    const names = await readdir(dir).catch(() => [] as string[]);
+    if (!names.includes("node")) { kept.push(dir); continue; }
+    const mirror = path.join(fixture.dir, `no-node-${at}`);
+    await mkdir(mirror);
+    for (const name of names.filter((name) => name !== "node")) await symlink(path.join(dir, name), path.join(mirror, name));
+    kept.push(mirror);
+  }
+  return kept.join(":");
 }
 
 /** Builds the existing shim PATH with no reachable gh binary. */
