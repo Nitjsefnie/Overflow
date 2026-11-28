@@ -2201,7 +2201,8 @@
       ],
       "tests/db/closed-pr-disputes-schema.test.ts": [
         3.78,
-        1.41
+        1.41,
+        4.8
       ],
       "tests/db/closesql-connection-death.test.ts": [
         0.05
