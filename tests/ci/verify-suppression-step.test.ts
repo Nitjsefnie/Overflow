@@ -592,6 +592,12 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     await expectRefuses(fx, refusal);
   });
 
+  it("refuses a changed value under a compared key both sides carry", async () => {
+    const ws = (ids: string): string => `${WS_BASE}audit:\n  ignore: [${ids}]\n`;
+    const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), { base: { "pnpm-workspace.yaml": ws("GHSA-vfj7-8cjw-p6xm") }, merge: { "pnpm-workspace.yaml": ws(`GHSA-vfj7-8cjw-p6xm, ${MARKER}`) } });
+    await expectRefuses(fx, REFUSALS.wsDivergence);
+  });
+
   it("refuses an unparseable pnpm-workspace.yaml whose bytes differ from the base", async () => {
     const fx = await fixture(BASE_PACKAGE_JSON(undefined), BASE_PACKAGE_JSON(undefined), {
       base: { "pnpm-workspace.yaml": "packages:\n  - \"x\"\n" },
