@@ -323,10 +323,7 @@ fi
 
   it("parses a complete PostgreSQL gate with every release command", async () => {
     const workflow = await readWorkflow("ci.yml");
-    expect(workflow.on).toEqual({
-      push: { branches: ["main"] },
-      workflow_dispatch: null,
-    });
+    expect(workflow.on).toEqual({ push: { branches: ["main"] }, workflow_dispatch: null });
     expect(workflow.on.push).not.toHaveProperty("paths");
     expect(workflow.on).not.toHaveProperty("pull_request");
     // Nor a pull_request_target: the pull-request leg of this gate is
@@ -1548,18 +1545,10 @@ exit 1
       "timeout-minutes": 15,
       permissions: { "security-events": "write", "id-token": "write", contents: "read" },
       steps: [
-        {
-          name: "Checkout code",
-        },
-        {
-          name: "Run Scorecard analysis",
-        },
-        {
-          name: "Upload Scorecard results artifact",
-        },
-        {
-          name: "Upload Scorecard results to code scanning",
-        },
+        { name: "Checkout code" },
+        { name: "Run Scorecard analysis" },
+        { name: "Upload Scorecard results artifact" },
+        { name: "Upload Scorecard results to code scanning" },
       ],
     } satisfies typeof analysis);
 
