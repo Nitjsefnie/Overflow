@@ -119,9 +119,7 @@ function theStep(): Step {
 describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
   it("is wired as defence in depth: event-gated, base SHA through env, before the audit step", () => {
     const step = theStep();
-    expect(step.if, "the leg runs on the pull_request event only").toBe(
-      "github.event_name == 'pull_request'",
-    );
+    expect(step.if, "the leg runs on the pull_request event only").toBe("github.event_name == 'pull_request'");
     expect(step.env, "the leg maps the event's base SHA and nothing else").toEqual({
       OVERFLOW_BASE_SHA: "${{ github.event.pull_request.base.sha }}",
     });
@@ -155,9 +153,7 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     expect(run, "the install targets a fresh RUNNER_TEMP site").toContain(
       '--target "${sanitized}/site" -r "${sanitized}/requirements.txt"',
     );
-    expect(run, "the manifest is read from the fetched base").toContain(
-      "install_pyyaml FETCH_HEAD",
-    );
+    expect(run, "the manifest is read from the fetched base").toContain("install_pyyaml FETCH_HEAD");
     expect(run, "no pip download — the hash-gated install is the only channel").not.toContain(
       "pip download",
     );
@@ -167,9 +163,7 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     // real advisory carrying github_advisory_id), and audit-level, registry,
     // strict-ssl, cafile, proxy and https-proxy from .npmrc — so the audit
     // must refuse to run on a divergent one.
-    expect(run, "the leg must read the workspace file's audit-affecting settings").toContain(
-      "pnpm-workspace.yaml",
-    );
+    expect(run, "the leg must read the workspace file's audit-affecting settings").toContain("pnpm-workspace.yaml");
     expect(run, "the leg must read .npmrc's audit-affecting keys").toContain(".npmrc");
     expect(run, "the projection must name the measured .npmrc keys").toMatch(
       /"audit-level", "registry", "strict-ssl", "cafile", "ca", "proxy", "https-proxy"/,
@@ -735,9 +729,7 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
         expect(end, `${variable} heredoc terminates`).toBeGreaterThan(start);
         return run.slice(start, end);
       };
-      expect(blockOf(theirs), `${variable} is byte-identical across the two guards`).toBe(
-        blockOf(mine),
-      );
+      expect(blockOf(theirs), `${variable} is byte-identical across the two guards`).toBe(blockOf(mine));
     }
 
     // The comparison tail matches once the two trust domains' SHA sources are
