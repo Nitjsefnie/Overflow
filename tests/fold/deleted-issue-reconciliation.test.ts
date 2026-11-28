@@ -104,7 +104,6 @@ async function fixture() {
     values (${githubRepositoryId}, ${`octo/repo-${githubRepositoryId}`}, ${sponsor.id}, 'PUBLIC', ${externalId++},
       ${sql.json(validDifficultyScheme())}, '2026-01-01T00:00:00Z') returning id`;
   await sql`insert into repository_reconciliation_sizes (repository_id, total_count, measured_at) values (${repository.id}, 5000, now())`;
-
   await indebt(String(sponsor.id), String(viewer.id));
 
   const issue = (number: number): GitHubIssue => {
@@ -140,9 +139,7 @@ async function fixture() {
       const answer = answers.get(subject.id);
       return answer ? answer() : structuredClone(upstream.find(({ id }) => id === subject.id) ?? null);
     },
-    getPullRequestClosingIssues: async () => [],
-    getPullRequestReviews: async () => [],
-    getPullRequestDiff: async () => "diff",
+    getPullRequestClosingIssues: async () => [], getPullRequestReviews: async () => [], getPullRequestDiff: async () => "diff",
   };
 
   return {
