@@ -45,7 +45,7 @@ async function quietly<T>(run: () => Promise<T>) {
 describe("an issue the forge no longer has", () => {
   const notFound = async () => { throw new Error("GitHub GraphQL request failed. NOT_FOUND: Could not resolve to an Issue with the number of 7."); };
 
-  it.each([["answered as not found", notFound], ["answered as null", async () => null]])("leaves the board on the incremental fold the interval allows when %s, and the exception moves on", async (_name, answer) => {
+  it.each([["answered as not found", notFound], ["answered as null", async () => null]])("leaves the board once the interval allows a listing when %s, and the exception moves on", async (_name, answer) => {
     const f = await fixture();
     await f.fold();
     expect(await f.board()).toEqual([f.cheapest.number]);
