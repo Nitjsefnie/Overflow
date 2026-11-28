@@ -337,18 +337,12 @@ jobs:
           git cat-file blob "${entry_blob}" | ZIZMOR_SANITIZED_REQUIREMENTS="${sanitized}/requirements.txt" python3 -c "${pre_parse}"
           pip download --no-deps --only-binary=:all: --require-hashes --index-url https://pypi.org/simple --no-input --disable-pip-version-check --retries 2 --timeout 60 -d "${sanitized}/download" -r "${sanitized}/requirements.txt"
 
-      # Issue 1035. The dependency audit honours the audit suppression list a
-      # pull request itself writes into package.json — pnpm.auditConfig — and,
-      # as the fix-round-3 measurement recorded beside the twin guard in
-      # dependency-audit.yml, the same auditConfig from pnpm-workspace.yaml
-      # (plus auditLevel and the registries mapping there, and audit-level,
-      # registry, strict-ssl, cafile, proxy and https-proxy from .npmrc) — so a
-      # pull request could silence its own audit by listing an advisory it
-      # introduces, and once merged, the scheduled audit on main is silenced
-      # too. The list therefore moves only through a maintainer-reviewed merge:
-      # this base-defined gate deep-compares the merge tree's package.json,
+      # Issue 1035. The audit suppression list and the settings that steer the
+      # audit move only through a maintainer-reviewed merge: once a pull
+      # request merges, the scheduled audit on main runs on its tree. This
+      # base-defined gate deep-compares the merge tree's package.json,
       # pnpm-workspace.yaml and .npmrc against the base's and refuses
-      # divergence on every audit-affecting key.
+      # divergence on every compared key.
       #
       # MECHANICS, mirroring the zizmor step above it: package.json is read from
       # GIT OBJECTS on both sides — git ls-tree shows exactly one mode-100644
@@ -363,7 +357,7 @@ jobs:
       # indentation and escaping never reach the comparison, while every nested
       # value and the order of the ignoreGhsas list itself do. Removal of the
       # whole key counts as divergence, as does adding one; present-null and
-      # absent read as the same, because pnpm treats both as no config. The
+      # absent read as the same. The
       # one admitted change is a merge ignoreGhsas list that strictly shrinks
       # the base's (no repeated id, the rest of auditConfig equal): removing
       # ids only makes the audit stricter.
@@ -379,15 +373,16 @@ jobs:
       # from git objects and pip-installed with --require-hashes, exactly the
       # zizmor manifest's discipline — and fails closed only when the install
       # or the module is genuinely unavailable. A file whose audit-affecting
-      # settings do not serialize to JSON refuses too. The audited keys are
-      # the MEASURED
-      # sets on pnpm 12.23.0: the workspace projection covers auditConfig,
-      # auditLevel and the registries mapping (measured NOT beating a pinned
-      # pnpm_config_registry), the .npmrc projection covers audit-level,
-      # registry, strict-ssl, cafile, proxy and https-proxy; keys measured
-      # NOT honoured by the audit — the workspace's singular registry, its
-      # kebab-case audit-level, and .npmrc @scope:registry — stay outside the
-      # projections so ordinary edits stay green.
+      # settings do not serialize to JSON refuses too. The workspace comparison
+      # covers every key but packages, overrides, patchedDependencies and
+      # allowBuilds, which left the audit unchanged on pnpm 12.23.0, so a key
+      # nobody classified refuses; the .npmrc comparison covers audit-level,
+      # registry, strict-ssl, cafile, ca, proxy and https-proxy. Measured on
+      # pnpm 12.23.0: workspace auditConfig and audit.ignore suppress
+      # findings; workspace registry, registries and auditLevel and .npmrc
+      # registry and strict-ssl are outranked by the job pins; package.json
+      # pnpm.auditConfig and .npmrc audit-level are not read, and are compared
+      # anyway.
       #
       # Every refusal is a FIXED constant: no pull-request-controlled bytes ever
       # reach the log. Identical lists, and such a shrunk one, exit 0
@@ -406,7 +401,8 @@ jobs:
           ws_file=pnpm-workspace.yaml
           npmrc_file=.npmrc
           
-          # Measured on the pinned pnpm: workspace auditConfig and auditLevel bind;
+          # pnpm-workspace.yaml is compared on every key but packages, overrides,
+          # patchedDependencies and allowBuilds, measured not to change the audit;
           # pnpm_config_registry outranks .npmrc registry= and workspace registries.
           # .npmrc strict-ssl=false or cafile= reaches a TLS server;
           # pnpm_config_strict_ssl=true beats only the first, pnpm_config_cafile neither.
@@ -577,13 +573,15 @@ jobs:
               sys.exit(1)
           if parsed is None:
               parsed = {}
-          if not isinstance(parsed, dict):
+          if not isinstance(parsed, dict) or not all(isinstance(key, str) for key in parsed):
               sys.stderr.write("::error::pnpm-workspace.yaml does not parse as a mapping of settings; refusing to judge the audit-affecting settings without a parse\n")
               sys.exit(1)
-          projection = {}
-          for key in ("auditConfig", "auditLevel", "registries", "httpsProxy", "proxy", "noProxy", "strictSsl", "cafile", "ca", "registry"):
-              if key in parsed:
-                  projection[key] = parsed[key]
+          projection = {key: value for key, value in parsed.items() if key not in ("packages", "overrides", "patchedDependencies", "allowBuilds")}
+          try:
+              dump = json.dumps(projection, sort_keys=True, separators=(",", ":"))
+          except (TypeError, ValueError):
+              sys.stderr.write("::error::pnpm-workspace.yaml carries audit-affecting settings that do not serialize to JSON; refusing\n")
+              sys.exit(1)
           reference = json.loads(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1] not in ("", "absent") else None
           def ids_of(value):
               ids = value.get("ignoreGhsas") if isinstance(value, dict) else None
@@ -595,11 +593,7 @@ jobs:
               cfg_rest = lambda value: json.dumps({k: v for k, v in value.items() if k != "ignoreGhsas"}, sort_keys=True, separators=(",", ":"))
               if rest(reference) == rest(projection) and base_ids is not None and merge_ids is not None and cfg_rest(base_cfg) == cfg_rest(merge_cfg) and len(set(merge_ids)) == len(merge_ids) and set(merge_ids) < set(base_ids):
                   projection["auditConfig"] = base_cfg
-          try:
-              dump = json.dumps(projection, sort_keys=True, separators=(",", ":"))
-          except (TypeError, ValueError):
-              sys.stderr.write("::error::pnpm-workspace.yaml carries audit-affecting settings that do not serialize to JSON; refusing\n")
-              sys.exit(1)
+                  dump = json.dumps(projection, sort_keys=True, separators=(",", ":"))
           sys.stdout.write(dump if projection else "absent")
           PY
           )
