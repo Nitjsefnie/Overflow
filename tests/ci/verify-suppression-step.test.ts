@@ -288,13 +288,9 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     // and the registries mapping from pnpm-workspace.yaml, and audit-level,
     // registry, strict-ssl, cafile, proxy and https-proxy from .npmrc. The step
     // must name both files and project both projections' settings.
-    expect(step.run, "the step must read the workspace file's audit-affecting settings").toContain(
-      "pnpm-workspace.yaml",
-    );
+    expect(step.run, "the step must read the workspace file's audit-affecting settings").toContain("pnpm-workspace.yaml");
     expect(step.run, "the step must read .npmrc's audit-affecting keys").toContain(".npmrc");
-    expect(step.run, "the projection must name the measured .npmrc keys").toMatch(
-      /"audit-level", "registry", "strict-ssl", "cafile", "ca", "proxy", "https-proxy"/,
-    );
+    expect(step.run, "the projection must name the measured .npmrc keys").toMatch(/"audit-level", "registry", "strict-ssl", "cafile", "ca", "proxy", "https-proxy"/);
   });
 
   it("prints only the fixed refusal constants — no interpolated, pull-request-controlled bytes", () => {
@@ -792,9 +788,7 @@ describe(`the ${STEP_NAME} step of ci-pr.yml`, () => {
     expect(argv).toContain("--target");
     expect(argv.filter((token) => token === "--require-hashes")).toHaveLength(1);
     const targetIndex = argv.indexOf("--target");
-    expect(argv[targetIndex + 1], "the install site lives under this run's RUNNER_TEMP").toContain(
-      result.runnerTemp,
-    );
+    expect(argv[targetIndex + 1], "the install site lives under this run's RUNNER_TEMP").toContain(result.runnerTemp);
     // The sanitized copy pip was handed is exactly the committed pin line.
     const requirementsIndex = argv.indexOf("-r");
     const sanitized = await readFile(argv[requirementsIndex + 1]!, "utf8");

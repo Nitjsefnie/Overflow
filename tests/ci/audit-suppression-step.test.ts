@@ -125,17 +125,11 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     });
     expect(step["continue-on-error"], "the leg must not tolerate its own failure").toBeFalsy();
     const names = steps.map((entry) => entry.name);
-    expect(names.indexOf(STEP_NAME), "the guard must run before the audit step").toBeLessThan(
-      names.indexOf(AUDIT_STEP_NAME),
-    );
+    expect(names.indexOf(STEP_NAME), "the guard must run before the audit step").toBeLessThan(names.indexOf(AUDIT_STEP_NAME));
     const run = step.run ?? "";
-    expect(run, "the base is fetched by its pinned event SHA").toContain(
-      'git fetch --quiet --depth=1 origin "${OVERFLOW_BASE_SHA:?}"',
-    );
+    expect(run, "the base is fetched by its pinned event SHA").toContain('git fetch --quiet --depth=1 origin "${OVERFLOW_BASE_SHA:?}"');
     expect(run, "no refs/pull refspec anywhere").not.toContain("refs/pull");
-    expect(run, "no shell interpolation of event values — they arrive through env:").not.toContain(
-      "${{",
-    );
+    expect(run, "no shell interpolation of event values — they arrive through env:").not.toContain("${{");
     for (const forbidden of ["OVERFLOW_PR_NUMBER", "PR_ID", "GH_TOKEN", "GITHUB_TOKEN"]) {
       expect(run, `the run block must not touch ${forbidden}`).not.toContain(forbidden);
     }
@@ -147,16 +141,10 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     // The workspace parse needs PyYAML, which the runner image does not ship:
     // the leg installs it from the FETCHED base's hash-pinned manifest — the
     // zizmor manifest's discipline. The exact install shape is pinned.
-    expect(run, "the leg installs PyYAML from a hash-pinned manifest").toContain(
-      "pip install --no-deps --require-hashes --disable-pip-version-check",
-    );
-    expect(run, "the install targets a fresh RUNNER_TEMP site").toContain(
-      '--target "${sanitized}/site" -r "${sanitized}/requirements.txt"',
-    );
+    expect(run, "the leg installs PyYAML from a hash-pinned manifest").toContain("pip install --no-deps --require-hashes --disable-pip-version-check");
+    expect(run, "the install targets a fresh RUNNER_TEMP site").toContain('--target "${sanitized}/site" -r "${sanitized}/requirements.txt"');
     expect(run, "the manifest is read from the fetched base").toContain("install_pyyaml FETCH_HEAD");
-    expect(run, "no pip download — the hash-gated install is the only channel").not.toContain(
-      "pip download",
-    );
+    expect(run, "no pip download — the hash-gated install is the only channel").not.toContain("pip download");
     // The same workspace and .npmrc comparisons the load-bearing guard in
     // ci-pr.yml implements. pnpm 10.33.0 reads auditConfig, auditLevel and
     // the registries mapping from pnpm-workspace.yaml (all measured with a
@@ -165,9 +153,7 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     // must refuse to run on a divergent one.
     expect(run, "the leg must read the workspace file's audit-affecting settings").toContain("pnpm-workspace.yaml");
     expect(run, "the leg must read .npmrc's audit-affecting keys").toContain(".npmrc");
-    expect(run, "the projection must name the measured .npmrc keys").toMatch(
-      /"audit-level", "registry", "strict-ssl", "cafile", "ca", "proxy", "https-proxy"/,
-    );
+    expect(run, "the projection must name the measured .npmrc keys").toMatch(/"audit-level", "registry", "strict-ssl", "cafile", "ca", "proxy", "https-proxy"/);
   });
 
   it("prints only the fixed refusal constants, and no pull-request bytes", () => {
@@ -676,9 +662,7 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     ]);
     expect(argv).toContain("--target");
     const targetIndex = argv.indexOf("--target");
-    expect(argv[targetIndex + 1], "the install site lives under this run's RUNNER_TEMP").toContain(
-      result.runnerTemp,
-    );
+    expect(argv[targetIndex + 1], "the install site lives under this run's RUNNER_TEMP").toContain(result.runnerTemp);
     const requirementsIndex = argv.indexOf("-r");
     const sanitized = await readFile(argv[requirementsIndex + 1]!, "utf8");
     expect(sanitized).toBe(
@@ -716,9 +700,7 @@ describe(`the ${STEP_NAME} step of dependency-audit.yml`, () => {
     // materialised by an earlier step) does not.
     const constantsOf = (run: string): string[] =>
       run.split("\n").filter((line) => line.includes("::error::")).map((line) => line.trim());
-    expect(constantsOf(theirs).sort()).toEqual(
-      constantsOf(mine).filter((line) => !line.includes(REFUSALS.fetch)).sort(),
-    );
+    expect(constantsOf(theirs).sort()).toEqual(constantsOf(mine).filter((line) => !line.includes(REFUSALS.fetch)).sort());
 
     // The three inline python pre-parse blocks are byte-identical.
     for (const variable of ["pre_parse", "ws_pre_parse", "npmrc_pre_parse", "pyyaml_manifest_pre_parse"]) {
