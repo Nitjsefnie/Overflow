@@ -177,7 +177,7 @@ function fixture(request: Date | null = null, attemptCount = 1) {
       getPullRequestClosingIssues: async () => [],
       getRepositoryById: async () => ({ id: 4242, owner: "octo", name: "repo", fullName: "octo/repo",
         ownerType: "USER", visibility: "PUBLIC", url: "https://github.com/octo/repo", canAdminister: true }),
-      listIssues: async () => [], getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",
+      listIssues: async () => [], listOpenIssueIds: async () => [], getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",
     },
   };
   const worker = {

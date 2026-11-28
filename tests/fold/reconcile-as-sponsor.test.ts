@@ -49,7 +49,7 @@ describe("reconciling a repository as its sponsor", () => {
         id: 4242, owner: "example", ownerType: "USER", name: "repository", fullName: "example/repository",
         visibility: "PUBLIC", url: "https://github.com/example/repository", canAdminister: true,
       }),
-      listIssues, getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",
+      listIssues, listOpenIssueIds: async () => [], getPullRequestReviews: async () => [], getPullRequestDiff: async () => "",
     }));
     expect(listIssues).toHaveBeenCalledWith({ owner: "example", name: "repository" }, {
       timelineCriticalLabels: new Set(Array.from({ length: 10 }, (_, index) => `delivered/${index + 1}`)),
@@ -92,7 +92,7 @@ describe("reconciling a repository as its sponsor", () => {
         reads += 1;
         throw rejected;
       },
-      getIssue: async () => null,
+      getIssue: async () => null, listOpenIssueIds: async () => [],
       getPullRequestClosingIssues: async () => [],
       getPullRequestReviews: async () => [],
       getPullRequestDiff: async () => "",
@@ -188,7 +188,7 @@ function createHarness(options: {
       getRepositoryById: async () => null,
       getIssue: async () => null,
       getPullRequestClosingIssues: async () => [],
-      listIssues: async () => [],
+      listIssues: async () => [], listOpenIssueIds: async () => [],
       getPullRequestReviews: async () => [],
       getPullRequestDiff: async () => "",
     };

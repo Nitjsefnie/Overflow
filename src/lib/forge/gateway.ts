@@ -26,6 +26,7 @@ export interface ForgeGateway {
   getRepositoryById(githubRepositoryId: number): Promise<GitHubRepository | null>;
   listIssues(repository: GitHubRepositoryReference, options?: GitHubIssueListOptions): Promise<GitHubIssue[]>;
   getIssue(repository: GitHubRepositoryReference, subject: GitHubSubject): Promise<GitHubIssue | null>;
+  listOpenIssueIds(repository: GitHubRepositoryReference): Promise<number[]>;
   getPullRequestClosingIssues(
     repository: GitHubRepositoryReference,
     subject: GitHubSubject,

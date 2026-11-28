@@ -75,7 +75,7 @@ function fixture(remaining?: number) {
       recordVerifiedRepositoryIdentity: async () => {}, markRepositoryUnavailable: async () => {},
       findForgeIdentitiesByForgeUserIds: async () => [],
     },
-    github: { getRepositoryById: reconcile, listIssues: async () => [],
+    github: { getRepositoryById: reconcile, listIssues: async () => [], listOpenIssueIds: async () => [],
       getIssue: async () => null, getPullRequestClosingIssues: async () => [],
       getPullRequestReviews: async () => [], getPullRequestDiff: async () => "" },
     onBudgetChange, now: () => now,

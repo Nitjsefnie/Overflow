@@ -8,6 +8,6 @@ export async function unlistedOpenIssues(
 ): Promise<GitHubSubject[]> {
   const open = [...cached.values()].filter(({ state }) => state === "OPEN");
   if (open.length === 0) return [];
-  const listed = new Set(await gateway.listOpenIssueIds!(reference));
+  const listed = new Set(await gateway.listOpenIssueIds(reference));
   return open.filter(({ id }) => !listed.has(id));
 }

@@ -169,7 +169,7 @@ describe("sponsor gateway marks a rejected GitLab credential", () => {
       "repo-1",
       () => ({
         getRepositoryById: async () => null,
-        listIssues: async () => [],
+        listIssues: async () => [], listOpenIssueIds: async () => [],
         getIssue: async () => null,
         getPullRequestClosingIssues: async () => [],
         getPullRequestReviews: async () => {

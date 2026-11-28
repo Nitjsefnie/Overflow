@@ -228,7 +228,7 @@ function gateway(issues: () => GitHubIssue[]): ReconciliationGateway {
     getRepositoryById: verifiedRepositoryAt(ownerName),
     getIssue: async () => null,
     getPullRequestClosingIssues: async () => [],
-    listIssues: async () => issues(),
+    listIssues: async () => issues(), listOpenIssueIds: async () => issues().filter(({ state }) => state === "OPEN").map(({ id }) => id),
     getPullRequestReviews: async () => [
       { id: 8_700_021, state: "CHANGES_REQUESTED", submittedAt: "2026-09-01T11:00:00.000Z", dismissal: null },
     ],

@@ -91,7 +91,7 @@ describe("changing a repository's difficulty catalog", () => {
       getRepositoryById: verifiedRepository(ownerName),
       getIssue: async () => null,
       getPullRequestClosingIssues: async () => [],
-      listIssues: async () => issues,
+      listIssues: async () => issues, listOpenIssueIds: async () => issues.filter(({ state }) => state === "OPEN").map(({ id }) => id),
       getPullRequestReviews: async () => [],
       getPullRequestDiff: async () => "catalog-change diff",
     });

@@ -906,7 +906,7 @@ function gatewayDouble(issues: GitHubIssue[], githubRepositoryId: number): Recon
       fullName: `ds-owner/repo-${githubRepositoryId}`, visibility: "PUBLIC",
       url: "https://github.com/ds-owner/repo", canAdminister: true, ownerType: "USER",
     }),
-    listIssues: async () => structuredClone(issues),
+    listIssues: async () => structuredClone(issues), listOpenIssueIds: async () => issues.filter(({ state }) => state === "OPEN").map(({ id }) => id),
     getIssue: async () => null,
     getPullRequestClosingIssues: async (): Promise<GitHubIssueReference[]> => [],
     getPullRequestReviews: async (): Promise<GitHubPullRequestReview[]> => [],

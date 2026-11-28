@@ -31,7 +31,7 @@ export function withTransientRequestRetry(
     getRepositoryById: (...args) => retry(() => gateway.getRepositoryById(...args)),
     listIssues: (...args) => retry(() => gateway.listIssues(...args)),
     getIssue: (...args) => retry(() => gateway.getIssue(...args)),
-    listOpenIssueIds: (...args) => retry(() => gateway.listOpenIssueIds!(...args)),
+    listOpenIssueIds: (...args) => retry(() => gateway.listOpenIssueIds(...args)),
     getPullRequestClosingIssues: (...args) => retry(() => gateway.getPullRequestClosingIssues(...args)),
     getPullRequestReviews: (...args) => retry(() => gateway.getPullRequestReviews(...args)),
     getPullRequestDiff: (...args) => retry(() => gateway.getPullRequestDiff(...args)),

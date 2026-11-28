@@ -98,7 +98,7 @@ async function reconcile(repo: Repository, issues: GitHubIssue[], reviewed: GitH
   await store.withRepositoryReconciliation(repo.id, () => store.setReconciliationCooldown(repo.id, null));
   const reviewedNumbers = new Set(reviewed.map((pr) => pr.number));
   const github = {
-    getRepositoryById: verifiedRepositoryAt(repo.ownerName), listIssues: async () => issues, getIssue: async () => null,
+    getRepositoryById: verifiedRepositoryAt(repo.ownerName), listIssues: async () => issues, listOpenIssueIds: async () => issues.filter(({ state }) => state === "OPEN").map(({ id }) => id), getIssue: async () => null,
     getPullRequestClosingIssues: async () => [], getPullRequestDiff: async (_repo: unknown, number: number) => `diff ${number}`,
     getPullRequestReviews: async (_repo: unknown, number: number) => reviewedNumbers.has(number)
       ? [{ id: number, state: "CHANGES_REQUESTED" as const, submittedAt: "2026-09-01T10:00:00Z", dismissal: null }] : [],
