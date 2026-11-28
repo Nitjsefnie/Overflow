@@ -108,6 +108,12 @@ describe("GitHub open issue IDs", () => {
     expect(requests).toEqual([`${base}?state=open&sort=updated&direction=asc&per_page=100`, `${base}?state=open&page=2`]);
   });
 
+  it("counts a page as soon as it arrives, before its body is read", async () => {
+    const client = gateway(async () => Response.json([{ id: 11, number: 1, updated_at: "not-a-timestamp" }]));
+    const { value, cost } = await withGraphqlFoldCost(() => listOpenIssueIds(client, repository).catch((error: Error) => error.message));
+    expect([value, cost.unmeasuredResponses]).toEqual([expect.stringMatching(/updated_at/), 1]);
+  });
+
   it("fails on a repeated cursor", async () => {
     const client = gateway(async () => Response.json([], { headers: { link: `<${base}?page=2>; rel="next"` } }));
     await expect(listOpenIssueIds(client, repository)).rejects.toThrow("Open issue listing repeated a cursor.");
