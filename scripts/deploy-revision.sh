@@ -645,21 +645,22 @@ fi
 # The unit runs /usr/local/bin/node, but the install, migrate and build below
 # run whatever node the caller's PATH resolves first (pnpm runs on it too), so
 # the guard refuses any Node but the deployed commit's engines.node.
+node_fix='Put the system runtime first on PATH, or move the host to the revision'"'"'s Node (deploy/README.md section 10, "Moving an existing host").'
 expected_node=$(jq -r '.engines.node // empty' "$tree/package.json") || expected_node=
 if [ -z "$expected_node" ]; then
   printf 'Could not read engines.node from %s/package.json; refusing to deploy on an unverified Node.\n' "$tree" >&2
   exit 1
 fi
 node_path=$(command -v node) || {
-  printf 'node is not on PATH; refusing to deploy. Put the system runtime first on PATH (/usr/local/bin, as deploy/README.md section 3 installs it).\n' >&2
+  printf 'node is not on PATH; refusing to deploy. %s\n' "$node_fix" >&2
   exit 1
 }
 running_node=$(node --version) || {
-  printf '%s --version failed; refusing to deploy on an unverified Node. Put the system runtime first on PATH (/usr/local/bin, as deploy/README.md section 3 installs it).\n' "$node_path" >&2
+  printf '%s --version failed; refusing to deploy on an unverified Node. %s\n' "$node_path" "$node_fix" >&2
   exit 1
 }
 if [ "$running_node" != "v$expected_node" ]; then
-  printf 'The node on PATH is %s at %s, but this commit requires v%s (engines.node); refusing to deploy. Put the system runtime first on PATH (/usr/local/bin, as deploy/README.md section 3 installs it) and re-run.\n' "$running_node" "$node_path" "$expected_node" >&2
+  printf 'The node on PATH is %s at %s, but this commit requires v%s (engines.node); refusing to deploy. %s\n' "$running_node" "$node_path" "$expected_node" "$node_fix" >&2
   exit 1
 fi
 pnpm_config_package_import_method=copy pnpm install --frozen-lockfile

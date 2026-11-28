@@ -1801,23 +1801,23 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     expect(atInstall, "the install after the skip").toBeGreaterThan(atSkip);
   });
 
-  it.each([
-    ["a different Node", { NODE_SHIM_VERSION: "bumped" }, ["wanted", "bumped", "node"]],
-    ["a Node whose --version fails", { NODE_SHIM_VERSION_RC: "1" }, ["node"]],
-    ["no engines.node", {}, ["package.json"]],
-    ["no Node on PATH", { PATH: "none" }, ["PATH"]],
-  ])("refuses before the install when the shell resolves %s, running nothing after the guard", async (kind, shimEnv, mentions) => {
+  type NodeRefusal = [string, (f: Fixture, found: string) => Promise<{ env?: Record<string, string>; omitShims?: string[] }>, (f: Fixture, found: string) => string[], string[]];
+  const nodeBin = (f: Fixture) => path.join(f.bins, "node");
+  // Each row names what its own refusal prints and what a neighbouring branch's would print instead.
+  it.each<NodeRefusal>([
+    ["a different Node", async (_f, found) => ({ env: { NODE_SHIM_VERSION: `v${found}` } }), (f, found) => [f.nodeVersion, found, nodeBin(f)], ["--version"]],
+    ["a Node whose --version fails", async () => ({ env: { NODE_SHIM_VERSION_RC: "1" } }), (f) => [nodeBin(f), "--version"], []],
+    ["no engines.node", async (f) => { await writeFile(path.join(f.tree, "package.json"), "{}"); return {}; }, () => ["package.json"], ["--version"]],
+    ["no Node on PATH", async (f) => ({ env: { PATH: await pathWithoutNode(f) }, omitShims: ["node"] }), () => ["PATH"], ["--version"]],
+  ])("refuses before the install when the shell resolves %s, running nothing after the guard", async (_name, setup, mentions, absent) => {
     const fixture = await makeFixture();
-    const names: Record<string, string> = { wanted: fixture.nodeVersion, node: path.join(fixture.bins, "node"),
-      bumped: fixture.nodeVersion.replace(/\d+$/, (patch) => String(Number(patch) + 1)) };
-    const env: Record<string, string> = { ...shimEnv };
-    if (env.NODE_SHIM_VERSION) env.NODE_SHIM_VERSION = `v${names.bumped}`;
-    if (env.PATH) env.PATH = await pathWithoutNode(fixture);
-    if (kind === "no engines.node") await writeFile(path.join(fixture.tree, "package.json"), "{}");
-    const result = await runDeploy(fixture, env, { omitShims: env.PATH ? ["node"] : [] });
+    const found = fixture.nodeVersion.replace(/\d+$/, (patch) => String(Number(patch) + 1));
+    const { env, omitShims } = await setup(fixture, found);
+    const result = await runDeploy(fixture, env, { omitShims });
 
     expect(result.status, result.stdout).toBe(1);
-    for (const mention of mentions) expect(result.stderr).toContain(names[mention] ?? mention);
+    for (const mention of mentions(fixture, found)) expect(result.stderr).toContain(mention);
+    for (const other of absent) expect(result.stderr).not.toContain(other);
     const entries = await readLog(fixture.shimLog);
     expect(entries.filter((entry) => ["pnpm", "systemctl"].includes(entry.cmd))).toEqual([]);
     expect(entries.filter((entry) => entry.cmd === "node" && entry.args[0] !== "--version")).toEqual([]);
