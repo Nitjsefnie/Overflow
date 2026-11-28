@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { GitHubGateway } from "@/lib/github/client";
 import { listOpenIssueIds, listSubjectPage } from "@/lib/github/subject-listing";
 import { SweepBudgetSpent, withSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
+import { withGraphqlFoldCost } from "@/lib/github/graphql-cost";
 
 const repository = { owner: "octo", name: "overflow" };
 const firstTime = "2026-10-25T08:00:00.000Z";
@@ -109,7 +110,7 @@ describe("GitHub subject pages", () => {
 
 describe("GitHub open issue IDs", () => {
   const base = "https://api.github.com/repos/octo/overflow/issues";
-  it("collects every page of open issues and leaves pull requests out", async () => {
+  it("collects every page of open issues, leaves pull requests out and counts each page as an unmeasured response", async () => {
     const requests: string[] = [];
     const client = gateway(async (input) => {
       requests.push(String(input));
@@ -118,7 +119,7 @@ describe("GitHub open issue IDs", () => {
       ], { headers: { link: `<${base}?state=open&page=2>; rel="next"` } });
       return Response.json([{ id: 13, number: 3, updated_at: secondTime }]);
     });
-    expect(await client.listOpenIssueIds(repository)).toEqual([11, 13]);
+    expect(await withGraphqlFoldCost(() => client.listOpenIssueIds(repository))).toEqual({ value: [11, 13], cost: { observedCost: null, observedResponses: 0, unmeasuredResponses: 2 } });
     expect(requests).toEqual([`${base}?state=open&sort=updated&direction=asc&per_page=100`, `${base}?state=open&page=2`]);
   });
 

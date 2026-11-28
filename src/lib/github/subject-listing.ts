@@ -1,5 +1,6 @@
 import type { WalkSubject } from "@/lib/forge/subject-listing";
 import type { GitHubGateway } from "@/lib/github/client";
+import { recordGraphqlResponseCost } from "@/lib/github/graphql-cost";
 import type { GitHubRepositoryReference } from "@/lib/github/types";
 
 /** Uses the gateway's budget-checked transport; cursors retain the next Link's query. */
@@ -36,6 +37,7 @@ export async function listOpenIssueIds(
   let cursor: string | null = null;
   do {
     const page: Awaited<ReturnType<typeof listSubjectPage>> = await listSubjectPage(deps, reference, { state: "open", cursor });
+    recordGraphqlResponseCost(null); // A REST page carries no point cost: the fold counts it unmeasured.
     for (const subject of page.subjects) if (subject.kind === "issue") ids.push(subject.id);
     cursor = page.nextCursor;
     if (cursor !== null && seen.has(cursor)) throw new Error("Open issue listing repeated a cursor.");

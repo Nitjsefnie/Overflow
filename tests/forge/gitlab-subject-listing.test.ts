@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { GitLabGateway } from "@/lib/gitlab/client";
 import { listGitLabSubjectsPage } from "@/lib/gitlab/subject-listing";
 import { SweepBudgetSpent, withSweepRequestBudget } from "@/lib/fold/sweep-request-budget";
+import { withGraphqlFoldCost } from "@/lib/github/graphql-cost";
 
 const repository = { owner: "group/subgroup", name: "project" };
 const older = "2026-10-25T08:00:00.000Z";
@@ -202,13 +203,14 @@ describe("GitLab subject pages", () => {
 });
 
 describe("GitLab open issue IDs", () => {
-  it("asks for opened issues only and returns their global IDs", async () => {
+  it("asks for opened issues only, returns their global IDs and counts each page as an unmeasured response", async () => {
     let request: URL | undefined;
     const client = gateway(async (input) => {
+      if (request !== undefined) return Response.json([{ id: 57, iid: 2 }]);
       request = new URL(String(input));
-      return Response.json([{ id: 41, iid: 1 }, { id: 57, iid: 2 }]);
+      return Response.json([{ id: 41, iid: 1 }], { headers: { "x-next-cursor": "second" } });
     });
-    expect(await client.listOpenIssueIds(repository)).toEqual([41, 57]);
+    expect(await withGraphqlFoldCost(() => client.listOpenIssueIds(repository))).toEqual({ value: [41, 57], cost: { observedCost: null, observedResponses: 0, unmeasuredResponses: 2 } });
     expect(request?.pathname).toBe("/api/v4/projects/group%2Fsubgroup%2Fproject/issues");
     expect(request?.searchParams.get("state")).toBe("opened");
     expect(request?.searchParams.get("pagination")).toBe("keyset");
