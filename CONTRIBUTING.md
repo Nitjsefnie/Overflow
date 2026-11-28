@@ -501,6 +501,15 @@ by hand: shrink the file, or relocate code into a new module. A shrink needs
 no record edit; the workflow's run on `main` lowers the records and commits
 them itself.
 
+The workflow also budgets the total line count of the files under `tests/`,
+recorded under `trees` in `.github/size-baseline.json`. A pull request fails
+when that total rises above the lower of the record and the total at its base.
+Only a pull request with a `feat:` commit (`feat(<scope>):`, `feat!:` and
+`feat(<scope>)!:` count too) may grow it further: up to the record, or past it
+by raising the record to exactly the new total. Any other change trims lines
+under `tests/` in its own diff; moving lines between test files does not help.
+The run on `main` lowers the record to a smaller total itself.
+
 ### Coverage is floored
 
 CI measures line coverage over `src/` through `Nitjsefnie-Actions/test-ratchet`:
