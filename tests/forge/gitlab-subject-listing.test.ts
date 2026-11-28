@@ -49,26 +49,20 @@ describe("GitLab subject pages", () => {
   });
 
   it("orders mixed-precision instants chronologically instead of by spelling", async () => {
-    const client = gateway(async () => Response.json([
-      row(1, "2026-10-26T09:00:00.123Z"), row(2, "2026-10-26T09:00:00.123900Z"),
-    ]));
+    const client = gateway(async () => Response.json([row(1, "2026-10-26T09:00:00.123Z"), row(2, "2026-10-26T09:00:00.123900Z")]));
     const result = await client.listSubjectsPage(repository, { collection: "issue", updatedAfter: null });
     expect(result.subjects.map((subject) => subject.id)).toEqual([1, 2]);
   });
 
   it("orders distinct microseconds before IDs within a mixed-precision millisecond", async () => {
-    const client = gateway(async () => Response.json([
-      row(1, "2026-10-26T09:00:00.123900Z"), row(3, "2026-10-26T09:00:00.123Z"), row(2, "2026-10-26T09:00:00.123100Z"),
-    ]));
+    const client = gateway(async () => Response.json([row(1, "2026-10-26T09:00:00.123900Z"), row(3, "2026-10-26T09:00:00.123Z"), row(2, "2026-10-26T09:00:00.123100Z")]));
     const result = await client.listSubjectsPage(repository, { collection: "issue", updatedAfter: null });
     expect(result.subjects.filter((subject) => subject.id <= 2).map((subject) => subject.id)).toEqual([2, 1]);
     expect(result.subjects.map((subject) => subject.id)).toEqual([3, 2, 1]);
   });
 
   it("returns the latest instant's original spelling as the terminal anchor", async () => {
-    const client = gateway(async () => Response.json([
-      row(1, "2026-10-26T09:00:00.123900Z"), row(9, "2026-10-26T09:00:00.123Z"), row(2, "2026-10-26T09:00:00.123100Z"),
-    ]));
+    const client = gateway(async () => Response.json([row(1, "2026-10-26T09:00:00.123900Z"), row(9, "2026-10-26T09:00:00.123Z"), row(2, "2026-10-26T09:00:00.123100Z")]));
     const result = await client.listSubjectsPage(repository, { collection: "issue", updatedAfter: null });
     expect(result.nextAnchor).toBe("2026-10-26T09:00:00.123900Z");
   });
@@ -76,9 +70,7 @@ describe("GitLab subject pages", () => {
   it.each(["issue", "pull_request"] as const)("returns the final timestamp group on a one-row short %s page", async (collection) => {
     const client = gateway(async () => Response.json([row(501, boundary)]));
     expect(await client.listSubjectsPage(repository, { collection, updatedAfter: null })).toEqual({
-      subjects: [{ id: 501, number: 1501, kind: collection, updatedAt: new Date(boundary) }],
-      nextAnchor: boundary,
-      exhausted: true,
+      subjects: [{ id: 501, number: 1501, kind: collection, updatedAt: new Date(boundary) }], nextAnchor: boundary, exhausted: true,
     });
   });
 
@@ -86,11 +78,7 @@ describe("GitLab subject pages", () => {
     let request: Request | undefined;
     const client = gateway(async (input, init) => {
       request = new Request(input, init);
-      return Response.json([
-        row(10, boundary),
-        ...Array.from({ length: 98 }, (_, index) => row(500 - index)),
-        row(9, boundary),
-      ]);
+      return Response.json([row(10, boundary), ...Array.from({ length: 98 }, (_, index) => row(500 - index)), row(9, boundary)]);
     });
     const result = await client.listSubjectsPage(repository, { collection, updatedAfter: null });
     expect(result.subjects.map((subject) => subject.id)).toEqual([...Array.from({ length: 98 }, (_, index) => 403 + index), 9, 10]);
@@ -105,11 +93,8 @@ describe("GitLab subject pages", () => {
 
   it("passes the caller's verbatim re-anchor through and returns the raw boundary group again", async () => {
     const requests: URL[] = [];
-    const rows = [
-      ...Array.from({ length: 98 }, (_, index) => row(100 + index)),
-      row(300, boundary), row(301, boundary), row(302, boundary),
-      ...Array.from({ length: 97 }, (_, index) => row(400 + index, later)),
-    ];
+    const rows = [...Array.from({ length: 98 }, (_, index) => row(100 + index)), row(300, boundary), row(301, boundary), row(302, boundary),
+      ...Array.from({ length: 97 }, (_, index) => row(400 + index, later))];
     const client = gateway(async (input) => {
       const url = new URL(String(input));
       requests.push(url);
@@ -154,24 +139,20 @@ describe("GitLab subject pages", () => {
 
   it("passes both verbatim slice bounds, exhausts a short offset page, and resets optional parameters on the next call", async () => {
     const { client, requests } = timestampSlice();
-    const result = await client.listSubjectsPage(repository, {
-      collection: "pull_request", updatedAfter: boundary, updatedBefore: boundary, page: 3,
-    });
+    const result = await client.listSubjectsPage(repository, { collection: "pull_request", updatedAfter: boundary, updatedBefore: boundary, page: 3 });
     expect(result.subjects.map((subject) => subject.id)).toEqual([300, 301, 302, 303, 304]);
     expect(result.nextAnchor).toBe(boundary);
     expect(result.exhausted).toBe(true);
     expect(requests).toHaveLength(1);
     expect(Object.fromEntries(requests[0]!.searchParams)).toEqual({
-      state: "all", per_page: "100", order_by: "updated_at", sort: "asc", page: "3",
-      updated_after: boundary, updated_before: boundary,
+      state: "all", per_page: "100", order_by: "updated_at", sort: "asc", page: "3", updated_after: boundary, updated_before: boundary,
     });
     const continued = await client.listSubjectsPage(repository, { collection: "pull_request", updatedAfter: boundary, page: 3 });
     expect(continued.subjects.map((subject) => subject.id)).toEqual([300, 301, 302, 303, 304, 900]);
     expect(continued.nextAnchor).toBe(later);
     expect(continued.exhausted).toBe(true);
     expect(await client.listSubjectsPage(repository, { collection: "pull_request", updatedAfter: later })).toEqual({
-      subjects: [{ id: 900, number: 1900, kind: "pull_request", updatedAt: new Date(later) }],
-      nextAnchor: later, exhausted: true,
+      subjects: [{ id: 900, number: 1900, kind: "pull_request", updatedAt: new Date(later) }], nextAnchor: later, exhausted: true,
     });
     expect(requests.map((url) => [url.searchParams.get("updated_after"), url.searchParams.get("updated_before"), url.searchParams.get("page")])).toEqual([
       [boundary, boundary, "3"], [boundary, null, "3"], [later, null, "1"],
@@ -179,8 +160,7 @@ describe("GitLab subject pages", () => {
   });
 
   it("spends the shared budget once per slice page and holds before sending when it is spent", async () => {
-    let sent = 0;
-    let spent = 0;
+    let sent = 0, spent = 0;
     const client = gateway(async () => { sent++; return Response.json(Array.from({ length: 100 }, (_, index) => row(index + 1, boundary))); });
     await withSweepRequestBudget(async () => ++spent <= 2 ? null : new Date(later), async () => {
       expect((await client.listSubjectsPage(repository, { collection: "issue", updatedAfter: null })).subjects).toHaveLength(100);

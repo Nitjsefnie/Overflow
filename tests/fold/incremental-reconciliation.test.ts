@@ -636,8 +636,7 @@ async function fixture() {
     scans: [] as Array<string | undefined>, issueReads: [] as number[], reverseReads: [] as number[],
     reviewReads: [] as number[], diffReads: [] as number[],
     failedPageCursors: [] as Array<string | null>,
-    measuredIssueCost: null as number | null,
-    measuredReviewCost: null as number | null,
+    measuredIssueCost: null as number | null, measuredReviewCost: null as number | null,
     afterList: async () => {},
     async dirty(kind: "ISSUE" | "PULL_REQUEST", subject: GitHubSubject) {
       await f.store.enqueueWebhookReconciliation(f.id, { deliveryId: `event-${f.id}`, executionId: `event-${f.id}`, event: kind === "ISSUE" ? "issues" : "pull_request_review",
