@@ -82,6 +82,8 @@ jobs:
       # Measured on pnpm 12.23.0: `.npmrc` `audit-level` is not read, workspace
       # `auditLevel` is, and `pnpm_config_audit_level` outranks it.
       pnpm_config_audit_level: "low"
+      # No audit runs a pnpmfile hook.
+      pnpm_config_ignore_pnpmfile: "true"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

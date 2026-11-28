@@ -748,6 +748,7 @@ cp .github/workflows/*.yml .github/workflows-pr/
         pnpm_config_registry: "https://registry.npmjs.org/",
         pnpm_config_strict_ssl: "true",
         pnpm_config_audit_level: "low",
+        pnpm_config_ignore_pnpmfile: "true",
       },
       steps: [
         {},
