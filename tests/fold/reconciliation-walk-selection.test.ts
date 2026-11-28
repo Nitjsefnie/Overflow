@@ -14,7 +14,7 @@ for (const reason of [undefined, "SWEEP", "REDERIVATION", "WEBHOOK", "REGISTRATI
       deps.store.getSponsorBacklog = async () => diffOnly ? Number.MAX_SAFE_INTEGER : 0;
       deps.store.getReconciliationEvidence = async () => safeCache ? {
         version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, omittedOversizedFacts: 0,
-        checkpoint: at, lastFullPassAt: at, issues: [], pullRequests: [],
+        checkpoint: at, lastFullPassAt: at, lastOpenListingAt: null, issues: [], pullRequests: [],
       } : null;
       const openPass = vi.fn(async (input: Parameters<NonNullable<typeof deps.sweep>["openPass"]>[0]) => ({ ...memoryPass(), ...input }));
       if (sweepDefined) deps.sweep = { spend: async () => null, discardPass: async () => {}, openPass };

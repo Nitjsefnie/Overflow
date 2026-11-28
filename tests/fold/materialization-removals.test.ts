@@ -531,7 +531,7 @@ describe("a reconciliation that deletes materialized rows says so", () => {
         unwritableClosures: [], policyViolations: [], ledgerEntries: [],
       },
       synchronization: {
-        expectedVersion: null, scanStartedAt: new Date(), full: true, issues: [], pullRequests: [], dirtySubjects: [],
+        expectedVersion: null, scanStartedAt: new Date(), full: true, openListed: false, issues: [], pullRequests: [], dirtySubjects: [],
         keptIssueGitHubIds: [9_100_010],
       },
     };

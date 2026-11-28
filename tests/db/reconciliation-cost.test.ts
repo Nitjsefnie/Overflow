@@ -127,7 +127,7 @@ describe("durable reconciliation cost", () => {
       repositoryId: f.repositoryId, runId,
       fold: { ...f.fold, issues: f.fold.issues.map((issue) => ({ ...issue, title: "not committed" })) },
       // This is stale and must not supersede validation of the charge.
-      synchronization: { expectedVersion: 1, scanStartedAt: at, full: true, issues: [], pullRequests: [], dirtySubjects: [] },
+      synchronization: { expectedVersion: 1, scanStartedAt: at, full: true, openListed: false, issues: [], pullRequests: [], dirtySubjects: [] },
       cost: { sponsorId, completedAt: at, observedCost: 17, observedResponses: 4, unmeasuredResponses: 0, ...invalid },
     }))).rejects.toThrow("Invalid reconciliation cost observation.");
     expect(await sql`select status, graphql_cost from reconciliation_runs where id = ${runId}`)
@@ -156,7 +156,7 @@ describe("durable reconciliation cost", () => {
       await expect(f.store.withRepositoryReconciliation(f.repositoryId, () => f.store.materialize({
         repositoryId: f.repositoryId, runId,
         fold: { ...f.fold, issues: f.fold.issues.map((issue) => ({ ...issue, title: "not committed" })) },
-        synchronization: { expectedVersion: null, scanStartedAt: at, full: true, issues: [], pullRequests: [], dirtySubjects: [] },
+        synchronization: { expectedVersion: null, scanStartedAt: at, full: true, openListed: false, issues: [], pullRequests: [], dirtySubjects: [] },
         cost: { sponsorId, completedAt: at, observedCost: 17, observedResponses: 4, unmeasuredResponses: 0 },
       }))).rejects.toThrow("injected cost failure");
     } finally {
@@ -244,7 +244,7 @@ describe("durable reconciliation cost", () => {
     const before = await sql`select * from reconciliation_runs where id = ${runId}`;
     await expect(f.store.withRepositoryReconciliation(f.repositoryId, () => f.store.materialize({
       repositoryId: f.repositoryId, runId, fold: f.fold,
-      synchronization: { expectedVersion: 1, scanStartedAt: at, full: true, issues: [], pullRequests: [], dirtySubjects: [] },
+      synchronization: { expectedVersion: 1, scanStartedAt: at, full: true, openListed: false, issues: [], pullRequests: [], dirtySubjects: [] },
       cost: { sponsorId, completedAt: at, observedCost: 17, observedResponses: 4, unmeasuredResponses: 0 },
     }))).rejects.toThrow("Reconciliation cost publication requires a pending run.");
     expect(await sql`select * from reconciliation_runs where id = ${runId}`).toEqual(before);
@@ -301,7 +301,7 @@ describe("durable reconciliation cost", () => {
     const sponsorId = (await f.store.getRepository(f.repositoryId))!.sponsor.id;
     const runId = await f.store.beginRun(f.repositoryId);
     const input = { repositoryId: f.repositoryId, runId, fold: f.fold,
-      synchronization: { expectedVersion: null, scanStartedAt: at, full: true, issues: [], pullRequests: [], dirtySubjects: [] },
+      synchronization: { expectedVersion: null, scanStartedAt: at, full: true, openListed: false, issues: [], pullRequests: [], dirtySubjects: [] },
       cost: { sponsorId, completedAt: at, observedCost: 7, observedResponses: 1, unmeasuredResponses: 0 } };
     const contenders = [new PostgresFoldStore(sql), new PostgresFoldStore(sql)];
     const outcomes = await Promise.allSettled(contenders.map((store) => store.withRepositoryReconciliation(f.repositoryId, () => store.materialize(input))));

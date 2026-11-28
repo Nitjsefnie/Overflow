@@ -974,7 +974,7 @@ async function assertDrainedFailure(
   if (path === "getIssue") {
     f.fold.store.getReconciliationEvidence = async () => ({
       version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, omittedOversizedFacts: 0,
-      checkpoint: now, lastFullPassAt: now, issues: [], pullRequests: [],
+      checkpoint: now, lastFullPassAt: now, lastOpenListingAt: null, issues: [], pullRequests: [],
     });
     f.fold.store.getDirtyReconciliationSubjects = async () => [{ kind: "ISSUE", id: 101, number: 1, generation: "1" }];
   }
@@ -1058,7 +1058,7 @@ describe("the sweep request budget binds only the folds that run under it", () =
   function safeEvidence() {
     return {
       version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, omittedOversizedFacts: 0,
-      checkpoint: now, lastFullPassAt: now, issues: [], pullRequests: [],
+      checkpoint: now, lastFullPassAt: now, lastOpenListingAt: null, issues: [], pullRequests: [],
     };
   }
 
@@ -1239,7 +1239,7 @@ describe("a diff-only repository's re-derivation re-derives under the sweep requ
   function safeEvidence() {
     return {
       version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, omittedOversizedFacts: 0,
-      checkpoint: now, lastFullPassAt: now, issues: [], pullRequests: [],
+      checkpoint: now, lastFullPassAt: now, lastOpenListingAt: null, issues: [], pullRequests: [],
     };
   }
 

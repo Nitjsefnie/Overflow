@@ -327,7 +327,7 @@ describe("durable reconciliation evidence", () => {
 });
 
 function synchronization() {
-  return { expectedVersion: null as number | null, scanStartedAt: first, full: true,
+  return { expectedVersion: null as number | null, scanStartedAt: first, full: true, openListed: false,
     issues: [rawIssue()], pullRequests: [{ id: 201, reviews: [], rawDiff: "retained diff" }],
     dirtySubjects: [] as Array<{ kind: "ISSUE" | "PULL_REQUEST"; id: number; number: number; generation: string }> };
 }

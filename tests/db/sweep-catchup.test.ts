@@ -77,7 +77,7 @@ async function storeSize(repositoryId: string, totalCount: number): Promise<void
 
 function safeEvidence(overrides?: Partial<ReconciliationEvidence>): ReconciliationEvidence {
   return {
-    version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, checkpoint: at, lastFullPassAt: at,
+    version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, checkpoint: at, lastFullPassAt: at, lastOpenListingAt: null,
     omittedOversizedFacts: 0, issues: [], pullRequests: [], ...overrides,
   };
 }

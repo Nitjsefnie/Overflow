@@ -42,7 +42,7 @@ describe("reconcileRepository", () => {
     dependencies.store.getReconciliationEvidence = async () => ({
       version: 1, formatVersion: trigger === "old-format" ? 0 : RECONCILIATION_EVIDENCE_FORMAT,
       omittedOversizedFacts: trigger === "omitted" ? 1 : 0,
-      checkpoint: at, lastFullPassAt: trigger === "stale" ? new Date("2030-01-01T00:00:00Z") : at, issues: [], pullRequests: [],
+      checkpoint: at, lastFullPassAt: trigger === "stale" ? new Date("2030-01-01T00:00:00Z") : at, lastOpenListingAt: null, issues: [], pullRequests: [],
     });
     const result = await reconcileRepository(dependencies, "repository", { reason: "WEBHOOK", rederive: trigger === "rederive" });
     if (trigger === "old-format" || trigger === "omitted") {
@@ -1388,7 +1388,7 @@ describe("reconcileRepository", () => {
       },
     });
     dependencies.store.getReconciliationEvidence = async () => ({ version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
-      checkpoint: new Date(), lastFullPassAt: new Date(), omittedOversizedFacts: 0, issues: [], pullRequests: [] });
+      checkpoint: new Date(), lastFullPassAt: new Date(), lastOpenListingAt: null, omittedOversizedFacts: 0, issues: [], pullRequests: [] });
     dependencies.store.getDirtyReconciliationSubjects = async () => [poison, good];
     const discard = vi.fn().mockResolvedValue(undefined);
     dependencies.store.discardDirtyReconciliationSubject = discard;
@@ -1434,7 +1434,7 @@ describe("reconcileRepository", () => {
     const repository = await dependencies.store.getRepository("repository");
     repository!.provider = "gitlab";
     dependencies.store.getReconciliationEvidence = async () => ({ version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
-      checkpoint: new Date(), lastFullPassAt: new Date(), omittedOversizedFacts: 0, issues: [], pullRequests: [] });
+      checkpoint: new Date(), lastFullPassAt: new Date(), lastOpenListingAt: null, omittedOversizedFacts: 0, issues: [], pullRequests: [] });
     dependencies.store.getDirtyReconciliationSubjects = async () => [poison, good];
     const discard = vi.fn().mockResolvedValue(undefined);
     dependencies.store.discardDirtyReconciliationSubject = discard;
@@ -1468,7 +1468,7 @@ describe("reconcileRepository", () => {
     const serverError = new GitLabApiError(500);
     const dependencies = reconciliationDependencies({ github: { getIssue: vi.fn(async () => { throw serverError; }) } });
     dependencies.store.getReconciliationEvidence = async () => ({ version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
-      checkpoint: new Date(), lastFullPassAt: new Date(), omittedOversizedFacts: 0, issues: [], pullRequests: [] });
+      checkpoint: new Date(), lastFullPassAt: new Date(), lastOpenListingAt: null, omittedOversizedFacts: 0, issues: [], pullRequests: [] });
     dependencies.store.getDirtyReconciliationSubjects = async () => [
       { kind: "ISSUE" as const, id: 999, number: 42, generation: "7" },
       { kind: "ISSUE" as const, id: 555, number: 43, generation: "8" },
@@ -1491,7 +1491,7 @@ describe("reconcileRepository", () => {
     const subject = { kind: "PULL_REQUEST" as const, id: 777, number: 44, generation: "9" };
     const dependencies = reconciliationDependencies({ github: { getPullRequestClosingIssues: vi.fn(async () => { throw failure; }) } });
     dependencies.store.getReconciliationEvidence = async () => ({ version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
-      checkpoint: new Date(), lastFullPassAt: new Date(), omittedOversizedFacts: 0, issues: [], pullRequests: [] });
+      checkpoint: new Date(), lastFullPassAt: new Date(), lastOpenListingAt: null, omittedOversizedFacts: 0, issues: [], pullRequests: [] });
     dependencies.store.getDirtyReconciliationSubjects = async () => [subject];
     const discard = vi.fn().mockResolvedValue(undefined);
     dependencies.store.discardDirtyReconciliationSubject = discard;
@@ -1580,7 +1580,7 @@ describe("reconcileRepository", () => {
         getPullRequestReviews: vi.fn(async (_reference: GitHubRepositoryReference, number: number) => { refuse("reviews", number); return []; }),
         getPullRequestDiff: vi.fn(async (_reference: GitHubRepositoryReference, number: number) => { refuse("diff", number); return `diff ${number}`; }),
       } });
-      const metadata = { version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, checkpoint: new Date(), lastFullPassAt: new Date(), omittedOversizedFacts: 0 };
+      const metadata = { version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, checkpoint: new Date(), lastFullPassAt: new Date(), lastOpenListingAt: null, omittedOversizedFacts: 0 };
       let evidence: Awaited<ReturnType<typeof dependencies.store.getReconciliationEvidence>> = {
         ...metadata, issues: [issue], pullRequests: [{ id: 202, reviews: [], rawDiff: "diff 12" }] };
       dependencies.store.getReconciliationEvidence = async () => evidence;
@@ -1633,7 +1633,7 @@ describe("reconcileRepository", () => {
       await expect(reconcileRepository(dependencies, "repository", { reason: "SWEEP" })).resolves.toMatchObject({ skipped: false });
       const { issues, pullRequests } = vi.mocked(dependencies.store.materialize).mock.calls[0]![0].synchronization!;
       dependencies.store.getReconciliationEvidence = async () => ({ version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
-        checkpoint: new Date(), lastFullPassAt: new Date(), omittedOversizedFacts: 0, issues: issues as Array<ReturnType<typeof issue>>, pullRequests });
+        checkpoint: new Date(), lastFullPassAt: new Date(), lastOpenListingAt: null, omittedOversizedFacts: 0, issues: issues as Array<ReturnType<typeof issue>>, pullRequests });
       await expect(reconcileRepository(dependencies, "repository")).resolves.toMatchObject({ skipped: false });
       expect([dependencies.github.getPullRequestReviews, dependencies.github.getPullRequestDiff]
         .flatMap((spy) => vi.mocked(spy).mock.calls.map(([, number]) => number))).toEqual([13, 13]);
@@ -1752,7 +1752,7 @@ describe("reconcileRepository", () => {
       version: 1,
       formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
       checkpoint: new Date(),
-      lastFullPassAt: new Date(),
+      lastFullPassAt: new Date(), lastOpenListingAt: null,
       omittedOversizedFacts: 0,
       issues: [],
       pullRequests: [],
@@ -1821,7 +1821,7 @@ describe("reconcileRepository", () => {
       version: 1,
       formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
       checkpoint: new Date(),
-      lastFullPassAt: new Date(),
+      lastFullPassAt: new Date(), lastOpenListingAt: null,
       omittedOversizedFacts: 0,
       issues: [],
       pullRequests: [{ id: 201, reviews: [cachedReview], rawDiff: "cached diff" }],
@@ -1873,7 +1873,7 @@ describe("reconcileRepository", () => {
       version: 1,
       formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
       checkpoint: new Date(),
-      lastFullPassAt: new Date(),
+      lastFullPassAt: new Date(), lastOpenListingAt: null,
       omittedOversizedFacts: 0,
       issues: [referencedIssue],
       pullRequests: [{ id: 201, reviews: [cachedReview], rawDiff: "cached diff 201" }, { id: 210, reviews: [], rawDiff: "cached diff 210" }],
@@ -1952,7 +1952,7 @@ describe("reconcileRepository", () => {
       version: 1,
       formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
       checkpoint: new Date(),
-      lastFullPassAt: new Date(),
+      lastFullPassAt: new Date(), lastOpenListingAt: null,
       omittedOversizedFacts: 0,
       issues: [],
       pullRequests: [],
