@@ -642,6 +642,26 @@ if [ "$serving_release" != absent ] && [ -f "$serving_release/REVISION" ]; then
     exit 0
   fi
 fi
+# The unit runs /usr/local/bin/node, but the install, migrate and build below
+# run whatever node the caller's PATH resolves first (pnpm runs on it too), so
+# the guard refuses any Node but the deployed commit's engines.node.
+expected_node=$(jq -r '.engines.node // empty' "$tree/package.json") || expected_node=
+if [ -z "$expected_node" ]; then
+  printf 'Could not read engines.node from %s/package.json; refusing to deploy on an unverified Node.\n' "$tree" >&2
+  exit 1
+fi
+node_path=$(command -v node) || {
+  printf 'node is not on PATH; refusing to deploy. Put the system runtime first on PATH (/usr/local/bin, as deploy/README.md section 3 installs it).\n' >&2
+  exit 1
+}
+running_node=$(node --version) || {
+  printf '%s --version failed; refusing to deploy on an unverified Node. Put the system runtime first on PATH (/usr/local/bin, as deploy/README.md section 3 installs it).\n' "$node_path" >&2
+  exit 1
+}
+if [ "$running_node" != "v$expected_node" ]; then
+  printf 'The node on PATH is %s at %s, but this commit requires v%s (engines.node); refusing to deploy. Put the system runtime first on PATH (/usr/local/bin, as deploy/README.md section 3 installs it) and re-run.\n' "$running_node" "$node_path" "$expected_node" >&2
+  exit 1
+fi
 pnpm_config_package_import_method=copy pnpm install --frozen-lockfile
 # This read and both reports use systemd-env-file.sh from the deployed tree:
 # systemd v257's EnvironmentFile= parser ported (no-op COMMENT_ESCAPE folded

@@ -738,6 +738,17 @@ Before a deploy, check that the host runs the Node and pnpm versions that the
 `packageManager`. When either differs, move the host first:
 [Moving an existing host to a revision's Node and pnpm](#moving-an-existing-host-to-a-revisions-node-and-pnpm).
 
+The script runs the install, migration listing and build on whichever `node` (and
+the pnpm on it) the shell resolves first, while the unit runs
+`/usr/local/bin/node`. After the fast-forward, so against the deployed
+commit's `package.json`, and before the install, it therefore refuses unless
+`node --version` prints `v` followed by that commit's `engines.node`. The
+refusal names the expected version, the version found and the path `command -v node`
+resolved; it also refuses, with its own message, when `node` is not on `PATH`,
+fails to print a version, or the commit has no `engines.node`. Put
+`/usr/local/bin` (section 3's runtime) ahead of the other `node` directories on
+`PATH`, check with `command -v node`, and re-run.
+
 The procedure runs as one committed script. As root, from the tree root, run
 `bash scripts/deploy-revision.sh`; it applies the source-tree guards described
 below, plus its automated pending-migration and workflow-pinned CI gates: the
@@ -1497,10 +1508,10 @@ from, which is what the last paragraph of section 9 is about.
 `packageManager` the pnpm version. A revision can change either.
 
 Node does not follow on its own. The unit starts whatever `/usr/local/bin/node`
-points at, and `scripts/deploy-revision.sh` does not compare the host's Node
-with `engines.node`. On an older Node its install prints an
-`Unsupported engine` warning and exits 0, so nothing stops the deploy from
-building and restarting on the Node the host already has.
+points at, and `scripts/deploy-revision.sh` compares only the `node` on the
+shell's `PATH` with `engines.node`, not the unit's. On an older Node a bare
+install prints an `Unsupported engine` warning and exits 0, so nothing but this
+step stops the service from restarting on the Node the host already has.
 
 pnpm follows only inside the tree. There corepack by default runs the pnpm
 that the tree's `package.json` names, downloading a version it has not fetched
@@ -1530,7 +1541,8 @@ differ.
    `corepack prepare` line. A revision that changes only `packageManager`
    needs only this block.
 4. Check, still from `/tmp`: `/usr/local/bin/node --version` must print `v`
-   followed by `engines.node`;
+   followed by `engines.node`, and `command -v node` must print
+   `/usr/local/bin/node`, the one the deploy script runs;
    `readlink -f /usr/local/sbin/corepack /usr/local/sbin/pnpm` must print two
    paths under `/usr/local/lib/nodejs/node-v<version>/`, `<version>` being
    `engines.node`; and `pnpm --version` must print the version after `pnpm@`

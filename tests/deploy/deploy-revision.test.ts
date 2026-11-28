@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
-import { chmod, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,6 +34,7 @@ import {
   makeFixture,
   missingGhPath,
   parser,
+  pathWithoutNode,
   envReader,
   readLog,
   refusalFor,
@@ -163,21 +164,6 @@ exit 0
     expect(entries.map((entry) => entry.cmd)).toEqual(["flock"]);
   });
 
-  it("refuses the phase-2 entry without the deploy lock on fd 9, running nothing", async () => {
-    // The handoff exec inherits fd 9, so a phase-2 entry without it did not
-    // come from the handoff; the entry checks refuse before any command.
-    const fixture = await makeFixture();
-    await writeFile(fixture.shimLog, "");
-    const result = await runDeploy(fixture, {
-      OVERFLOW_DEPLOY_HANDOFF_SHA: FIXTURE_HASH,
-      OVERFLOW_DEPLOY_HANDOFF_SERVING: realpathSync(fixture.prevDir),
-    });
-
-    expect(result.status, result.stderr).not.toBe(0);
-    expect(result.stderr).toContain("without the deploy lock on fd 9");
-    expect(await readLog(fixture.shimLog), "nothing ran").toEqual([]);
-  });
-
   it("refuses the phase-2 entry without a serving anchor, running nothing", async () => {
     for (const serving of [undefined, ""] as const) {
       const fixture = await makeFixture();
@@ -193,24 +179,19 @@ exit 0
     }
   });
 
-  it("refuses the phase-2 entry when fd 9 is open on a file that is not the deploy lock", async () => {
-    // Open is not enough: the exec inherits fd 9 AS the deploy lock, so an
-    // entry with fd 9 on any other file did not come from the handoff.
+  it.each([
+    // The handoff exec inherits fd 9 AS the deploy lock, so an entry without
+    // it, or with it open on any other file, did not come from the handoff.
+    ["without the deploy lock on fd 9", undefined, () => ["without the deploy lock on fd 9"]],
+    ["when fd 9 is open on a file that is not the deploy lock", (f: Fixture) => f.envFile, (f: Fixture) => ["not on the deploy lock", f.envFile, f.lock]],
+  ] as const)("refuses the phase-2 entry %s, running nothing", async (_name, fd9File, mentions) => {
     const fixture = await makeFixture();
     await writeFile(fixture.shimLog, "");
-    const result = await runDeploy(
-      fixture,
-      {
-        OVERFLOW_DEPLOY_HANDOFF_SHA: FIXTURE_HASH,
-        OVERFLOW_DEPLOY_HANDOFF_SERVING: realpathSync(fixture.prevDir),
-      },
-      { openFd9On: fixture.envFile },
-    );
+    const handoff = { OVERFLOW_DEPLOY_HANDOFF_SHA: FIXTURE_HASH, OVERFLOW_DEPLOY_HANDOFF_SERVING: realpathSync(fixture.prevDir) };
+    const result = await runDeploy(fixture, handoff, fd9File && { openFd9On: fd9File(fixture) });
 
     expect(result.status, result.stderr).not.toBe(0);
-    expect(result.stderr).toContain("not on the deploy lock");
-    expect(result.stderr).toContain(fixture.envFile);
-    expect(result.stderr).toContain(fixture.lock);
+    for (const mention of mentions(fixture)) expect(result.stderr).toContain(mention);
     expect(await readLog(fixture.shimLog), "nothing ran").toEqual([]);
   });
 
@@ -249,6 +230,7 @@ exit 0
       ...gateReads(FIXTURE_HASH),
       `git merge --ff-only ${FIXTURE_HASH}`,
       `git rev-parse HEAD`,
+      `node --version`,
       `pnpm install --frozen-lockfile`,
       `node scripts/deploy-migration-status.ts`,
       `pnpm db:migrate`,
@@ -387,34 +369,21 @@ exit 0
     expect(realpathSync(path.join(fixture.tree, repointed))).not.toBe(realpathSync(fixture.prevDir));
   });
 
-  it("aborts on a failed readiness check before the webhook upgrade and the prune", async () => {
-    const fixture = await makeFixture();
-    const result = await runDeploy(fixture, { CURL_STATUS: "7" });
-
-    expect(result.status).toBe(7);
-    const entries = await readLog(fixture.shimLog);
-    expect(entries.some((entry) => entry.args.includes("webhooks:upgrade"))).toBe(false);
-    expect(entries.some((entry) => entry.args[0] === "release:prune")).toBe(false);
-    expect(entries.some((entry) => entry.args[0] === "restart")).toBe(true);
-  });
-
-  it("aborts on a failed sign-in smoke after readiness passed, before the webhook upgrade and the prune", async () => {
+  it.each([
+    ["readiness check", { CURL_STATUS: "7" }, [] as string[]],
+    ["sign-in smoke after readiness passed", { CURL_FAIL_MATCH: "/api/auth/providers" }, ["/api/auth/providers"]],
+  ])("aborts on a failed %s before the webhook upgrade and the prune", async (_name, env, smoke) => {
     // Readiness certifies the database, not Auth.js trust, so the smoke check
-    // that follows it must refuse the deploy on its own. The providers URL is
-    // the only one that fails here, proving readiness ran first and the failure
-    // is the smoke's.
+    // that follows must refuse on its own; its providers URL is the only one
+    // failing there, proving readiness ran first.
     const fixture = await makeFixture();
-    const result = await runDeploy(fixture, { CURL_FAIL_MATCH: "/api/auth/providers" });
+    const result = await runDeploy(fixture, env);
 
     expect(result.status, result.stderr).toBe(7);
     const entries = await readLog(fixture.shimLog);
-    const curlUrls = entries
-      .filter((entry) => entry.cmd === "curl")
-      .map((entry) => entry.args.at(-1));
-    expect(curlUrls).toEqual([
-      fixture.url,
-      `${fixture.url}/api/auth/providers`,
-    ]);
+    if (smoke.length) {
+      expect(entries.filter((entry) => entry.cmd === "curl").map((entry) => entry.args.at(-1))).toEqual([fixture.url, `${fixture.url}${smoke[0]}`]);
+    }
     expect(entries.some((entry) => entry.args.includes("webhooks:upgrade"))).toBe(false);
     expect(entries.some((entry) => entry.args[0] === "release:prune")).toBe(false);
     expect(entries.some((entry) => entry.args[0] === "restart")).toBe(true);
@@ -434,15 +403,14 @@ exit 0
     expect(upgradeAt).toBeGreaterThan(restartAt);
   });
 
-  it("skips the prune with a warning when the previous release falls outside the newest 3", async () => {
-    const fixture = await makeFixture({
-      prevRelease: ".next-release-20260101T000000Z-abc1234",
-      extraReleases: [
-        ".next-release-20260907T000000Z-def5678",
-        ".next-release-20260906T000000Z-abc1234",
-        ".next-release-20260905T000000Z-def5678",
-      ],
-    });
+  it.each([
+    ["falls outside the newest 3", ".next-release-20260101T000000Z-abc1234", [".next-release-20260907T000000Z-def5678", ".next-release-20260906T000000Z-abc1234", ".next-release-20260905T000000Z-def5678"]],
+    // Two releases sort above the default previous release (20260910 and
+    // 20260909 over 20260908), one past the boundary: the automated prune
+    // would silently delete the just-replaced rollback target, so it warns.
+    ["is exactly fourth-newest, the first name past the keep-3 boundary", undefined, [".next-release-20260910T000000Z-abc1234", ".next-release-20260909T000000Z-abc1234", ".next-release-20260907T000000Z-def5678"]],
+  ])("skips the prune with a warning when the previous release %s", async (_name, prevRelease, extraReleases) => {
+    const fixture = await makeFixture({ prevRelease, extraReleases });
     const result = await runDeploy(fixture);
 
     expect(result.status, result.stderr).toBe(0);
@@ -450,9 +418,7 @@ exit 0
     expect(entries.some((entry) => entry.args[0] === "release:prune")).toBe(false);
     const previous = path.basename(fixture.prevDir);
     const warning = `${result.stdout}\n${result.stderr}`;
-    expect(warning).toContain(previous);
-    expect(warning).toContain("pnpm release:prune");
-    expect(warning).toContain("--keep");
+    for (const part of [previous, "pnpm release:prune", "--keep"]) expect(warning).toContain(part);
     expect(await readdir(fixture.tree)).toContain(previous);
   });
 
@@ -475,31 +441,6 @@ exit 0
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     const entries = await readLog(fixture.shimLog);
     expect(entries.map(describeEntry)).toContain(`pnpm release:prune ${fixture.tree} --keep 3`);
-  });
-
-  it("warns without pruning when the previous release is exactly fourth-newest, the first name past the keep-3 boundary", async () => {
-    // Two releases sort above the previous one (20260910 and 20260909 above
-    // the default 20260908), placing it one past the boundary: the guard must
-    // refuse the automated prune — the alternative silently deletes the
-    // just-replaced rollback target — and warn instead, keeping everything.
-    const fixture = await makeFixture({
-      extraReleases: [
-        ".next-release-20260910T000000Z-abc1234",
-        ".next-release-20260909T000000Z-abc1234",
-        ".next-release-20260907T000000Z-def5678",
-      ],
-    });
-    const result = await runDeploy(fixture);
-
-    expect(result.status, result.stderr).toBe(0);
-    const entries = await readLog(fixture.shimLog);
-    expect(entries.some((entry) => entry.args[0] === "release:prune")).toBe(false);
-    const previous = path.basename(fixture.prevDir);
-    const warning = `${result.stdout}\n${result.stderr}`;
-    expect(warning).toContain(previous);
-    expect(warning).toContain("pnpm release:prune");
-    expect(warning).toContain("--keep");
-    expect(await readdir(fixture.tree)).toContain(previous);
   });
 
   it("satisfies the fence with the real flock binary, proving the fd 9 wiring", async () => {
@@ -1723,26 +1664,18 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     );
   });
 
-  it("proceeds with the full deploy when the serving release records a different commit", async () => {
-    const fixture = await makeFixture();
-    await writeFile(path.join(fixture.prevDir, "REVISION"), "0000000000000000000000000000000000000000\n");
-    const result = await runDeploy(fixture);
+  it.each([["a different commit", "0000000000000000000000000000000000000000\n"], ["no REVISION at all", undefined]])(
+    "proceeds with the full deploy when the serving release records %s",
+    async (_name, revision) => {
+      const fixture = await makeFixture();
+      if (revision) await writeFile(path.join(fixture.prevDir, "REVISION"), revision);
+      const result = await runDeploy(fixture);
 
-    expect(result.status, result.stderr).toBe(0);
-    const entries = await readLog(fixture.shimLog);
-    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(true);
-    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "build")).toBe(true);
-  });
-
-  it("proceeds when the serving release records no REVISION at all", async () => {
-    const fixture = await makeFixture();
-    const result = await runDeploy(fixture);
-
-    expect(result.status, result.stderr).toBe(0);
-    const entries = await readLog(fixture.shimLog);
-    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "install")).toBe(true);
-    expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === "build")).toBe(true);
-  });
+      expect(result.status, result.stderr).toBe(0);
+      const entries = await readLog(fixture.shimLog);
+      for (const verb of ["install", "build"]) expect(entries.some((entry) => entry.cmd === "pnpm" && entry.args[0] === verb)).toBe(true);
+    },
+  );
 
   it("does not skip on a dangling anchor, and the run still refuses the unusable serving state downstream", async () => {
     const fixture = await makeFixture();
@@ -1866,6 +1799,28 @@ ${SHIM_DISPATCH.gh!.dispatch}`));
     expect(atEsac, "the CI-gate esac present").toBeGreaterThan(-1);
     expect(atSkip, "the skip after the CI-gate case").toBeGreaterThan(atEsac);
     expect(atInstall, "the install after the skip").toBeGreaterThan(atSkip);
+  });
+
+  it.each([
+    ["a different Node", { NODE_SHIM_VERSION: "bumped" }, ["wanted", "bumped", "node"]],
+    ["a Node whose --version fails", { NODE_SHIM_VERSION_RC: "1" }, ["node"]],
+    ["no engines.node", {}, ["package.json"]],
+    ["no Node on PATH", { PATH: "none" }, ["PATH"]],
+  ])("refuses before the install when the shell resolves %s, running nothing after the guard", async (kind, shimEnv, mentions) => {
+    const fixture = await makeFixture();
+    const names: Record<string, string> = { wanted: fixture.nodeVersion, node: path.join(fixture.bins, "node"),
+      bumped: fixture.nodeVersion.replace(/\d+$/, (patch) => String(Number(patch) + 1)) };
+    const env: Record<string, string> = { ...shimEnv };
+    if (env.NODE_SHIM_VERSION) env.NODE_SHIM_VERSION = `v${names.bumped}`;
+    if (env.PATH) env.PATH = await pathWithoutNode(fixture);
+    if (kind === "no engines.node") await writeFile(path.join(fixture.tree, "package.json"), "{}");
+    const result = await runDeploy(fixture, env, { omitShims: env.PATH ? ["node"] : [] });
+
+    expect(result.status, result.stdout).toBe(1);
+    for (const mention of mentions) expect(result.stderr).toContain(names[mention] ?? mention);
+    const entries = await readLog(fixture.shimLog);
+    expect(entries.filter((entry) => ["pnpm", "systemctl"].includes(entry.cmd))).toEqual([]);
+    expect(entries.filter((entry) => entry.cmd === "node" && entry.args[0] !== "--version")).toEqual([]);
   });
 });
 
@@ -2072,7 +2027,9 @@ async function makeGitFixture(): Promise<{ fixture: Fixture; behind: string; tip
   await writeFile(path.join(origin, "scripts", "deploy-revision.sh"), await readFile(script, "utf8"));
   await writeFile(path.join(origin, "scripts", "required-checks-parse.jq"), await readFile(parser, "utf8"));
   await writeFile(path.join(origin, "scripts", "systemd-env-file.sh"), await readFile(envReader, "utf8"));
-  run(origin, ["add", ".gitignore", "app.txt", SOURCE_PATH, MAP_PATH, "scripts/deploy-revision.sh", "scripts/required-checks-parse.jq", "scripts/systemd-env-file.sh"]);
+  // The deploy's Node guard reads the deployed commit's package.json.
+  await cp(path.join(fixture.tree, "package.json"), path.join(origin, "package.json"));
+  run(origin, ["add", ".gitignore", "app.txt", "package.json", SOURCE_PATH, MAP_PATH, "scripts/deploy-revision.sh", "scripts/required-checks-parse.jq", "scripts/systemd-env-file.sh"]);
   run(origin, ["commit", "-q", "-m", "base"]);
   const behind = run(origin, ["rev-parse", "HEAD"]);
   const git = (...args: string[]): string => run(fixture.tree, args);
@@ -2086,6 +2043,7 @@ async function makeGitFixture(): Promise<{ fixture: Fixture; behind: string; tip
   await rm(path.join(fixture.tree, "scripts", "deploy-revision.sh"));
   await rm(path.join(fixture.tree, "scripts", "required-checks-parse.jq"));
   await rm(path.join(fixture.tree, "scripts", "systemd-env-file.sh"));
+  await rm(path.join(fixture.tree, "package.json"));
   git("checkout", "-q", "-B", "main", behind);
   for (const n of [1, 2, 3]) {
     await writeFile(path.join(origin, "incoming.txt"), `${n}\n`);
