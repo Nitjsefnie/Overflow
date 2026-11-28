@@ -18,10 +18,12 @@ describe("GitHub subject pages", () => {
     let request: Request | undefined;
     const client = gateway(async (input, init) => {
       request = new Request(input, init);
-      return Response.json([{ id: 701, number: 12, updated_at: firstTime }, { id: 405, number: 19, updated_at: secondTime, pull_request: {} }]);
+      return Response.json([{ id: 701, number: 12, updated_at: firstTime },
+        { id: 405, number: 19, updated_at: secondTime, pull_request: {} }]);
     });
     expect(await listSubjectPage(client, repository, { cursor: null })).toEqual({
-      subjects: [{ id: 701, number: 12, kind: "issue", updatedAt: new Date(firstTime) }, { id: 405, number: 19, kind: "pull_request", updatedAt: new Date(secondTime) }],
+      subjects: [{ id: 701, number: 12, kind: "issue", updatedAt: new Date(firstTime) },
+        { id: 405, number: 19, kind: "pull_request", updatedAt: new Date(secondTime) }],
       nextCursor: null,
     });
     expect(request?.method).toBe("GET");
@@ -39,15 +41,12 @@ describe("GitHub subject pages", () => {
     const client = gateway(async (input) => {
       const url = new URL(String(input));
       requests.push(url.search);
-      if (requests.length === 1) return Response.json([
-        { id: 801, number: 6, updated_at: firstTime },
-      ], { headers: { link: `<${base}?after=opaque%2Bcursor&per_page=100>; rel="next", <${base}?page=3>; rel="last"` } });
-      if (requests.length === 2) return Response.json([
-        { id: 802, number: 7, updated_at: firstTime },
-      ], { headers: { link: `<${base}?page=1>; rel="prev", <${base}?page=3&per_page=100>; rel="next"` } });
-      if (requests.length === 3) return Response.json([
-        { id: 803, number: 8, updated_at: secondTime },
-      ], { headers: { link: `<${base}?page=2>; rel="prev", <${base}?page=1>; rel="first"` } });
+      if (requests.length === 1) return Response.json([{ id: 801, number: 6, updated_at: firstTime }],
+        { headers: { link: `<${base}?after=opaque%2Bcursor&per_page=100>; rel="next", <${base}?page=3>; rel="last"` } });
+      if (requests.length === 2) return Response.json([{ id: 802, number: 7, updated_at: firstTime }],
+        { headers: { link: `<${base}?page=1>; rel="prev", <${base}?page=3&per_page=100>; rel="next"` } });
+      if (requests.length === 3) return Response.json([{ id: 803, number: 8, updated_at: secondTime }],
+        { headers: { link: `<${base}?page=2>; rel="prev", <${base}?page=1>; rel="first"` } });
       throw new Error("Unexpected extra page");
     });
     const first = await listSubjectPage(client, repository, { cursor: null });
@@ -58,7 +57,8 @@ describe("GitHub subject pages", () => {
     const third = await listSubjectPage(client, repository, { cursor: second.nextCursor });
     expect([...first.subjects, ...second.subjects, ...third.subjects].map((subject) => subject.id)).toEqual([801, 802, 803]);
     expect(third.nextCursor).toBeNull();
-    expect(requests).toEqual(["?state=all&sort=updated&direction=asc&per_page=100", "?after=opaque%2Bcursor&per_page=100", "?page=3&per_page=100"]);
+    expect(requests).toEqual(["?state=all&sort=updated&direction=asc&per_page=100",
+      "?after=opaque%2Bcursor&per_page=100", "?page=3&per_page=100"]);
   });
 
   it("adds since only when given and encodes repository segments", async () => {
@@ -71,7 +71,8 @@ describe("GitHub subject pages", () => {
   });
 
   it("exhausts when a Link relation only starts with next", async () => {
-    const client = gateway(async () => Response.json([], { headers: { link: '<https://api.github.com/repos/octo/overflow/issues?page=2>; rel="next-sibling"' } }));
+    const client = gateway(async () => Response.json([],
+      { headers: { link: '<https://api.github.com/repos/octo/overflow/issues?page=2>; rel="next-sibling"' } }));
     expect((await listSubjectPage(client, repository, { cursor: null })).nextCursor).toBeNull();
   });
 
@@ -104,7 +105,8 @@ describe("GitHub open issue IDs", () => {
       ], { headers: { link: `<${base}?state=open&page=2>; rel="next"` } });
       return Response.json([{ id: 13, number: 3, updated_at: secondTime }]);
     });
-    expect(await withGraphqlFoldCost(() => client.listOpenIssueIds(repository))).toEqual({ value: [11, 13], cost: { observedCost: null, observedResponses: 0, unmeasuredResponses: 2 } });
+    expect(await withGraphqlFoldCost(() => client.listOpenIssueIds(repository)))
+      .toEqual({ value: [11, 13], cost: { observedCost: null, observedResponses: 0, unmeasuredResponses: 2 } });
     expect(requests).toEqual([`${base}?state=open&sort=updated&direction=asc&per_page=100`, `${base}?state=open&page=2`]);
   });
 
