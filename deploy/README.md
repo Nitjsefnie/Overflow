@@ -779,8 +779,8 @@ the exact fetched SHA (below), and only after both gates pass the
 `git merge --ff-only` that moves the tree to that SHA; then the redundant-deploy
 skip that compares the resolved SHA against the serving release's `REVISION`
 record and, on a match — the run that built the serving release migrated at that
-same commit — exits without installing, migrating or building, the copy-import
-install, the environment load (the file read as systemd's `EnvironmentFile=`
+same commit — exits without installing, migrating or building, the Node guard
+(above), the copy-import install, the environment load (the file read as systemd's `EnvironmentFile=`
 reads it, never run; below), `db:migrate`, a grammar-named release directory
 created with a collision-aborting `mkdir`, generated-config preparation, the
 build, whose clean step wipes the release directory (everything outside
@@ -1132,6 +1132,10 @@ commit, check ancestry, require a clean working tree and reject ignored files
 outside the operational allowlist before `git merge --ff-only`. They skip a
 redundant deploy when the serving release's `REVISION` matches that commit and
 write the record after webhook upgrade succeeds.
+
+The manual path carries no Node guard either: before its `pnpm install`, run
+`command -v node` and `node --version` by hand, and stop unless the version is
+`v` followed by `engines.node`.
 
 The manual path does not carry the script's automated pending-migration gate.
 After loading the environment, stop and run
