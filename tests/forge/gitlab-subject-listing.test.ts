@@ -11,9 +11,7 @@ const boundary = "2026-10-26T09:00:00.123000Z";
 const later = "2026-10-26T10:00:00.000Z";
 const row = (id: number, updated_at = older) => ({ id, iid: id + 1000, updated_at });
 
-function gateway(fetch: typeof globalThis.fetch) {
-  return new GitLabGateway({ instanceUrl: "https://gitlab.test", token: randomBytes(24).toString("hex"), fetch });
-}
+function gateway(fetch: typeof globalThis.fetch) { return new GitLabGateway({ instanceUrl: "https://gitlab.test", token: randomBytes(24).toString("hex"), fetch }); }
 
 function timestampSlice() {
   const requests: URL[] = [];
@@ -33,8 +31,7 @@ function timestampSlice() {
 
 describe("GitLab subject pages", () => {
   it.each([
-    ["2026-10-26T09:00:00.123Z", "2026-10-26T09:00:00.123000Z"],
-    ["2026-10-26T09:00:00Z", "2026-10-26T09:00:00.000000Z"],
+    ["2026-10-26T09:00:00.123Z", "2026-10-26T09:00:00.123000Z"], ["2026-10-26T09:00:00Z", "2026-10-26T09:00:00.000000Z"],
     ["2026-10-26T11:00:00.123+02:00", "2026-10-26T09:00:00.123000Z"],
   ])("orders equal instants by ID across timestamp spellings %s and %s", async (first, second) => {
     for (const [lowerIdTime, higherIdTime] of [[first, second], [second, first]]) {
@@ -55,14 +52,16 @@ describe("GitLab subject pages", () => {
   });
 
   it("orders distinct microseconds before IDs within a mixed-precision millisecond", async () => {
-    const client = gateway(async () => Response.json([row(1, "2026-10-26T09:00:00.123900Z"), row(3, "2026-10-26T09:00:00.123Z"), row(2, "2026-10-26T09:00:00.123100Z")]));
+    const client = gateway(async () => Response.json(
+      [row(1, "2026-10-26T09:00:00.123900Z"), row(3, "2026-10-26T09:00:00.123Z"), row(2, "2026-10-26T09:00:00.123100Z")]));
     const result = await client.listSubjectsPage(repository, { collection: "issue", updatedAfter: null });
     expect(result.subjects.filter((subject) => subject.id <= 2).map((subject) => subject.id)).toEqual([2, 1]);
     expect(result.subjects.map((subject) => subject.id)).toEqual([3, 2, 1]);
   });
 
   it("returns the latest instant's original spelling as the terminal anchor", async () => {
-    const client = gateway(async () => Response.json([row(1, "2026-10-26T09:00:00.123900Z"), row(9, "2026-10-26T09:00:00.123Z"), row(2, "2026-10-26T09:00:00.123100Z")]));
+    const client = gateway(async () => Response.json(
+      [row(1, "2026-10-26T09:00:00.123900Z"), row(9, "2026-10-26T09:00:00.123Z"), row(2, "2026-10-26T09:00:00.123100Z")]));
     const result = await client.listSubjectsPage(repository, { collection: "issue", updatedAfter: null });
     expect(result.nextAnchor).toBe("2026-10-26T09:00:00.123900Z");
   });
@@ -70,8 +69,7 @@ describe("GitLab subject pages", () => {
   it.each(["issue", "pull_request"] as const)("returns the final timestamp group on a one-row short %s page", async (collection) => {
     const client = gateway(async () => Response.json([row(501, boundary)]));
     expect(await client.listSubjectsPage(repository, { collection, updatedAfter: null })).toEqual({
-      subjects: [{ id: 501, number: 1501, kind: collection, updatedAt: new Date(boundary) }], nextAnchor: boundary, exhausted: true,
-    });
+      subjects: [{ id: 501, number: 1501, kind: collection, updatedAt: new Date(boundary) }], nextAnchor: boundary, exhausted: true });
   });
 
   it.each(["issue", "pull_request"] as const)("self-sorts the full raw %s page by timestamp and global ID for caller-owned prefix filtering", async (collection) => {
@@ -145,18 +143,15 @@ describe("GitLab subject pages", () => {
     expect(result.exhausted).toBe(true);
     expect(requests).toHaveLength(1);
     expect(Object.fromEntries(requests[0]!.searchParams)).toEqual({
-      state: "all", per_page: "100", order_by: "updated_at", sort: "asc", page: "3", updated_after: boundary, updated_before: boundary,
-    });
+      state: "all", per_page: "100", order_by: "updated_at", sort: "asc", page: "3", updated_after: boundary, updated_before: boundary });
     const continued = await client.listSubjectsPage(repository, { collection: "pull_request", updatedAfter: boundary, page: 3 });
     expect(continued.subjects.map((subject) => subject.id)).toEqual([300, 301, 302, 303, 304, 900]);
     expect(continued.nextAnchor).toBe(later);
     expect(continued.exhausted).toBe(true);
     expect(await client.listSubjectsPage(repository, { collection: "pull_request", updatedAfter: later })).toEqual({
-      subjects: [{ id: 900, number: 1900, kind: "pull_request", updatedAt: new Date(later) }], nextAnchor: later, exhausted: true,
-    });
+      subjects: [{ id: 900, number: 1900, kind: "pull_request", updatedAt: new Date(later) }], nextAnchor: later, exhausted: true });
     expect(requests.map((url) => [url.searchParams.get("updated_after"), url.searchParams.get("updated_before"), url.searchParams.get("page")])).toEqual([
-      [boundary, boundary, "3"], [boundary, null, "3"], [later, null, "1"],
-    ]);
+      [boundary, boundary, "3"], [boundary, null, "3"], [later, null, "1"]]);
   });
 
   it("spends the shared budget once per slice page and holds before sending when it is spent", async () => {
@@ -190,7 +185,8 @@ describe("GitLab open issue IDs", () => {
       request = new URL(String(input));
       return Response.json([{ id: 41, iid: 1 }], { headers: { "x-next-cursor": "second" } });
     });
-    expect(await withGraphqlFoldCost(() => client.listOpenIssueIds(repository))).toEqual({ value: [41, 57], cost: { observedCost: null, observedResponses: 0, unmeasuredResponses: 2 } });
+    expect(await withGraphqlFoldCost(() => client.listOpenIssueIds(repository)))
+      .toEqual({ value: [41, 57], cost: { observedCost: null, observedResponses: 0, unmeasuredResponses: 2 } });
     expect(request?.pathname).toBe("/api/v4/projects/group%2Fsubgroup%2Fproject/issues");
     expect(request?.searchParams.get("state")).toBe("opened");
     expect(request?.searchParams.get("pagination")).toBe("keyset");

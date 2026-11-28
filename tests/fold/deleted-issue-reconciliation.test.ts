@@ -144,11 +144,9 @@ async function fixture() {
     const id = externalId++;
     return { id, number, title: `Issue ${number}`, body: "body", url: `https://github.com/octo/repo/issues/${number}`,
       state: "OPEN", stateReason: null, createdAt: `2026-09-01T07:00:0${number}Z`, updatedAt: "2026-09-01T12:00:00Z",
-      closedAt: null, authorLogin: sponsor.github_login, authorGitHubUserId: sponsorGitHubId, labels: ["M"],
-      claimAssigneeGitHubLogin: null, claimAssigneeGitHubUserId: null,
+      closedAt: null, authorLogin: sponsor.github_login, authorGitHubUserId: sponsorGitHubId, labels: ["M"], claimAssigneeGitHubLogin: null, claimAssigneeGitHubUserId: null,
       history: [{ kind: "LABELED", id: `opening-${id}`, actorLogin: sponsor.github_login,
-        actorGitHubUserId: sponsorGitHubId, createdAt: "2026-09-01T08:00:00Z", label: "M" }],
-      comments: [], closingPullRequests: [] };
+        actorGitHubUserId: sponsorGitHubId, createdAt: "2026-09-01T08:00:00Z", label: "M" }], comments: [], closingPullRequests: [] };
   };
   const cheapest = issue(1), next = issue(2);
   let upstream = [cheapest, next];
@@ -173,16 +171,12 @@ async function fixture() {
     getPullRequestClosingIssues: async () => [], getPullRequestReviews: async () => [], getPullRequestDiff: async () => "diff",
   };
 
-  return {
-    id: String(repository.id), store, github, cheapest, next, scans, issueReads, listings,
+  return { id: String(repository.id), store, github, cheapest, next, scans, issueReads, listings,
     fold(reason?: "WEBHOOK", elapsed = 120_000) {
       clock = new Date(clock.getTime() + elapsed);
       return reconcileRepository({ store, github, now: () => clock, onBudgetChange: () => {} }, String(repository.id), { reason });
     },
-    forget(gone: GitHubIssue, answer: () => Promise<GitHubIssue | null>) {
-      upstream = upstream.filter(({ id }) => id !== gone.id);
-      answers.set(gone.id, answer);
-    },
+    forget(gone: GitHubIssue, answer: () => Promise<GitHubIssue | null>) { upstream = upstream.filter(({ id }) => id !== gone.id); answers.set(gone.id, answer); },
     unlist(row: GitHubIssue) { unlisted.add(row.id); },
     async board() {
       const rows = await listEligibleIssues(String(viewer.id), {}, { sql: sql as unknown as DashboardSql });
