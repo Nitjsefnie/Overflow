@@ -527,16 +527,19 @@ describe("PostgreSQL recalibration credit adjustments", () => {
     expect(parsed && [parsed.selfWorkPairs, parsed.outsiderSettlementPairs]).toEqual(accepted ? [pairs, pairs] : null);
   });
 
-  // Each row changes one thing the live lookup, its proof check or the parse
+  // Each row changes one thing the live lookup, its drift checks or the parse
   // keys on, for the first stored pair of one cohort list: the audit must refuse as drift.
-  it.each((["selfWork", "outsider"] as const).flatMap((list) => ([
+  it.each([...(["selfWork", "outsider"] as const).flatMap((list) => ([
     ["names another repository", "githubRepositoryId", /^No live/],
     ["names another issue", "githubIssueId", /^No live/],
     ["names another pull request", "githubPullRequestId", /^No live/],
+    ["has a live opening difficulty that moved", "offeredDifficulty", /no longer carries the stored opening difficulty/],
     ["has a live proof that moved", "proofSha256", /no longer carries the stored proof fingerprint/],
+    ["has a live merge time that moved", "mergedAt", /no longer carries the stored merge time/],
     ["names another account's row", "another account's row", /^No live/],
     ["is listed twice", "listed twice", /malformed/],
-  ] as const).map(([label, change, description]) => [list, label, change, description] as const)))(
+  ] as const).map(([label, change, description]) => [list, label, change, description] as const)),
+  ["outsider", "has a live settlement donated since", "status", /no longer SETTLED/] as const])(
     "refuses a stored %s pair that %s as drift, writing nothing",
     async (list, _label, change, description) => {
       const store = new PostgresRecalibrationCreditStore(sql);
@@ -549,10 +552,19 @@ describe("PostgreSQL recalibration credit adjustments", () => {
         const other = await seedActionableCohort();
         pairs[0] = list === "selfWork" ? other.selfWorkPairs[0]! : other.outsiderPairs[0]!.pair;
       } else if (change === "proofSha256") {
-        // The live proof each cohort read takes moves; the stored pair keeps the old one.
+        // The live value each cohort read takes moves; the stored pair keeps the old one.
         await (list === "selfWork"
           ? sql`update pull_requests set proof_sha256 = ${proofFor(nextExternalId())} where github_pull_request_id = ${pairs[0]!.githubPullRequestId}`
           : sql`update settlements set proof_sha256 = ${proofFor(nextExternalId())} where id = ${fixture.outsiderPairs[0]!.settlementId}`);
+      } else if (change === "offeredDifficulty") {
+        await sql`update ${sql(list === "selfWork" ? "self_work_calibrations" : "settlements")}
+          set opening_comparison_points = opening_comparison_points + 1
+          where issue_id = (select id from issues where github_issue_id = ${pairs[0]!.githubIssueId})`;
+      } else if (change === "mergedAt") {
+        await sql`update pull_requests set merged_at = merged_at - interval '1 hour' where github_pull_request_id = ${pairs[0]!.githubPullRequestId}`;
+      } else if (change === "status") {
+        // DONATED keeps the creditor and every stored figure, so only the status check can refuse it.
+        await sql`update settlements set status = 'DONATED', donation_comment_id = 'donation' where id = ${fixture.outsiderPairs[0]!.settlementId}`;
       } else {
         pairs[0] = { ...pairs[0]!, [change]: nextExternalId() };
       }
