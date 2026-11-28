@@ -1,0 +1,1 @@
+alter table repository_reconciliation_evidence add column last_open_listing_at timestamptz;

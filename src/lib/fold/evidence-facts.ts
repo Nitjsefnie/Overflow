@@ -229,8 +229,8 @@ export async function synchronizeReconciliationEvidence(
   // Lock a row that exists even before bootstrap so two cold publishers cannot
   // both pass the absence check. The version compare also fences expired workers.
   await transaction`select id from registered_repositories where id = ${repositoryId} for update`;
-  const [current] = await transaction<{ version: number; last_full_pass_at: Date }[]>`
-    select version, last_full_pass_at from repository_reconciliation_evidence where repository_id = ${repositoryId}
+  const [current] = await transaction<{ version: number; last_full_pass_at: Date; last_open_listing_at: Date | null }[]>`
+    select version, last_full_pass_at, last_open_listing_at from repository_reconciliation_evidence where repository_id = ${repositoryId}
   `;
   if ((current?.version ?? null) !== synchronization.expectedVersion) {
     throw new Error("Stale reconciliation evidence publisher.");
@@ -252,13 +252,15 @@ export async function synchronizeReconciliationEvidence(
     );
   }
 
+  // A full pass re-observes every issue, so it counts as an open listing; null (rows before the column) lists next.
   await transaction`insert into repository_reconciliation_evidence
-    (repository_id, version, format_version, checkpoint, last_full_pass_at, omitted_oversized_facts)
+    (repository_id, version, format_version, checkpoint, last_full_pass_at, last_open_listing_at, omitted_oversized_facts)
     values (${repositoryId}, ${(current?.version ?? 0) + 1}, ${RECONCILIATION_EVIDENCE_FORMAT},
       ${synchronization.scanStartedAt}, ${synchronization.full ? synchronization.scanStartedAt : current?.last_full_pass_at ?? null},
+      ${synchronization.full || synchronization.openListed === true ? synchronization.scanStartedAt : current?.last_open_listing_at ?? null},
       ${oversized.length})
     on conflict (repository_id) do update set version = excluded.version, format_version = excluded.format_version,
-      checkpoint = excluded.checkpoint, last_full_pass_at = excluded.last_full_pass_at,
+      checkpoint = excluded.checkpoint, last_full_pass_at = excluded.last_full_pass_at, last_open_listing_at = excluded.last_open_listing_at,
       omitted_oversized_facts = excluded.omitted_oversized_facts`;
 
   // Per-fact writes with a no-op guard: a fact whose payload is jsonb-equal to
@@ -316,11 +318,11 @@ export async function readReconciliationEvidence(
   repositoryId: string,
 ): Promise<ReconciliationEvidence | null> {
   const rows = await sql<{
-    version: number; format_version: number; checkpoint: Date; last_full_pass_at: Date;
+    version: number; format_version: number; checkpoint: Date; last_full_pass_at: Date; last_open_listing_at: Date | null;
     omitted_oversized_facts: number;
     kind: ReconciliationFactKind | null; subject_key: string | null; payload: unknown;
   }[]>`
-    select e.version, e.format_version, e.checkpoint, e.last_full_pass_at, e.omitted_oversized_facts,
+    select e.version, e.format_version, e.checkpoint, e.last_full_pass_at, e.last_open_listing_at, e.omitted_oversized_facts,
       f.kind, f.subject_key, f.payload
     from repository_reconciliation_evidence e
     left join repository_reconciliation_evidence_facts f on f.repository_id = e.repository_id
@@ -344,6 +346,7 @@ export async function readReconciliationEvidence(
     formatVersion: metadata.format_version,
     checkpoint: metadata.checkpoint,
     lastFullPassAt: metadata.last_full_pass_at,
+    lastOpenListingAt: metadata.last_open_listing_at,
     omittedOversizedFacts: metadata.omitted_oversized_facts,
     ...mergeEvidenceFacts(factRows),
   };

@@ -448,6 +448,7 @@ describe("incremental reconciliation", () => {
     const f = await fixture();
     await f.run();
     f.issues = [f.issues[0]!];
+    await sql`update repository_reconciliation_evidence set last_open_listing_at = null where repository_id = ${f.id}`;
     await f.runAt("2026-09-08T10:02:00Z");
     expect((await f.store.getReconciliationEvidence(f.id))?.issues).toHaveLength(2);
     if (reason === "six hours") f.clock = new Date("2026-09-08T16:00:00Z");

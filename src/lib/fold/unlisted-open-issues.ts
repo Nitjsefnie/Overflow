@@ -1,5 +1,12 @@
+import { RECONCILIATION_FULL_REPAIR_MS } from "@/lib/fold/full-repair-interval";
 import type { ReconciliationGateway } from "@/lib/fold/reconcile";
+import type { ReconciliationEvidence } from "@/lib/fold/reconciliation-evidence";
 import type { GitHubIssue, GitHubRepositoryReference, GitHubSubject } from "@/lib/github/types";
+
+// The listing costs a request per hundred open issues and pull requests: once per interval.
+export function openListingDue({ lastOpenListingAt }: Pick<ReconciliationEvidence, "lastOpenListingAt">, at: Date): boolean {
+  return lastOpenListingAt == null || at.getTime() - lastOpenListingAt.getTime() >= RECONCILIATION_FULL_REPAIR_MS;
+}
 
 export async function unlistedOpenIssues(
   gateway: Pick<ReconciliationGateway, "listOpenIssueIds">,
