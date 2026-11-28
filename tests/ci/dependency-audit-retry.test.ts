@@ -211,32 +211,34 @@ describe("the dependency audit workflow's audit step", () => {
     }
   });
 
-  it("runs every job that mentions audit with pnpmfile hooks disabled", async () => {
-    // A pnpmfile runs inside `pnpm audit` and can rewrite its config, so no audit may load one. The selection does
-    // not depend on how a command is spelled: every job whose run and shell text names audit needs the pin.
-    // shortcut: an env change made inside a `uses:` action and a switch name assembled at run time from variables
-    // are invisible to this text sweep, upgrade to a runner-side env check if a workflow needs either.
-    type Job = { env?: Record<string, string>; steps?: Record<string, unknown>[] };
+  it("runs every job whose own text or workflow env or defaults names audit with pnpmfile hooks disabled", async () => {
+    // A pnpmfile runs inside `pnpm audit` and can rewrite its config, so no audit may load one. A text tripwire: a job is
+    // selected when its id, a key or string in it, or the workflow's env or defaults holds the word audit, backslashes
+    // and quotes deleted and case folded.
+    // shortcut: a command or switch name built at run time (variables, expressions, escape codes, other languages), one
+    // dropping or replacing the job's env (`env -i`, containers, privilege wrappers) and code in a file the workflow
+    // only names (an action, a repository or package.json script) go unseen, upgrade when a workflow on main's legs
+    // gains such a step or a runner-side env assertion exists.
+    type Env = Record<string, unknown> | undefined;
     const PIN = "pnpm_config_ignore_pnpmfile";
-    // Bash deletes a backslash-newline; dropping quotes (and the $ of $'') only joins words, so no name hides.
-    const normalise = (text: string): string => text.replace(/\\\r?\n/g, "").replace(/\$'/g, "'").replace(/["']/g, "").toLowerCase();
     const strings = (value: unknown): string[] => typeof value === "string" ? [value] : value && typeof value === "object" ? Object.entries(value).flatMap(([key, inner]) => [key, ...strings(inner)]) : [];
+    // One scalar at a time, so a trailing backslash joins nothing.
+    const text = (value: unknown): string => strings(value).map((scalar) => scalar.replace(/\\(\r?\n)?/g, "").replace(/\$?["']/g, "").toLowerCase()).join("\n");
+    const unpinned = (env: Env) => Object.fromEntries(Object.entries(env ?? {}).filter(([key, value]) => key !== PIN || value !== "true"));
     const selected: string[] = [];
     for (const file of (await readdir(resolve(".github/workflows"))).filter((name) => /\.ya?ml$/.test(name))) {
-      const doc = parse(await readFile(resolve(".github/workflows", file), "utf8")) as { env?: Record<string, string>; jobs?: Record<string, Job> };
-      for (const [id, job] of Object.entries(doc.jobs ?? {})) {
-        const steps = job.steps ?? [];
-        if (!/\baudit\b/.test(normalise(steps.flatMap((step) => [step.run, step.shell].filter((text) => typeof text === "string")).join("\n")))) continue;
+      const doc = parse(await readFile(resolve(".github/workflows", file), "utf8")) as { env?: Env; defaults?: unknown; jobs?: Record<string, { env?: Env }> };
+      const jobs = Object.entries(doc.jobs ?? {});
+      for (const [id, job] of jobs) {
+        if (!/\baudit\b/.test(text([id, job, doc.env, doc.defaults]))) continue;
         selected.push(`${file}:${id}`);
-        const atJob = job.env !== undefined && PIN in job.env;
-        expect((atJob ? job.env : doc.env)?.[PIN], `${file} ${id} names audit, so it pins ${PIN} at job or workflow level`).toBe("true");
-        const without = (env: Record<string, string> | undefined) => Object.fromEntries(Object.entries(env ?? {}).filter(([key]) => key !== PIN));
-        const elsewhere = normalise([...strings(atJob ? doc.env : without(doc.env)), ...strings(atJob ? without(job.env) : job.env), ...strings(steps)].join("\n"));
-        expect(elsewhere.match(/ignore[-_]?pnpmfile/g) ?? [], `${file} ${id} names the pnpmfile switch only in its pin`).toEqual([]);
+        expect((job.env && PIN in job.env ? job.env : doc.env)?.[PIN], `${file} ${id} names audit, so it pins ${PIN} at job or workflow level`).toBe("true");
       }
+      const elsewhere = text({ ...doc, env: unpinned(doc.env), jobs: jobs.map(([id, job]) => [id, { ...job, env: unpinned(job.env) }]) });
+      expect(elsewhere.match(/ignore.?pnpmfile/g) ?? [], `${file} names the pnpmfile switch only in a "true" pin on a job or the workflow`).toEqual([]);
     }
-    expect(selected.sort(), "the jobs whose text names audit today").toEqual(
-      ["advisory-tracking.yml:advisory-audit", "ci-pr.yml:verify", "dependency-audit.yml:dependency-audit", "pr-gates.yml:dependency-audit"]);
+    expect(selected.sort(), "the jobs whose own text or workflow env or defaults names audit today").toEqual(["advisory-tracking.yml:advisory-audit",
+      "advisory-tracking.yml:advisory-comment", "ci-pr.yml:verify", "dependency-audit.yml:dependency-audit", "pr-gates.yml:dependency-audit"]);
   });
 
   it("signals every process it kills with SIGKILL", () => {
