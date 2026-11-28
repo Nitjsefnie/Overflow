@@ -211,10 +211,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       actorId: driftedSettlement.moderatorId, targetAccountId: driftedSettlement.targetId,
       reason: "The stored cohort no longer matches its live settlement.", credential: null,
     });
-    expect(settledResult).toEqual({
-      kind: "conflict",
-      detail: { cause: "SNAPSHOT_DRIFT", description: expect.stringMatching(/settled difficulty/) },
-    });
+    expect(settledResult).toEqual({ kind: "conflict", detail: { cause: "SNAPSHOT_DRIFT", description: expect.stringMatching(/settled difficulty/) } });
 
     const previewOnDrift = await store.loadRecalibrationPreview(driftedSettlement.targetId);
     expect(previewOnDrift.kind).toBe("conflict");
@@ -228,10 +225,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       actorId: deletedSettlement.moderatorId, targetAccountId: deletedSettlement.targetId,
       reason: "The stored cohort's settlement no longer exists.", credential: null,
     });
-    expect(deletedResult).toEqual({
-      kind: "conflict",
-      detail: { cause: "SNAPSHOT_DRIFT", description: expect.stringMatching(/settlement/) },
-    });
+    expect(deletedResult).toEqual({ kind: "conflict", detail: { cause: "SNAPSHOT_DRIFT", description: expect.stringMatching(/settlement/) } });
 
     const driftedSelfWork = await seedActionableCohort();
     await openSubstantiatedAudit(driftedSelfWork);
@@ -244,10 +238,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       actorId: driftedSelfWork.moderatorId, targetAccountId: driftedSelfWork.targetId,
       reason: "The stored self-work cohort no longer matches its live calibration.", credential: null,
     });
-    expect(selfWorkResult).toEqual({
-      kind: "conflict",
-      detail: { cause: "SNAPSHOT_DRIFT", description: expect.stringMatching(/settled difficulty/) },
-    });
+    expect(selfWorkResult).toEqual({ kind: "conflict", detail: { cause: "SNAPSHOT_DRIFT", description: expect.stringMatching(/settled difficulty/) } });
 
     await expect(sql<{ count: number }[]>`
       select count(*)::integer as count from moderation_credit_adjustments
@@ -608,10 +599,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       actorId: fixture.moderatorId, targetAccountId: fixture.targetId,
       reason: "Stored statistics that miscount their own pairs are corrupt evidence.", credential: null,
     });
-    expect(result).toEqual({
-      kind: "conflict",
-      detail: { cause: "SNAPSHOT_DRIFT", description: expect.stringMatching(/counts disagree/) },
-    });
+    expect(result).toEqual({ kind: "conflict", detail: { cause: "SNAPSHOT_DRIFT", description: expect.stringMatching(/counts disagree/) } });
     await expect(sql<{ count: number }[]>`
       select count(*)::integer as count
       from moderation_credit_adjustments
@@ -649,10 +637,7 @@ describe("PostgreSQL recalibration credit adjustments", () => {
       actorId: fixture.moderatorId, targetAccountId: fixture.targetId,
       reason: "Statistics overstating the gap their pairs support are corrupt evidence.", credential: null,
     });
-    expect(result).toEqual({
-      kind: "conflict",
-      detail: { cause: "SNAPSHOT_DRIFT", description: expect.stringMatching(/no compensable figure/) },
-    });
+    expect(result).toEqual({ kind: "conflict", detail: { cause: "SNAPSHOT_DRIFT", description: expect.stringMatching(/no compensable figure/) } });
     await expect(sql<{ count: number }[]>`
       select count(*)::integer as count
       from moderation_credit_adjustments
