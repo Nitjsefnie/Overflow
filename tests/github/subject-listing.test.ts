@@ -110,7 +110,7 @@ describe("GitHub open issue IDs", () => {
     expect(requests).toEqual([`${base}?state=open&sort=updated&direction=asc&per_page=100`, `${base}?state=open&page=2`]);
   });
 
-  it("counts a page as soon as it arrives, before its body is read", async () => {
+  it("counts a page once its response is received, before its body is parsed", async () => {
     const client = gateway(async () => Response.json([{ id: 11, number: 1, updated_at: "not-a-timestamp" }]));
     const { value, cost } = await withGraphqlFoldCost(() => listOpenIssueIds(client, repository).catch(String));
     expect([value, cost.unmeasuredResponses]).toEqual([expect.stringMatching(/updated_at/), 1]);
