@@ -617,7 +617,7 @@ cp .github/workflows/*.yml .github/workflows-pr/
 
   it("uses the package Node version for setup and coverage, and labels each PR matrix leg with its runtime", async () => {
     const pkg: { engines: { node: string } } = JSON.parse(await readFile(resolve("package.json"), "utf8"));
-    // GitHub reads `${{ matrix.node }}` and `${{matrix.node}}` alike; no compared expression holds a quoted string.
+    // GitHub reads `${{ matrix.node }}` and `${{matrix.node}}` alike; the expected side, built here, holds no quoted string.
     const expression = (value: unknown) => String(value).replace(/\$\{\{(.*?)\}\}/gs, (_, inner: string) => "${{" + inner.replace(/\s/g, "") + "}}");
     for (const file of await workflowFiles()) {
       const workflow = await readWorkflow(file);
