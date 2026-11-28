@@ -8,6 +8,7 @@ import { closeSql, getSql } from "@/lib/db/client";
 import { PostgresFoldStore } from "@/lib/fold/postgres-store";
 import { unlistedOpenIssues } from "@/lib/fold/unlisted-open-issues";
 import { reconcileRepository, type ReconciliationGateway } from "@/lib/fold/reconcile";
+import { GitHubGraphqlInvalidResponseError } from "@/lib/github/errors";
 import { GitHubResponseTooLargeError, MAX_SUCCESS_BODY_BYTES } from "@/lib/github/response-text";
 import type { GitHubIssue } from "@/lib/github/types";
 import { credentialBinding, encryptToken } from "@/lib/security/token-cipher";
@@ -67,10 +68,12 @@ describe("an issue the forge no longer has", () => {
     expect(f.issueReads).toEqual([f.cheapest.number]);
   });
 
-  it("keeps an unlisted issue whose read is discarded for a reason other than not found", async () => {
+  it.each([["too large", new GitHubResponseTooLargeError(MAX_SUCCESS_BODY_BYTES)],
+    ["unreadable on its own labels", new GitHubGraphqlInvalidResponseError("GitHub returned an unreadable labels connection.", "labels.nodes")],
+  ])("keeps an unlisted issue whose read is discarded as %s, a reason other than not found", async (_name, error) => {
     const f = await fixture();
     await f.fold();
-    f.forget(f.cheapest, async () => { throw new GitHubResponseTooLargeError(MAX_SUCCESS_BODY_BYTES); });
+    f.forget(f.cheapest, async () => { throw error; });
     expect(await quietly(() => f.fold("WEBHOOK"))).toMatchObject({ skipped: false, removed: 0 });
     expect(await f.board()).toEqual([f.cheapest.number]);
   });
