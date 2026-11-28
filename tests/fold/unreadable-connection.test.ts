@@ -55,7 +55,7 @@ describe("reconcileRepository unreadable issue connections", () => {
       version: 1,
       formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
       checkpoint: new Date("2030-01-02T10:00:00Z"),
-      lastFullPassAt: new Date("2030-01-02T10:00:00Z"),
+      lastFullPassAt: new Date("2030-01-02T10:00:00Z"), lastOpenListingAt: null,
       omittedOversizedFacts: 0,
       issues: [cachedIssue],
       pullRequests: [{ id: 201, reviews: [cachedReview], rawDiff: "cached diff" }],
@@ -93,7 +93,7 @@ describe("reconcileRepository unreadable issue connections", () => {
       version: 1,
       formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
       checkpoint: new Date("2030-01-02T10:00:00Z"),
-      lastFullPassAt: new Date("2030-01-02T10:00:00Z"),
+      lastFullPassAt: new Date("2030-01-02T10:00:00Z"), lastOpenListingAt: null,
       omittedOversizedFacts: 0,
       issues: [],
       pullRequests: [],
@@ -139,7 +139,7 @@ describe("reconcileRepository unreadable issue connections", () => {
       version: 1,
       formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
       checkpoint: new Date(),
-      lastFullPassAt: new Date(),
+      lastFullPassAt: new Date(), lastOpenListingAt: null,
       omittedOversizedFacts: 0,
       issues: [],
       pullRequests: [],
@@ -218,7 +218,7 @@ describe("reconcileRepository unreadable issue connections", () => {
       version: 1,
       formatVersion: RECONCILIATION_EVIDENCE_FORMAT,
       checkpoint: new Date("2030-01-02T10:00:00Z"),
-      lastFullPassAt: new Date("2030-01-02T10:00:00Z"),
+      lastFullPassAt: new Date("2030-01-02T10:00:00Z"), lastOpenListingAt: null,
       omittedOversizedFacts: 0,
       issues: [cachedIssue],
       pullRequests: [],
@@ -254,7 +254,7 @@ describe("reconcileRepository unreadable pull request connections", () => {
       dependencies.store.getRepository = async (id) => ({ ...(await getRepository(id))!, disputePullRequests: [{ id: 201, number: 11 }] });
     }
     dependencies.store.getReconciliationEvidence = async () => ({
-      version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, checkpoint: new Date(), lastFullPassAt: new Date(), omittedOversizedFacts: 0,
+      version: 1, formatVersion: RECONCILIATION_EVIDENCE_FORMAT, checkpoint: new Date(), lastFullPassAt: new Date(), lastOpenListingAt: null, omittedOversizedFacts: 0,
       issues: [closingIssue()], pullRequests: [{ id: 201, reviews: [cachedReview], rawDiff: "cached diff" }],
     });
     dependencies.store.getDirtyReconciliationSubjects = async () => [{ kind: "PULL_REQUEST" as const, id: 201, number: 11, generation: "9" }];

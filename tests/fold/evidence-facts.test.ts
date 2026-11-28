@@ -290,7 +290,7 @@ describe("synchronizeReconciliationEvidence oversized log", () => {
       await synchronizeReconciliationEvidence(transaction, "repository-1", {
         expectedVersion: null,
         scanStartedAt: new Date("2030-01-02T03:04:05.678Z"),
-        full: true,
+        full: true, openListed: false,
         issues: [issue({ id: hostileId as unknown as number, title: "x".repeat(1000) })],
         pullRequests: [],
         dirtySubjects: [],
