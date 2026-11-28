@@ -54,7 +54,7 @@ export function reconcileRepositoryAsSponsor(
       instanceUrl: null,
       github: { accessToken, owner },
       gitlab: null,
-    }) as ReconciliationGateway,
+    }),
   options?: ReconcileAsSponsorOptions,
 ): Promise<ReconciliationSummary> {
   return reconcileRepository(
@@ -132,7 +132,7 @@ export function sponsorGateway(
             instanceUrl,
             github: { accessToken: credential.token },
             gitlab: { instanceUrl, token: credential.token },
-          }) as ReconciliationGateway,
+          }),
           repository.sponsor.id,
           instanceUrl,
           markCredentialRejected === undefined ? undefined : () => markCredentialRejected(credential.identityId),
