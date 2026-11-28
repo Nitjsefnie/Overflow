@@ -2975,7 +2975,8 @@
       "tests/lib/http/error-response.test.ts": [
         5.44,
         3.72,
-        2.32
+        2.32,
+        7.07
       ],
       "tests/lib/journal-levels.test.ts": [
         0.71
